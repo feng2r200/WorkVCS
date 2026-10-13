@@ -11,6 +11,11 @@ ADR-0527 adds explicit native local vector, full-corpus reranking and fusion
 modes. ADR-0528 adds non-authoritative source archives, explicit multi-ProjectRef
 read federation and content-addressed incremental passage-vector reuse. None of
 these surfaces changes canonical Work-State or becomes an implicit default.
+ADR-0529 adds an optional, disabled-by-default single-user reconciliation
+runtime whose watcher only marks sources dirty. ADR-0530 adds explicitly
+registered automatic history import and immutable, lane-separated global
+derived catalog rounds. Neither decision creates a global canonical
+KnowledgeSpace or an automatic semantic write path.
 
 ## Authority and Data Flow
 
@@ -29,6 +34,11 @@ flowchart LR
     S --> V
     V --> O[Provenance-bearing supplemental context]
     H[Explicit local rollout files] --> A[Non-authoritative source archive]
+    W[Registered roots and dirty signals] --> X[Short-lived reconciliation worker]
+    X --> A
+    X --> I
+    I --> D[Immutable derived catalog round]
+    A --> D
     F[Explicit ProjectRef set] --> R
     V --> J[Source-qualified federated rank]
     S --> N[Existing deterministic context]
@@ -128,6 +138,40 @@ basis receives a new catalogue, shard and final native freshness guard. The
 cache only avoids repeating exact model work for byte-identical passage input.
 There is no resident model process or background builder in this delivery.
 
+## Optional Local Automation Runtime
+
+The post-V1 runtime is one per-user coordinator, disabled unless the user
+starts it explicitly. Registration preview is read-only and apply uses the
+exact automation-registry revision and digest. Its owner-private, versioned
+Unix socket accepts bounded local control messages only from the same user.
+The daemon owns no canonical Store, model or index handle. Startup, manual,
+watcher-overflow and periodic reconciliation spawn short-lived workers that use
+the same foreground operation and publication contracts.
+
+Watcher events are hints. A capacity-one signal coalesces them into a dirty
+state instead of an unbounded queue; observed events, coalesced signals,
+backend errors and the last bounded error remain separately inspectable.
+Watcher setup and backend errors also mark the system dirty and rely on the
+same full reconciliation rather than suppressing the coordinator. Thus
+delete, rename, replacement, permission change, overflow and lost-event
+conditions all converge through a complete registered-root scan. A worker
+re-resolves and checks ProjectRef, Store, Workspace, Branch and registry basis
+before each round. A canonical routing or Store failure does not skip the
+independent historical lane. Each successfully scanned rollout root owns its
+own deletion decision; a failed root or file observation retains and
+revalidates its prior immutable archive while recording a separate failure.
+Drift is quarantined rather than repaired. The runtime never
+modifies Store state, the ProjectRef registry, Exposure/source-status, source
+files, archives or existing generations and performs no automatic cleanup.
+
+Worker stdout and stderr are drained under fixed bounds. The latest bounded raw
+streams, byte counts, full-stream digests, truncation state and timeout/exit
+state are atomically projected into an owner-private runtime evidence record.
+Only a parsed reconciliation report whose catalog identity and completeness
+match native current-basis readback becomes `completed` or `partial_failure`;
+nonzero exit, timeout, malformed output, unexpected stderr or output overflow
+remains failed.
+
 ## Explicit Historical Source Archives
 
 A source archive is a separate private derived directory created only from
@@ -158,6 +202,29 @@ remain distinct. A source error is included as a partial failure, never omitted
 as if the request were complete. Federation is a request-scoped read and has no
 cross-Store mutation, replication or shared-state semantics.
 
+## Global Derived Search Catalog
+
+An immutable catalog round fixes one automation-registration revision and an
+ordered ProjectRef/source set. `canonical_current` contains only generations
+that pass native final-currentness validation. `historical_reference` contains
+source archives and explicit historical generations with no action authority.
+The manifest holds verified references and source reports rather than copying
+canonical objects into a new authority.
+
+Catalog query validates every referenced artifact, preserves complete source
+identity and applies the same complete-local-ranking-before-final-projection
+rule as explicit federation. Failed or stale sources remain in the response;
+partial results have `complete=false`. A catalog is not a KnowledgeSpace,
+replica, canonical projection, shared mutable index, or cross-Store write
+surface.
+
+Manifest readback recomputes `complete` from every source status and rejects a
+contradictory claim. Reconciliation reuses the newest current-basis catalog
+only when its ordered sources and completeness are identical; otherwise it
+publishes a new immutable round with a monotonic basis-local timestamp. This
+prevents no-change growth without a mutable current pointer or stale-latest
+selection when source health changes and later returns.
+
 ## Candidate Readback and Output
 
 FTS5 ranks lexical candidates without a default cost-based prefetch ceiling.
@@ -177,6 +244,13 @@ model score cannot compensate for a failed native check. Federation preserves
 that proof per source. Source-archive results instead carry their immutable
 rollout provenance and fixed non-authoritative labels; they are never presented
 as native canonical readback.
+
+Automatic reconciliation remembers the last successful archive reference per
+rollout source. It revalidates that immutable artifact for unchanged input and
+keeps it in the historical-reference lane after source deletion or a failed
+replacement import. The same catalog round also carries an explicit failed
+source observation, so preserved historical retrieval and current source health
+remain separate and the aggregate result stays incomplete.
 
 The result exposes source/temporal scope, original status and provenance, native
 readback result, complete canonical statement and all matching source ranges.
@@ -212,14 +286,18 @@ live project authority.
 ## Scope and Validation
 
 The accepted scope is explicit local lexical and semantic Record/Knowledge
-retrieval with native readback, explicit non-authoritative history archives,
-explicit multi-ProjectRef read federation and foreground incremental vector
-reuse. Current exact reads, deterministic context resolution, lifecycle,
-runnable state and authorization retain their existing contracts.
+retrieval with native readback, explicit and registered automatic
+non-authoritative history archives, explicit federation, immutable global
+derived catalogs and foreground-compatible incremental work. Current exact
+reads, deterministic context resolution, lifecycle, runnable state and
+authorization retain their existing contracts.
 
-This scope does not include automatic transcript discovery or canonical
-extraction, semantic merge, a global Knowledge Space, replication, cross-Store
-mutation, automatic execution, a watcher or resident service.
+This scope includes only explicitly registered automatic transcript discovery
+into the historical-reference lane and the disabled-by-default local runtime
+defined by ADR-0529/0530. It still excludes canonical transcript extraction,
+semantic merge, a global canonical Knowledge Space, replication, cross-Store
+mutation, automatic Agent execution, service auto-installation and automatic
+cleanup.
 
 Implementation validation separately proves normal and historical retrieval,
 state and ancestry filtering, identity/version/range rejection, source byte

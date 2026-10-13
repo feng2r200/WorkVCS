@@ -118,8 +118,8 @@ use crate::search::semantic::{
     SemanticQueryResult,
 };
 use crate::search::source_archive::{
-    SourceArchiveImportOptions, SourceArchiveImportResult, SourceArchiveQueryOptions,
-    SourceArchiveQueryResult,
+    SourceArchiveImportOptions, SourceArchiveImportResult, SourceArchiveInspectOptions,
+    SourceArchiveInspectResult, SourceArchiveQueryOptions, SourceArchiveQueryResult,
 };
 use crate::search::{
     SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
@@ -1275,6 +1275,12 @@ impl Engine {
         options: SourceArchiveImportOptions,
     ) -> Result<SourceArchiveImportResult> {
         crate::search::source_archive::import_source_archive(&options)
+    }
+
+    pub fn inspect_source_archive(
+        options: SourceArchiveInspectOptions,
+    ) -> Result<SourceArchiveInspectResult> {
+        crate::search::source_archive::inspect_source_archive(&options)
     }
 
     pub fn query_source_archive(

@@ -18,7 +18,7 @@ conversation. WorkVCS covers the missing layer between them: the evolving
 review, and restore work.
 
 > **Project status:** the repository contains a locally validated bounded V1
-> implementation. The current source package version is `1.3.3`, and no public
+> implementation. The current source package version is `1.4.0`, and no public
 > release has been made. The source is licensed under Apache-2.0; selecting a
 > release version, publishing artifacts, and making release commitments remain
 > separate decisions.
@@ -228,9 +228,12 @@ before using WorkVCS as durable project infrastructure.
   — the locally adopted fast path, backlog visibility, and preserved
   authorization gates.
 - [Local evidence-search architecture](docs/architecture/local-derived-search.md)
-  and [ADR-0528](docs/decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)
+  with [ADR-0528](docs/decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md),
+  [ADR-0529](docs/decisions/adr/0529-single-user-local-automation-runtime.md), and
+  [ADR-0530](docs/decisions/adr/0530-global-derived-search-catalog-and-automatic-history.md)
   — native-readback lexical and semantic ranking, explicit history,
-  source-qualified federation, and incremental local vector reuse.
+  source-qualified federation, incremental local vector reuse, optional
+  per-user reconciliation, and an immutable lane-separated derived catalog.
 - [Phase-3 local retrieval validation](docs/provenance/local-derived-search-phase3-validation.md)
   — 67 real questions, independent ranking recomputation, full resource
   observations, source archives, federation, and incremental-cache evidence.

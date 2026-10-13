@@ -1,4 +1,7 @@
+mod automation_cli;
 mod locator_adapter;
+
+use automation_cli::{AutomationCommand, run_automation};
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
@@ -218,6 +221,7 @@ Commands:
   capture       Atomically record standalone cognition without requiring a Session or Plan
   recall        Read bounded project context without requiring a Session or Plan
   search        Refresh and query the routed local derived FTS index
+  automation    Register, reconcile, query, and optionally coordinate local derived work
   context-packet  Save and inspect context packet snapshots
   next          Select next runnable work for a session
   runnable      Inspect runnable task projections
@@ -905,6 +909,11 @@ enum Command {
     Search {
         #[command(subcommand)]
         command: SearchCommand,
+    },
+    #[command(about = "Manage opt-in local derived-work automation")]
+    Automation {
+        #[command(subcommand)]
+        command: AutomationCommand,
     },
     ContextPacket {
         #[command(subcommand)]
@@ -13677,6 +13686,7 @@ fn run(cli: Cli) -> Result<String> {
             budget_items,
         } => run_recall(cwd, registry, locator, profile, budget_items),
         Command::Search { command } => run_search(command),
+        Command::Automation { command } => run_automation(command),
         Command::ContextPacket { command } => match command {
             ContextPacketCommand::Save {
                 store,
@@ -44070,6 +44080,7 @@ mod tests {
                 "capture",
                 "recall",
                 "search",
+                "automation",
                 "context-packet",
                 "next",
                 "runnable",
@@ -44154,6 +44165,14 @@ mod tests {
             (
                 "recall",
                 "Read bounded project context without requiring a Session or Plan",
+            ),
+            (
+                "search",
+                "Refresh and query the routed local derived FTS index",
+            ),
+            (
+                "automation",
+                "Register, reconcile, query, and optionally coordinate local derived work",
             ),
             (
                 "context-packet",

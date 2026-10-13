@@ -366,6 +366,16 @@ model work while every changed source basis still creates a complete immutable
 generation. It adds no automatic import, global Knowledge Space, cross-Store
 mutation, Qdrant Server, watcher or resident service.
 
+ADR-0529 and ADR-0530 supersede only that final delivery exclusion for an
+optional post-V1 local layer. They add explicit registration, a
+disabled-by-default single-user coordinator, dirty-only watcher signals,
+startup/manual/overflow/periodic reconciliation through short-lived workers,
+automatic immutable history archives, and immutable lane-separated global
+derived catalog rounds. They do not alter V1 canonical Store semantics and add
+no LaunchAgent, automatic activation, semantic transcript extraction, mutable
+global Knowledge Space, cross-Store write, registry repair or automatic
+cleanup.
+
 The first lexical contract was explicitly approved on 2026-10-12, and the
 semantic and remaining retrieval capabilities were accepted and authorized on
 2026-10-13. The complete local implementation and 67-question validation are
@@ -375,7 +385,9 @@ evidenced delivery states.
 
 ## Explicitly deferred beyond V1
 
-- automatic transcript discovery or extraction of Findings and Decisions;
+- automatic extraction of Findings and Decisions from transcripts; automatic
+  discovery is permitted only for explicitly registered roots and produces
+  non-authoritative immutable reference archives under ADR-0530;
 - LLM-generated semantic records without explicit Agent confirmation;
 - LLM-based semantic merge or natural-language conflict detection;
 - automatic knowledge distillation;
@@ -383,7 +395,7 @@ evidenced delivery states.
 - Agent launching, scheduling, orchestration, or automatic execution;
 - cloud synchronization, distributed collaboration, and a replication
   protocol for branch refs and object exchange;
-- cross-Store live Knowledge federation, a global Knowledge Space service,
+- cross-Store live Knowledge federation, a canonical global Knowledge Space service,
   remote subscriptions, and live semantic cross-Store references; ADR-0513's
   immutable control-plane index references and ADR-0528 request-scoped read
   federation do not share Work-State;

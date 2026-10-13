@@ -1,3 +1,4 @@
+pub mod automation;
 pub mod canonical;
 mod closeout;
 pub mod control_plane;
@@ -9,6 +10,14 @@ mod runtime;
 pub mod search;
 pub mod store;
 
+pub use automation::{
+    AutomationArtifactKind, AutomationCatalogManifest, AutomationCatalogPublication,
+    AutomationCatalogSource, AutomationLane, AutomationRegistration, AutomationRegistrationPreview,
+    AutomationRegistrationProposal, AutomationRegistrySnapshot, AutomationRolePolicy,
+    AutomationSourceStatus, apply_automation_registration, automation_registry_path,
+    preview_automation_registration, publish_automation_catalog, read_automation_catalog,
+    read_automation_registry, revoke_automation_registration, sha256_file,
+};
 pub use canonical::{
     CanonicalValue, WorkState, canonical_bytes, content_object_digest, entity_version_digest,
     parse_canonical_json, relation_version_digest, validate_import_fixed_point,
@@ -231,10 +240,11 @@ pub use search::semantic::{
     SemanticResourceObservations, SemanticSearchItem,
 };
 pub use search::source_archive::{
-    SourceArchiveDocument, SourceArchiveFileManifest, SourceArchiveFileState, SourceArchiveFormat,
-    SourceArchiveImportOptions, SourceArchiveImportOutcome, SourceArchiveImportResult,
-    SourceArchiveManifest, SourceArchiveQueryOptions, SourceArchiveQueryResult,
-    SourceArchiveSearchItem,
+    SourceArchiveDocument, SourceArchiveFileManifest, SourceArchiveFileObservation,
+    SourceArchiveFileState, SourceArchiveFormat, SourceArchiveImportOptions,
+    SourceArchiveImportOutcome, SourceArchiveImportResult, SourceArchiveInspectOptions,
+    SourceArchiveInspectResult, SourceArchiveManifest, SourceArchiveQueryOptions,
+    SourceArchiveQueryResult, SourceArchiveSearchItem,
 };
 pub use search::{
     SearchDerivedStatus, SearchIndexManifest, SearchItem, SearchQueryOptions, SearchQueryResult,

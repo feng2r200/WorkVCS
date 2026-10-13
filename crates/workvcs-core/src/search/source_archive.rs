@@ -119,6 +119,36 @@ pub struct SourceArchiveImportResult {
 }
 
 #[derive(Clone, Debug)]
+pub struct SourceArchiveInspectOptions {
+    identity: SearchSourceIdentity,
+    archive_path: PathBuf,
+}
+
+impl SourceArchiveInspectOptions {
+    pub fn new(identity: SearchSourceIdentity, archive_path: impl Into<PathBuf>) -> Self {
+        Self {
+            identity,
+            archive_path: archive_path.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SourceArchiveFileObservation {
+    pub source_path: PathBuf,
+    pub state: SourceArchiveFileState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SourceArchiveInspectResult {
+    pub archive_path: PathBuf,
+    pub manifest: SourceArchiveManifest,
+    pub file_observations: Vec<SourceArchiveFileObservation>,
+    pub archive_readback_verified: bool,
+    pub canonical_source_written: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct SourceArchiveQueryOptions {
     identity: SearchSourceIdentity,
     archive_path: PathBuf,
@@ -298,6 +328,27 @@ pub(crate) fn import_source_archive(
             Err(error)
         }
     }
+}
+
+pub(crate) fn inspect_source_archive(
+    options: &SourceArchiveInspectOptions,
+) -> Result<SourceArchiveInspectResult> {
+    let (manifest, _) = validate_archive(&options.archive_path, Some(options.identity))?;
+    let file_observations = manifest
+        .files
+        .iter()
+        .map(|file| SourceArchiveFileObservation {
+            source_path: file.source_path.clone(),
+            state: observe_source_file(file),
+        })
+        .collect();
+    Ok(SourceArchiveInspectResult {
+        archive_path: options.archive_path.clone(),
+        manifest,
+        file_observations,
+        archive_readback_verified: true,
+        canonical_source_written: false,
+    })
 }
 
 pub(crate) fn query_source_archive(
@@ -1096,6 +1147,19 @@ mod tests {
         let reused = import_source_archive(&options).expect("repeat source import");
         assert_eq!(reused.outcome, SourceArchiveImportOutcome::Reused);
         assert_eq!(reused.archive_path, imported.archive_path);
+        let inspected = inspect_source_archive(&SourceArchiveInspectOptions::new(
+            identity,
+            &imported.archive_path,
+        ))
+        .expect("inspect immutable archive");
+        assert!(inspected.archive_readback_verified);
+        assert!(!inspected.canonical_source_written);
+        assert_eq!(inspected.manifest, imported.manifest);
+        assert_eq!(inspected.file_observations.len(), 1);
+        assert_eq!(
+            inspected.file_observations[0].state,
+            SourceArchiveFileState::Unchanged
+        );
 
         let query = query_source_archive(
             &SourceArchiveQueryOptions::new(identity, &imported.archive_path, "历史检索证据")

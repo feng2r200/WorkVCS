@@ -17,13 +17,19 @@ routing. ADR-0527 accepts explicit verified-local semantic and full-corpus
 reranking modes without selecting a semantic default. ADR-0528 accepts explicit
 non-authoritative local history archives, source-qualified multi-ProjectRef read
 federation and private content-addressed passage-vector reuse without adding a
-daemon. Exact implementation, validation, merge, Push, CI and stable adoption
-remain separate evidence layers.
+daemon at that stage. ADR-0529 and ADR-0530 add a disabled-by-default per-user
+coordinator, explicit registration, automatic reference-only history import,
+and an immutable lane-separated global derived catalog. They do not add a
+mutable global Knowledge Space or automatic canonical writes. Exact
+implementation, validation, merge, Push, CI and stable adoption remain
+separate evidence layers.
 
 - [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
 - [ADR-0526: On-demand Local Search Generations](decisions/adr/0526-on-demand-local-search-generations.md)
 - [ADR-0527: Native Local Semantic Search and Full-Corpus Reranking](decisions/adr/0527-native-local-semantic-search-and-reranking.md)
 - [ADR-0528: Explicit History, Federated Read, and Incremental Local Search](decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)
+- [ADR-0529: Single-user Local Automation Runtime](decisions/adr/0529-single-user-local-automation-runtime.md)
+- [ADR-0530: Global Derived Search Catalog and Automatic History](decisions/adr/0530-global-derived-search-catalog-and-automatic-history.md)
 - [Local Derived Search Architecture](architecture/local-derived-search.md)
 - [Local Derived Search Operator Guide](operator/local-derived-search.md)
 - [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)

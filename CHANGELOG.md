@@ -15,6 +15,16 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
 
 ### Added
 
+- An opt-in, disabled-by-default per-user local automation coordinator with
+  explicit compare-and-swap registration, dirty-only filesystem watching,
+  capacity-one signal coalescing, inspectable watcher faults, bounded
+  short-lived reconciliation workers, exact bounded worker evidence, and no
+  startup-service install.
+- Automatic immutable reference-only rollout archives plus an immutable
+  lane-separated Global Derived Search Catalog with exact ProjectRef source
+  identity, complete-source ranking, retained queryable archives after source
+  loss, and explicit partial failure.
+
 - Schema-2 Plan disposition assessment for fresh supersede
   and retired-Plan repair, including explicit `retain_original` preservation,
   a shared execution-currentness resolver, and a bounded read-only
@@ -64,6 +74,13 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
   release-ready V1 implementation from the unreleased `0.1.0` package version.
 
 ### Safety
+
+- Automation re-resolves exact ProjectRef routing, quarantines drift and unsafe
+  source permissions, keeps canonical and historical failure domains
+  independent, retains validated archives across per-root observation failure,
+  rejects stale or completeness-forged catalog bases, and never
+  writes canonical Stores, ProjectRef registry, KnowledgeExposure, source
+  status, source files, or existing derived artifacts.
 
 - Registry replacement, routing activation, journal admission, recovery, and
   rollback use explicit snapshot digests, ordered locks, atomic replacement,

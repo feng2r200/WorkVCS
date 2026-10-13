@@ -1,0 +1,1171 @@
+use crate::error::{Result, WorkVcsError};
+use crate::identity::{BranchId, ProjectRefId, StoreId, WorkspaceId};
+use crate::store::current_epoch_micros;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as ShaDigest, Sha256};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+
+pub const AUTOMATION_REGISTRY_FORMAT_VERSION: u32 = 1;
+pub const AUTOMATION_CATALOG_FORMAT_VERSION: u32 = 1;
+const REGISTRY_FILE: &str = "registrations.json";
+const REGISTRY_LOCK_FILE: &str = ".registrations.lock";
+const MAX_REGISTRY_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_CATALOG_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationRolePolicy {
+    UserOnly,
+    UserAndAssistant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationLane {
+    CanonicalCurrent,
+    HistoricalReference,
+}
+
+impl AutomationLane {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CanonicalCurrent => "canonical_current",
+            Self::HistoricalReference => "historical_reference",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationArtifactKind {
+    LexicalGeneration,
+    SourceArchive,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationSourceStatus {
+    Ready,
+    Failed,
+    Quarantined,
+    Stale,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationRegistration {
+    pub registration_id: String,
+    pub revision: u64,
+    pub project_ref_id: ProjectRefId,
+    pub store_path: PathBuf,
+    pub store_id: StoreId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub project_root: PathBuf,
+    pub rollout_roots: Vec<PathBuf>,
+    pub role_policy: AutomationRolePolicy,
+    pub registry_revision: u64,
+    pub registry_digest: String,
+    pub enabled: bool,
+    pub revoked: bool,
+    pub created_at_us: i64,
+    pub updated_at_us: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AutomationRegistrationProposal {
+    pub registration_id: String,
+    pub project_ref_id: ProjectRefId,
+    pub store_path: PathBuf,
+    pub store_id: StoreId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub project_root: PathBuf,
+    pub rollout_roots: Vec<PathBuf>,
+    pub role_policy: AutomationRolePolicy,
+    pub registry_revision: u64,
+    pub registry_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AutomationRegistrySnapshot {
+    pub format_version: u32,
+    pub revision: u64,
+    pub digest_sha256: String,
+    pub registrations: Vec<AutomationRegistration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutomationRegistryBody {
+    format_version: u32,
+    revision: u64,
+    registrations: Vec<AutomationRegistration>,
+}
+
+impl AutomationRegistryBody {
+    fn empty() -> Self {
+        Self {
+            format_version: AUTOMATION_REGISTRY_FORMAT_VERSION,
+            revision: 0,
+            registrations: Vec::new(),
+        }
+    }
+
+    fn snapshot(&self) -> Result<AutomationRegistrySnapshot> {
+        Ok(AutomationRegistrySnapshot {
+            format_version: self.format_version,
+            revision: self.revision,
+            digest_sha256: sha256_hex(&canonical_json(self)?),
+            registrations: self.registrations.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AutomationRegistrationPreview {
+    pub registry_revision: u64,
+    pub registry_digest_sha256: String,
+    pub registration: AutomationRegistration,
+    pub would_write: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationCatalogSource {
+    pub registration_id: String,
+    pub project_ref_id: ProjectRefId,
+    pub lane: AutomationLane,
+    pub artifact_kind: AutomationArtifactKind,
+    pub artifact_path: PathBuf,
+    pub artifact_manifest_sha256: String,
+    pub source_anchor: String,
+    pub status: AutomationSourceStatus,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationCatalogManifest {
+    pub format_version: u32,
+    pub automation_registry_revision: u64,
+    pub automation_registry_digest_sha256: String,
+    pub created_at_us: i64,
+    pub complete: bool,
+    pub sources: Vec<AutomationCatalogSource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AutomationCatalogPublication {
+    pub outcome: String,
+    pub catalog_path: PathBuf,
+    pub manifest_sha256: String,
+    pub manifest: AutomationCatalogManifest,
+}
+
+pub fn automation_registry_path(root: &Path) -> PathBuf {
+    root.join(REGISTRY_FILE)
+}
+
+pub fn read_automation_registry(root: &Path) -> Result<AutomationRegistrySnapshot> {
+    validate_derived_root(root, false)?;
+    read_registry_body(root)?.snapshot()
+}
+
+pub fn preview_automation_registration(
+    root: &Path,
+    proposal: AutomationRegistrationProposal,
+) -> Result<AutomationRegistrationPreview> {
+    validate_derived_root(root, false)?;
+    let body = read_registry_body(root)?;
+    let snapshot = body.snapshot()?;
+    let registration = validate_registration_proposal(root, &body, proposal, 1)?;
+    Ok(AutomationRegistrationPreview {
+        registry_revision: snapshot.revision,
+        registry_digest_sha256: snapshot.digest_sha256,
+        registration,
+        would_write: true,
+    })
+}
+
+pub fn apply_automation_registration(
+    root: &Path,
+    expected_revision: u64,
+    expected_digest_sha256: &str,
+    proposal: AutomationRegistrationProposal,
+) -> Result<AutomationRegistrySnapshot> {
+    validate_derived_root(root, true)?;
+    let lock = open_registry_lock(root)?;
+    fs4::FileExt::try_lock(&lock).map_err(|error| {
+        WorkVcsError::StorageFailure(format!(
+            "automation registry is busy or cannot be exclusively locked: {error}"
+        ))
+    })?;
+    let mut body = read_registry_body(root)?;
+    require_registry_basis(&body, expected_revision, expected_digest_sha256)?;
+    if body
+        .registrations
+        .iter()
+        .any(|item| item.registration_id == proposal.registration_id)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "automation registration {:?} already exists",
+            proposal.registration_id
+        )));
+    }
+    if body
+        .registrations
+        .iter()
+        .any(|item| !item.revoked && item.project_ref_id == proposal.project_ref_id)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "ProjectRef {} already has an active automation registration",
+            proposal.project_ref_id
+        )));
+    }
+    let registration = validate_registration_proposal(root, &body, proposal, 1)?;
+    body.registrations.push(registration);
+    body.registrations
+        .sort_by(|left, right| left.registration_id.cmp(&right.registration_id));
+    body.revision = body.revision.checked_add(1).ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid("automation registry revision overflow".to_owned())
+    })?;
+    write_registry_body(root, &body)?;
+    body.snapshot()
+}
+
+pub fn revoke_automation_registration(
+    root: &Path,
+    expected_revision: u64,
+    expected_digest_sha256: &str,
+    registration_id: &str,
+) -> Result<AutomationRegistrySnapshot> {
+    validate_derived_root(root, true)?;
+    let lock = open_registry_lock(root)?;
+    fs4::FileExt::try_lock(&lock).map_err(|error| {
+        WorkVcsError::StorageFailure(format!(
+            "automation registry is busy or cannot be exclusively locked: {error}"
+        ))
+    })?;
+    let mut body = read_registry_body(root)?;
+    require_registry_basis(&body, expected_revision, expected_digest_sha256)?;
+    let now = current_epoch_micros()?;
+    let registration = body
+        .registrations
+        .iter_mut()
+        .find(|item| item.registration_id == registration_id)
+        .ok_or_else(|| {
+            WorkVcsError::QueryInvalid(format!(
+                "automation registration {registration_id:?} was not found"
+            ))
+        })?;
+    if registration.revoked {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "automation registration {registration_id:?} is already revoked"
+        )));
+    }
+    registration.revoked = true;
+    registration.enabled = false;
+    registration.revision = registration.revision.checked_add(1).ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid("automation registration revision overflow".to_owned())
+    })?;
+    registration.updated_at_us = now;
+    body.revision = body.revision.checked_add(1).ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid("automation registry revision overflow".to_owned())
+    })?;
+    write_registry_body(root, &body)?;
+    body.snapshot()
+}
+
+pub fn publish_automation_catalog(
+    root: &Path,
+    registry_revision: u64,
+    registry_digest_sha256: String,
+    mut sources: Vec<AutomationCatalogSource>,
+) -> Result<AutomationCatalogPublication> {
+    validate_derived_root(root, true)?;
+    validate_sha256("automation registry digest", &registry_digest_sha256)?;
+    for source in &sources {
+        validate_catalog_source(source)?;
+    }
+    sources.sort_by(|left, right| {
+        (
+            left.lane,
+            left.project_ref_id,
+            &left.registration_id,
+            left.artifact_kind,
+            &left.source_anchor,
+        )
+            .cmp(&(
+                right.lane,
+                right.project_ref_id,
+                &right.registration_id,
+                right.artifact_kind,
+                &right.source_anchor,
+            ))
+    });
+    let complete = !sources.is_empty()
+        && sources
+            .iter()
+            .all(|source| source.status == AutomationSourceStatus::Ready);
+    let catalogs = root.join("catalogs");
+    ensure_private_directory(&catalogs)?;
+    let mut latest_for_basis: Option<(PathBuf, AutomationCatalogManifest)> = None;
+    for entry in fs::read_dir(&catalogs).map_err(storage_error("read automation catalogs"))? {
+        let entry = entry.map_err(storage_error("read automation catalog entry"))?;
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let catalog_path = entry.path();
+        let existing = read_automation_catalog(&catalog_path)?;
+        if existing.automation_registry_revision != registry_revision
+            || existing.automation_registry_digest_sha256 != registry_digest_sha256
+        {
+            continue;
+        }
+        let should_select = latest_for_basis
+            .as_ref()
+            .is_none_or(|(selected_path, selected)| {
+                (existing.created_at_us, &catalog_path) > (selected.created_at_us, selected_path)
+            });
+        if should_select {
+            latest_for_basis = Some((catalog_path, existing));
+        }
+    }
+    let latest_created_at_us = latest_for_basis
+        .as_ref()
+        .map(|(_, manifest)| manifest.created_at_us);
+    if let Some((catalog_path, existing)) = latest_for_basis
+        && existing.complete == complete
+        && existing.sources == sources
+    {
+        let manifest_sha256 = catalog_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                WorkVcsError::IntegrityInvalid(format!(
+                    "automation catalog path {} has no UTF-8 digest name",
+                    catalog_path.display()
+                ))
+            })?
+            .to_owned();
+        return Ok(AutomationCatalogPublication {
+            outcome: "reused".to_owned(),
+            catalog_path,
+            manifest_sha256,
+            manifest: existing,
+        });
+    }
+    let manifest = AutomationCatalogManifest {
+        format_version: AUTOMATION_CATALOG_FORMAT_VERSION,
+        automation_registry_revision: registry_revision,
+        automation_registry_digest_sha256: registry_digest_sha256,
+        created_at_us: current_epoch_micros()?
+            .max(latest_created_at_us.unwrap_or_default().saturating_add(1)),
+        complete,
+        sources,
+    };
+    let bytes = canonical_json(&manifest)?;
+    let digest = sha256_hex(&bytes);
+    let destination = catalogs.join(&digest);
+    if destination.exists() {
+        let existing = read_automation_catalog(&destination)?;
+        if canonical_json(&existing)? != bytes {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "catalog path {} collides with different manifest bytes",
+                destination.display()
+            )));
+        }
+        return Ok(AutomationCatalogPublication {
+            outcome: "reused".to_owned(),
+            catalog_path: destination,
+            manifest_sha256: digest,
+            manifest,
+        });
+    }
+    let temporary = catalogs.join(format!(
+        ".{digest}.{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::now_v7()
+    ));
+    create_private_directory_exclusive(&temporary)?;
+    let publication_result = (|| {
+        write_new_private_file(
+            &temporary.join("manifest.json"),
+            &[bytes.as_slice(), b"\n"].concat(),
+        )?;
+        sync_directory(&temporary)?;
+        fs::rename(&temporary, &destination)
+            .map_err(storage_error("publish automation catalog"))?;
+        sync_directory(&catalogs)?;
+        Ok(())
+    })();
+    if publication_result.is_err() {
+        let _ = fs::remove_dir_all(&temporary);
+    }
+    publication_result?;
+    let readback = read_automation_catalog(&destination)?;
+    if canonical_json(&readback)? != bytes {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "published automation catalog failed exact readback".to_owned(),
+        ));
+    }
+    Ok(AutomationCatalogPublication {
+        outcome: "published".to_owned(),
+        catalog_path: destination,
+        manifest_sha256: digest,
+        manifest,
+    })
+}
+
+pub fn read_automation_catalog(path: &Path) -> Result<AutomationCatalogManifest> {
+    validate_private_directory(path, "automation catalog")?;
+    let bytes = read_private_file(&path.join("manifest.json"), MAX_CATALOG_BYTES)?;
+    let manifest: AutomationCatalogManifest = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!(
+            "automation catalog {} is invalid JSON: {error}",
+            path.display()
+        ))
+    })?;
+    if manifest.format_version != AUTOMATION_CATALOG_FORMAT_VERSION {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "automation catalog {} has unsupported format version {}",
+            path.display(),
+            manifest.format_version
+        )));
+    }
+    validate_sha256(
+        "automation registry digest",
+        &manifest.automation_registry_digest_sha256,
+    )?;
+    for source in &manifest.sources {
+        validate_catalog_source(source)?;
+    }
+    let expected_complete = !manifest.sources.is_empty()
+        && manifest
+            .sources
+            .iter()
+            .all(|source| source.status == AutomationSourceStatus::Ready);
+    if manifest.complete != expected_complete {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "automation catalog {} has a forged completeness claim",
+            path.display()
+        )));
+    }
+    let expected_name = sha256_hex(&canonical_json(&manifest)?);
+    if path.file_name().and_then(|value| value.to_str()) != Some(expected_name.as_str()) {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "automation catalog path {} does not match manifest digest {expected_name}",
+            path.display()
+        )));
+    }
+    Ok(manifest)
+}
+
+pub fn sha256_file(path: &Path, max_bytes: u64) -> Result<String> {
+    Ok(sha256_hex(&read_regular_file(path, max_bytes)?))
+}
+
+fn validate_registration_proposal(
+    root: &Path,
+    body: &AutomationRegistryBody,
+    proposal: AutomationRegistrationProposal,
+    revision: u64,
+) -> Result<AutomationRegistration> {
+    if proposal.registration_id.is_empty()
+        || proposal.registration_id.len() > 128
+        || !proposal
+            .registration_id
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'-' | b'_'))
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "registration id must contain 1..=128 ASCII letters, digits, '-' or '_'".to_owned(),
+        ));
+    }
+    validate_control_plane_digest(&proposal.registry_digest)?;
+    let project_root = validate_source_root(&proposal.project_root, "project root")?;
+    let store_path = validate_regular_path(&proposal.store_path, "Store path")?;
+    let mut rollout_roots = proposal
+        .rollout_roots
+        .iter()
+        .map(|path| validate_source_root(path, "rollout root"))
+        .collect::<Result<Vec<_>>>()?;
+    rollout_roots.sort();
+    if rollout_roots.is_empty() {
+        return Err(WorkVcsError::QueryInvalid(
+            "automation registration requires at least one rollout root".to_owned(),
+        ));
+    }
+    for (index, source) in rollout_roots.iter().enumerate() {
+        for peer in rollout_roots.iter().skip(index + 1) {
+            reject_overlap(source, peer, "rollout root", "rollout root")?;
+        }
+    }
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    for source in &rollout_roots {
+        reject_overlap(source, &canonical_root, "rollout root", "automation root")?;
+        reject_overlap(source, &store_path, "rollout root", "Store path")?;
+        reject_overlap(source, &project_root, "rollout root", "project root")?;
+        for existing in &body.registrations {
+            if existing.revoked {
+                continue;
+            }
+            for existing_root in &existing.rollout_roots {
+                reject_overlap(
+                    source,
+                    existing_root,
+                    "rollout root",
+                    "registered rollout root",
+                )?;
+            }
+        }
+    }
+    let now = current_epoch_micros()?;
+    Ok(AutomationRegistration {
+        registration_id: proposal.registration_id,
+        revision,
+        project_ref_id: proposal.project_ref_id,
+        store_path,
+        store_id: proposal.store_id,
+        workspace_id: proposal.workspace_id,
+        branch_id: proposal.branch_id,
+        project_root,
+        rollout_roots,
+        role_policy: proposal.role_policy,
+        registry_revision: proposal.registry_revision,
+        registry_digest: proposal.registry_digest,
+        enabled: true,
+        revoked: false,
+        created_at_us: now,
+        updated_at_us: now,
+    })
+}
+
+fn validate_catalog_source(source: &AutomationCatalogSource) -> Result<()> {
+    if source.registration_id.is_empty() {
+        return Err(WorkVcsError::QueryInvalid(
+            "catalog source registration id cannot be empty".to_owned(),
+        ));
+    }
+    validate_sha256("artifact manifest digest", &source.artifact_manifest_sha256)?;
+    if !source.artifact_path.is_absolute() {
+        return Err(WorkVcsError::QueryInvalid(
+            "catalog artifact path must be absolute".to_owned(),
+        ));
+    }
+    match source.status {
+        AutomationSourceStatus::Ready => {
+            if source.error_code.is_some() || source.error.is_some() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "ready catalog source cannot carry an error".to_owned(),
+                ));
+            }
+        }
+        _ => {
+            if source.error_code.as_deref().is_none_or(str::is_empty)
+                || source.error.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(WorkVcsError::QueryInvalid(
+                    "non-ready catalog source requires an error code and message".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn require_registry_basis(
+    body: &AutomationRegistryBody,
+    expected_revision: u64,
+    expected_digest_sha256: &str,
+) -> Result<()> {
+    validate_sha256(
+        "expected automation registry digest",
+        expected_digest_sha256,
+    )?;
+    let actual = body.snapshot()?;
+    if actual.revision != expected_revision || actual.digest_sha256 != expected_digest_sha256 {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "automation registry basis changed: expected revision {expected_revision} digest {expected_digest_sha256}, actual revision {} digest {}",
+            actual.revision, actual.digest_sha256
+        )));
+    }
+    Ok(())
+}
+
+fn read_registry_body(root: &Path) -> Result<AutomationRegistryBody> {
+    let path = automation_registry_path(root);
+    if !path.exists() {
+        return Ok(AutomationRegistryBody::empty());
+    }
+    let bytes = read_private_file(&path, MAX_REGISTRY_BYTES)?;
+    let body: AutomationRegistryBody = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "automation registry {} is invalid JSON: {error}",
+            path.display()
+        ))
+    })?;
+    if body.format_version != AUTOMATION_REGISTRY_FORMAT_VERSION {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "automation registry {} has unsupported format version {}",
+            path.display(),
+            body.format_version
+        )));
+    }
+    let mut sorted = body.registrations.clone();
+    sorted.sort_by(|left, right| left.registration_id.cmp(&right.registration_id));
+    if sorted != body.registrations {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "automation registry registrations are not canonically ordered".to_owned(),
+        ));
+    }
+    Ok(body)
+}
+
+fn write_registry_body(root: &Path, body: &AutomationRegistryBody) -> Result<()> {
+    let bytes = [canonical_json(body)?.as_slice(), b"\n"].concat();
+    let destination = automation_registry_path(root);
+    let temporary = root.join(format!(
+        ".{REGISTRY_FILE}.{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::now_v7()
+    ));
+    write_new_private_file(&temporary, &bytes)?;
+    fs::rename(&temporary, &destination).map_err(storage_error("install automation registry"))?;
+    sync_directory(root)
+}
+
+fn validate_derived_root(root: &Path, create: bool) -> Result<()> {
+    validate_absolute_normal_path(root, "automation root")?;
+    if create {
+        ensure_private_directory(root)
+    } else if root.exists() {
+        validate_private_directory(root, "automation root")
+    } else {
+        Ok(())
+    }
+}
+
+fn open_registry_lock(root: &Path) -> Result<File> {
+    let path = root.join(REGISTRY_LOCK_FILE);
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options
+        .open(&path)
+        .map_err(storage_error("open automation registry lock"))?;
+    validate_private_metadata(
+        &file
+            .metadata()
+            .map_err(storage_error("stat automation registry lock"))?,
+        false,
+        "automation registry lock",
+    )?;
+    Ok(file)
+}
+
+fn validate_source_root(path: &Path, label: &str) -> Result<PathBuf> {
+    validate_absolute_normal_path(path, label)?;
+    let metadata = fs::symlink_metadata(path).map_err(storage_error("inspect source root"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} {} must be a real directory",
+            path.display()
+        )));
+    }
+    validate_owner_and_writes(&metadata, label)?;
+    path.canonicalize()
+        .map_err(storage_error("canonicalize source root"))
+}
+
+fn validate_regular_path(path: &Path, label: &str) -> Result<PathBuf> {
+    validate_absolute_normal_path(path, label)?;
+    let metadata = fs::symlink_metadata(path).map_err(storage_error("inspect regular path"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} {} must be a real regular file",
+            path.display()
+        )));
+    }
+    validate_owner_and_writes(&metadata, label)?;
+    path.canonicalize()
+        .map_err(storage_error("canonicalize regular path"))
+}
+
+fn reject_overlap(left: &Path, right: &Path, left_label: &str, right_label: &str) -> Result<()> {
+    if left == right || left.starts_with(right) || right.starts_with(left) {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{left_label} {} overlaps {right_label} {}",
+            left.display(),
+            right.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_absolute_normal_path(path: &Path, label: &str) -> Result<()> {
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::RootDir
+            ) && !matches!(component, Component::RootDir)
+        })
+    {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be an absolute normalized path: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_private_directory(path: &Path) -> Result<()> {
+    if !path.exists() {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder
+            .recursive(true)
+            .create(path)
+            .map_err(storage_error("create private derived directory"))?;
+    }
+    validate_private_directory(path, "private derived directory")
+}
+
+fn create_private_directory_exclusive(path: &Path) -> Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder
+        .create(path)
+        .map_err(storage_error("create private temporary directory"))?;
+    Ok(())
+}
+
+fn validate_private_directory(path: &Path, label: &str) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(storage_error("inspect private directory"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "{label} {} is not a real directory",
+            path.display()
+        )));
+    }
+    validate_private_metadata(&metadata, true, label)
+}
+
+fn validate_private_metadata(metadata: &fs::Metadata, directory: bool, label: &str) -> Result<()> {
+    if directory != metadata.is_dir() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "{label} has an unexpected filesystem type"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} is not owned by the current user"
+            )));
+        }
+        if metadata.mode() & 0o077 != 0 {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} is not owner-private"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_owner_and_writes(metadata: &fs::Metadata, label: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} is not owned by the current user"
+            )));
+        }
+        if metadata.mode() & 0o022 != 0 {
+            return Err(WorkVcsError::QueryInvalid(format!(
+                "{label} is group/world writable"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn read_private_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let mut file = options
+        .open(path)
+        .map_err(storage_error("open private file"))?;
+    let metadata = file
+        .metadata()
+        .map_err(storage_error("inspect private file"))?;
+    validate_private_metadata(&metadata, false, "private file")?;
+    if metadata.len() > max_bytes {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "private file {} exceeds its byte bound",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(storage_error("read private file"))?;
+    Ok(bytes)
+}
+
+fn read_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path).map_err(storage_error("inspect file"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "file {} has an unsafe type or exceeds its byte bound",
+            path.display()
+        )));
+    }
+    fs::read(path).map_err(storage_error("read file"))
+}
+
+fn write_new_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .map_err(storage_error("create private file"))?;
+    file.write_all(bytes)
+        .map_err(storage_error("write private file"))?;
+    file.sync_all().map_err(storage_error("sync private file"))
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(storage_error("sync directory"))
+}
+
+fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    serde_json::to_vec(value).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "cannot encode automation value canonically: {error}"
+        ))
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn validate_sha256(label: &str, value: &str) -> Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|character| character.is_ascii_digit() || (b'a'..=b'f').contains(&character))
+    {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "{label} must be lowercase SHA-256"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_control_plane_digest(value: &str) -> Result<()> {
+    let Some(hex) = value.strip_prefix("blake3-256:") else {
+        return Err(WorkVcsError::QueryInvalid(
+            "ProjectRef registry digest must use the blake3-256 prefix".to_owned(),
+        ));
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|character| character.is_ascii_digit() || (b'a'..=b'f').contains(&character))
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "ProjectRef registry digest must contain lowercase BLAKE3-256 hex".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn storage_error(context: &'static str) -> impl Fn(std::io::Error) -> WorkVcsError {
+    move |error| WorkVcsError::StorageFailure(format!("{context}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::{BranchId, ProjectRefId, StoreId, WorkspaceId};
+    use tempfile::TempDir;
+
+    fn fixture() -> (TempDir, PathBuf, AutomationRegistrationProposal) {
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().join("automation");
+        let project = temporary.path().join("project");
+        let rollout = temporary.path().join("rollouts");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&rollout).unwrap();
+        let store = temporary.path().join("store.sqlite");
+        fs::write(&store, b"store").unwrap();
+        let proposal = AutomationRegistrationProposal {
+            registration_id: "registration-1".to_owned(),
+            project_ref_id: ProjectRefId::new_v7(),
+            store_path: store,
+            store_id: StoreId::new_v7(),
+            workspace_id: WorkspaceId::new_v7(),
+            branch_id: BranchId::new_v7(),
+            project_root: project,
+            rollout_roots: vec![rollout],
+            role_policy: AutomationRolePolicy::UserOnly,
+            registry_revision: 7,
+            registry_digest: format!("blake3-256:{}", "1".repeat(64)),
+        };
+        (temporary, root, proposal)
+    }
+
+    #[test]
+    fn preview_is_read_only_and_apply_requires_exact_basis() {
+        let (_temporary, root, proposal) = fixture();
+        let preview = preview_automation_registration(&root, proposal.clone()).unwrap();
+        assert_eq!(preview.registry_revision, 0);
+        assert!(!root.exists());
+        let applied = apply_automation_registration(
+            &root,
+            preview.registry_revision,
+            &preview.registry_digest_sha256,
+            proposal,
+        )
+        .unwrap();
+        assert_eq!(applied.revision, 1);
+        assert_eq!(applied.registrations.len(), 1);
+        let error = revoke_automation_registration(
+            &root,
+            0,
+            &preview.registry_digest_sha256,
+            "registration-1",
+        )
+        .unwrap_err();
+        assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+    }
+
+    #[test]
+    fn revoke_preserves_registration_history() {
+        let (_temporary, root, proposal) = fixture();
+        let preview = preview_automation_registration(&root, proposal.clone()).unwrap();
+        let applied = apply_automation_registration(
+            &root,
+            preview.registry_revision,
+            &preview.registry_digest_sha256,
+            proposal,
+        )
+        .unwrap();
+        let revoked = revoke_automation_registration(
+            &root,
+            applied.revision,
+            &applied.digest_sha256,
+            "registration-1",
+        )
+        .unwrap();
+        assert_eq!(revoked.revision, 2);
+        assert!(revoked.registrations[0].revoked);
+        assert!(!revoked.registrations[0].enabled);
+    }
+
+    #[test]
+    fn registration_rejects_overlapping_rollout_and_project_roots() {
+        let (_temporary, root, mut proposal) = fixture();
+        proposal.rollout_roots = vec![proposal.project_root.join("rollouts")];
+        fs::create_dir(&proposal.rollout_roots[0]).unwrap();
+        let error = preview_automation_registration(&root, proposal).unwrap_err();
+        assert!(matches!(error, WorkVcsError::QueryInvalid(_)));
+    }
+
+    #[test]
+    fn registration_rejects_parent_and_child_rollout_roots() {
+        let (_temporary, root, mut proposal) = fixture();
+        let child = proposal.rollout_roots[0].join("nested");
+        fs::create_dir(&child).unwrap();
+        proposal.rollout_roots.push(child);
+        let error = preview_automation_registration(&root, proposal).unwrap_err();
+        assert!(matches!(error, WorkVcsError::QueryInvalid(_)));
+        assert!(error.to_string().contains("rollout root"));
+        assert!(error.to_string().contains("overlaps"));
+    }
+
+    #[test]
+    fn registration_rejects_duplicate_rollout_roots() {
+        let (_temporary, root, mut proposal) = fixture();
+        proposal
+            .rollout_roots
+            .push(proposal.rollout_roots[0].clone());
+        let error = preview_automation_registration(&root, proposal).unwrap_err();
+        assert!(matches!(error, WorkVcsError::QueryInvalid(_)));
+        assert!(error.to_string().contains("overlaps"));
+    }
+
+    #[test]
+    fn registration_accepts_distinct_sibling_rollout_roots() {
+        let (temporary, root, mut proposal) = fixture();
+        let sibling = temporary.path().join("other-rollouts");
+        fs::create_dir(&sibling).unwrap();
+        proposal.rollout_roots.push(sibling.canonicalize().unwrap());
+        let preview = preview_automation_registration(&root, proposal).unwrap();
+        assert_eq!(preview.registration.rollout_roots.len(), 2);
+    }
+
+    #[test]
+    fn catalog_is_immutable_and_partial_failure_is_visible() {
+        let (_temporary, root, proposal) = fixture();
+        let preview = preview_automation_registration(&root, proposal.clone()).unwrap();
+        let registry = apply_automation_registration(
+            &root,
+            preview.registry_revision,
+            &preview.registry_digest_sha256,
+            proposal.clone(),
+        )
+        .unwrap();
+        let source = AutomationCatalogSource {
+            registration_id: proposal.registration_id,
+            project_ref_id: proposal.project_ref_id,
+            lane: AutomationLane::HistoricalReference,
+            artifact_kind: AutomationArtifactKind::SourceArchive,
+            artifact_path: root.join("missing-source"),
+            artifact_manifest_sha256: "2".repeat(64),
+            source_anchor: "rollout:missing".to_owned(),
+            status: AutomationSourceStatus::Failed,
+            error_code: Some("source_missing".to_owned()),
+            error: Some("registered source is missing".to_owned()),
+        };
+        let first = publish_automation_catalog(
+            &root,
+            registry.revision,
+            registry.digest_sha256.clone(),
+            vec![source],
+        )
+        .unwrap();
+        assert_eq!(first.outcome, "published");
+        assert!(!first.manifest.complete);
+        let readback = read_automation_catalog(&first.catalog_path).unwrap();
+        assert_eq!(readback, first.manifest);
+
+        let reused = publish_automation_catalog(
+            &root,
+            registry.revision,
+            registry.digest_sha256.clone(),
+            first.manifest.sources.clone(),
+        )
+        .unwrap();
+        assert_eq!(reused.outcome, "reused");
+        assert_eq!(reused.catalog_path, first.catalog_path);
+        assert_eq!(reused.manifest, first.manifest);
+
+        let mut ready_source = first.manifest.sources[0].clone();
+        ready_source.status = AutomationSourceStatus::Ready;
+        ready_source.error_code = None;
+        ready_source.error = None;
+        let changed = publish_automation_catalog(
+            &root,
+            registry.revision,
+            registry.digest_sha256.clone(),
+            vec![ready_source],
+        )
+        .unwrap();
+        assert_eq!(changed.outcome, "published");
+        assert!(changed.manifest.complete);
+
+        let returned = publish_automation_catalog(
+            &root,
+            registry.revision,
+            registry.digest_sha256.clone(),
+            first.manifest.sources.clone(),
+        )
+        .unwrap();
+        assert_eq!(returned.outcome, "published");
+        assert_ne!(returned.catalog_path, first.catalog_path);
+        let stable = publish_automation_catalog(
+            &root,
+            registry.revision,
+            registry.digest_sha256,
+            first.manifest.sources.clone(),
+        )
+        .unwrap();
+        assert_eq!(stable.outcome, "reused");
+        assert_eq!(stable.catalog_path, returned.catalog_path);
+    }
+
+    #[test]
+    fn empty_catalog_is_incomplete_and_rejects_vacuous_completion() {
+        let (_temporary, root, _proposal) = fixture();
+        let published = publish_automation_catalog(&root, 0, "1".repeat(64), Vec::new()).unwrap();
+        assert!(!published.manifest.complete);
+        assert!(published.manifest.sources.is_empty());
+        assert_eq!(
+            read_automation_catalog(&published.catalog_path).unwrap(),
+            published.manifest
+        );
+
+        let mut forged = published.manifest;
+        forged.complete = true;
+        forged.created_at_us += 1;
+        let bytes = canonical_json(&forged).unwrap();
+        let destination = root.join("catalogs").join(sha256_hex(&bytes));
+        create_private_directory_exclusive(&destination).unwrap();
+        write_new_private_file(
+            &destination.join("manifest.json"),
+            &[bytes.as_slice(), b"\n"].concat(),
+        )
+        .unwrap();
+        let error = read_automation_catalog(&destination).unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+        assert!(error.to_string().contains("forged completeness"));
+    }
+
+    #[test]
+    fn catalog_readback_rejects_forged_complete_flag() {
+        let (_temporary, root, proposal) = fixture();
+        let source = AutomationCatalogSource {
+            registration_id: proposal.registration_id,
+            project_ref_id: proposal.project_ref_id,
+            lane: AutomationLane::HistoricalReference,
+            artifact_kind: AutomationArtifactKind::SourceArchive,
+            artifact_path: root.join("missing-source"),
+            artifact_manifest_sha256: "2".repeat(64),
+            source_anchor: "rollout:missing".to_owned(),
+            status: AutomationSourceStatus::Failed,
+            error_code: Some("source_missing".to_owned()),
+            error: Some("registered source is missing".to_owned()),
+        };
+        let forged = AutomationCatalogManifest {
+            format_version: AUTOMATION_CATALOG_FORMAT_VERSION,
+            automation_registry_revision: 0,
+            automation_registry_digest_sha256: "1".repeat(64),
+            created_at_us: 1,
+            complete: true,
+            sources: vec![source],
+        };
+        let bytes = canonical_json(&forged).unwrap();
+        let catalogs = root.join("catalogs");
+        ensure_private_directory(&catalogs).unwrap();
+        let destination = catalogs.join(sha256_hex(&bytes));
+        create_private_directory_exclusive(&destination).unwrap();
+        write_new_private_file(
+            &destination.join("manifest.json"),
+            &[bytes.as_slice(), b"\n"].concat(),
+        )
+        .unwrap();
+        let error = read_automation_catalog(&destination).unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+        assert!(error.to_string().contains("forged completeness"));
+    }
+}

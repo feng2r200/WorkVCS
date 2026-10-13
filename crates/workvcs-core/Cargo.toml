@@ -15,6 +15,7 @@ blake3.workspace = true
 fastembed.workspace = true
 fs4.workspace = true
 hex.workspace = true
+libc.workspace = true
 jieba-rs.workspace = true
 onnx-protobuf.workspace = true
 protobuf.workspace = true

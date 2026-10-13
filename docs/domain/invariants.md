@@ -969,3 +969,30 @@ invalid derived state remains visible and cannot silently become current fact.
 On-demand preparation under ADR-0526 may write a new derived generation during
 an explicit query, but retains the same canonical read-only boundary, complete
 source verification, immutable publication and final current-head check.
+
+### INV-118 — Local automation coordinates derived work only
+
+The optional per-user automation runtime is disabled by default and owns only
+registration, dirty-signal, reconciliation and status coordination. Watcher
+events cannot directly import, index or mutate; their bounded dirty signal and
+error counters cannot become an unbounded work queue. Every worker independently
+revalidates source ownership and current routing, and only a parsed report with
+exact catalog readback may project success or partial success. Canonical failure
+cannot suppress historical reconciliation, while an unobserved root cannot
+authorize deletion classification. The runtime cannot write
+canonical Store semantics, registry bindings, Exposure/source-status or source
+files and cannot delete archives or generations.
+
+### INV-119 — A global derived catalog preserves lane and source authority
+
+Each catalog round is immutable and binds one explicit registration revision,
+ordered source membership and exact source anchors. Current canonical results
+and historical/reference results occupy distinct lanes. A failed, stale or
+quarantined source keeps the result incomplete; it is never silently omitted.
+Readback derives completeness from all source statuses. The newest exact
+same-basis source set may be reused, but an older matching round behind a newer
+different round cannot be selected as current without publishing a new
+immutable round.
+Catalog membership, ranking and reuse cannot create canonical Knowledge,
+currentness, ownership, authorization, cross-Store mutation or a mutable global
+KnowledgeSpace.

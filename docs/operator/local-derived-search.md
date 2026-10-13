@@ -1,6 +1,6 @@
 # Local Derived Search
 
-This opt-in local surface is governed by ADR-0525 through ADR-0528. It searches
+This opt-in local surface is governed by ADR-0525 through ADR-0530. It searches
 delivered Record and Knowledge statements from verified read bindings, and may
 also search an explicitly imported non-authoritative local history archive. It
 produces source evidence; existing `context`, `recall`, Task readiness,
@@ -54,8 +54,10 @@ and cannot be combined with `--index-dir`.
 registry and routing marker remain read-only. A new source head, policy or
 historical scope selects another complete basis. Damaged or incompatible
 generations are preserved and a new file is built. The lexical path has no
-incremental object-update claim. There is no background service, mutable
-pointer or automatic cleanup.
+incremental object-update claim. The on-demand command itself has no resident
+dependency, mutable pointer, or automatic cleanup. ADR-0529 adds a separate
+disabled-by-default local coordinator described below; it publishes only new
+immutable derived artifacts.
 
 Prepare and query use one native snapshot with the existing final freshness
 guard. Head advancement during verification yields no current items; repeat
@@ -194,6 +196,119 @@ sources remain visible, but the overall result is `partial_failure` and
 its own ProjectRef, Store, Workspace, Branch, source commit, state and temporal
 scope. The command never writes across Stores.
 
+## Optional per-user automation and global derived catalog
+
+Automation is explicit and disabled by default. Installing WorkVCS does not
+install or enable a LaunchAgent, login item, service unit, or privileged
+component. Registration is a separate compare-and-swap operation against an
+exact derived registry basis:
+
+```sh
+workvcs automation register-preview \
+  --cwd /path/to/verified/project \
+  --project-ref <PROJECT_REF> \
+  --rollout-root /absolute/private/rollout-root \
+  --format json
+
+workvcs automation register-apply \
+  --cwd /path/to/verified/project \
+  --project-ref <PROJECT_REF> \
+  --rollout-root /absolute/private/rollout-root \
+  --expected-revision <PREVIEW_REVISION> \
+  --expected-digest <PREVIEW_DIGEST> \
+  --format json
+```
+
+Use `--role-policy user-only` when assistant messages must not enter the
+historical reference archive. Roots must be absolute, real, owner-controlled,
+and non-overlapping. Registration never changes the ProjectRef registry or the
+canonical Store.
+
+Run one finite reconciliation before considering a resident coordinator:
+
+```sh
+workvcs automation reconcile --once --format json
+workvcs automation catalog latest
+workvcs automation catalog show --catalog /absolute/catalog/path
+workvcs automation catalog query \
+  --query 'evidence question'
+```
+
+Reconciliation re-resolves each exact ProjectRef binding, classifies rollout
+files as new, appended, unchanged, rewritten, or deleted, and publishes or
+reuses the newest semantically identical immutable catalog round.
+`canonical_current` contains verified native current
+generations. `historical_reference` contains immutable source archives and is
+never action authority. A failed or quarantined source remains visible and
+makes the round or query incomplete. A catalog whose registration revision or
+digest is no longer current is rejected rather than silently queried. `latest`
+and a query without `--catalog` scan immutable manifests and deterministically
+select the newest round for the current exact registration basis; there is no
+mutable `current` pointer. Readback rejects a manifest whose `complete` flag
+does not equal the conjunction of all source statuses. Repeated no-change
+reconciliation reuses the newest exact round; a changed state, including a
+return to older source semantics after an intervening round, publishes a new
+monotonically newer immutable round before it can be reused.
+
+The private source inventory retains the last successful immutable archive
+reference for each discovered rollout. An unchanged source revalidates that
+archive instead of re-importing the rollout. If a source later disappears or a
+new version cannot be imported, the prior archive remains queryable with its
+per-result source-file state while a separate failure entry keeps the catalog
+and query at `partial_failure`; source loss is never turned into success. Each
+root is reconciled independently: a missing or unreadable root cannot authorize
+deletion classification for that root, but successful roots still detect their
+own deletions. A canonical routing, Store-open or generation failure does not
+skip this historical reconciliation lane.
+
+The foreground coordinator is optional:
+
+```sh
+workvcs automation daemon run --periodic-seconds 900
+workvcs automation daemon status
+workvcs automation daemon reconcile
+workvcs automation daemon stop
+```
+
+`daemon run` stays attached to its terminal. It holds one owner-private lock
+and Unix socket, verifies same-user clients, bounds protocol frames, and starts
+a short-lived reconciliation worker at startup, on a manual request, after a
+coalesced watcher dirty/overflow signal, and periodically for anti-entropy.
+The watcher only marks dirty through a capacity-one signal; status separately
+reports observed events, coalescing, backend errors and the last watcher error.
+A setup or overflow error triggers a full scan and does not masquerade as a
+healthy event stream. The coordinator owns no Store handle, model, or Qdrant
+shard. A worker is terminated and reported failed if it exceeds its bounded
+runtime. Its bounded stdout and stderr are retained under
+`runtime/worker-evidence/` with exact byte counts, full-stream hashes and
+explicit truncation state. The daemon accepts success or partial success only
+after parsing that report and matching the exact current-basis catalog
+readback; nonzero exit, timeout, malformed output, unexpected stderr and output
+overflow remain failed. Daemon status keeps worker outcome separate from protocol
+health: rejected or disconnected clients increment `rejected_requests` and
+preserve `last_protocol_error` instead of terminating the coordinator or being
+reported as successful reconciliation.
+
+The automation layer does not write canonical Stores, the ProjectRef registry,
+KnowledgeExposure, source status, rollout files, existing archives, existing
+generations, or an existing catalog. It does not clean up automatically.
+Revoke removes a registration only from later rounds while retaining history:
+
+```sh
+workvcs automation list --format json
+workvcs automation revoke \
+  --registration-id <REGISTRATION_ID> \
+  --expected-revision <CURRENT_REVISION> \
+  --expected-digest <CURRENT_DIGEST> \
+  --format json
+```
+
+Treat binding drift, unsafe permissions, malformed or truncated history,
+worker timeout, protocol failure, and source disappearance as explicit failed
+or quarantined evidence. Do not edit the derived registry or catalog by hand to
+turn those states green. Repair or re-register only with separate authority,
+then perform a new complete reconciliation.
+
 ## Complete Results and Observed Cost
 
 The user directed capability-first implementation. Default queries have no
@@ -256,7 +371,9 @@ An admitted Capture without Store delivery is absent from this index.
 
 Embedding and reranking use an in-process, per-generation Qdrant Edge shard and
 verified local model files. There is no Qdrant Server, network model lookup,
-resident search service, automatic transcript discovery, canonical extraction,
-semantic lifecycle inference or automatic action. Source archives and
-federation widen explicit evidence reads without widening authority. Source,
-installation, Push and release states retain their own exact delivery evidence.
+resident model/index process, canonical transcript extraction, semantic
+lifecycle inference or automatic action. The optional coordinator may discover
+files only below explicitly registered roots and creates reference-only
+immutable archives. Source archives, federation, and the derived catalog widen
+evidence reads without widening authority. Source, installation, Push and
+release states retain their own exact delivery evidence.

@@ -146,13 +146,12 @@ records from a transcript.
 
 This repository contains the confirmed WorkVCS design baseline and a locally
 release-ready V1 implementation in Rust, followed by focused post-V1 local
-improvements. This branch's crate and CLI package version is `1.0.0`, the
-local-source implementation of accepted ADR-0524. Stable installed adoption
-is evidenced locally in [the adoption record](../provenance/task-disposition-and-currentness-local-adoption.md);
-public release remains separate. The previously delivered
-`0.2.0` implementation remains the boundary of the bounded V1
-product-maturity judgment; that judgment does not establish a public release
-or broader maturity claim for the 1.0.0 implementation.
+improvements. This branch's crate and CLI package version is `1.4.0`. It adds
+the source implementation of ADR-0529 and ADR-0530 after the separately
+delivered ADR-0524 and local-search increments. Stable installed adoption,
+Push, CI, tag, release, and activation remain separate evidence layers. The
+earlier bounded V1 product-maturity judgment does not establish a public
+release or broader maturity claim for this post-V1 implementation.
 
 Implementation readiness is tracked in
 [V1 Readiness Ledger](../provenance/v1-readiness-ledger.md). That ledger
@@ -193,6 +192,8 @@ carrying the explicit option may continue through this route.
 Isolated fixtures remain the authority for injected faults and concurrency.
 The bounded configured-local canary proves one canonical work-governance
 Record, one immutable Hernes association with a byte-stable Hernes Store, and
-zero-write replay while the earlier legacy intent remains unchanged. Global
-Hook activation, historical backfill, live rollback after v2 use, push,
-release, and deployment remain separate future decisions.
+zero-write replay while the earlier legacy intent remains unchanged.
+Historical ProjectRef backfill, live rollback after v2 use, release, and
+deployment remain separate decisions. The ADR-0529 coordinator is opt-in and
+disabled by default; source delivery does not install a LaunchAgent or activate
+it in the background.

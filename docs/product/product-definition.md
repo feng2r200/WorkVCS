@@ -146,8 +146,8 @@ records from a transcript.
 
 This repository contains the confirmed WorkVCS design baseline and a locally
 release-ready V1 implementation in Rust, followed by focused post-V1 local
-improvements. This branch's crate and CLI package version is `1.4.1`. It adds
-the source implementation of ADR-0529 and ADR-0530 after the separately
+improvements. This branch's crate and CLI package version is `1.4.2`. It adds
+the source implementation of ADR-0529 through ADR-0532 after the separately
 delivered ADR-0524 and local-search increments. Stable installed adoption,
 Push, CI, tag, release, and activation remain separate evidence layers. The
 earlier bounded V1 product-maturity judgment does not establish a public

@@ -87,6 +87,148 @@ impl Fixture {
     }
 }
 
+struct RegistryDerivedFixture {
+    _temporary: TempDir,
+    root: PathBuf,
+    registry: PathBuf,
+    project_a: PathBuf,
+    project_b: PathBuf,
+    rollout_b: PathBuf,
+    store_b: PathBuf,
+    branch_b: String,
+    full_registry: Value,
+}
+
+impl RegistryDerivedFixture {
+    fn new(binary: &Path) -> Self {
+        let temporary = TempDir::new().expect("temporary directory");
+        let project_a = temporary.path().join("project-a");
+        let project_b = temporary.path().join("project-b");
+        let stores = temporary.path().join("stores");
+        let rollout_a = temporary.path().join("rollouts-a");
+        let rollout_b = temporary.path().join("rollouts-b");
+        let root = temporary.path().join("automation");
+        let registry = temporary.path().join("project-bindings.json");
+        for path in [&project_a, &project_b, &stores, &rollout_a, &rollout_b] {
+            fs::create_dir(path).expect("fixture directory");
+        }
+
+        let ensured_a = run_ok(
+            binary,
+            &args![
+                "project",
+                "ensure",
+                "--cwd",
+                path_text(&project_a),
+                "--registry",
+                path_text(&registry),
+                "--store-root",
+                path_text(&stores),
+            ],
+        );
+        let ensured_a = String::from_utf8(ensured_a.stdout).expect("project A ensure UTF-8");
+        let ensured_b = run_ok(
+            binary,
+            &args![
+                "project",
+                "ensure",
+                "--cwd",
+                path_text(&project_b),
+                "--registry",
+                path_text(&registry),
+                "--store-root",
+                path_text(&stores),
+            ],
+        );
+        let ensured_b = String::from_utf8(ensured_b.stdout).expect("project B ensure UTF-8");
+        let store_b = PathBuf::from(key_value(&ensured_b, "store_path"));
+        let branch_b = key_value(&ensured_b, "branch_id");
+
+        let preview = run_ok(
+            binary,
+            &args![
+                "project",
+                "registry-migrate",
+                "--preview",
+                "--registry",
+                path_text(&registry),
+                "--format",
+                "json".to_owned(),
+            ],
+        );
+        let preview: Value =
+            serde_json::from_slice(&preview.stdout).expect("registry migration preview JSON");
+        run_ok(
+            binary,
+            &args![
+                "project",
+                "registry-migrate",
+                "--apply",
+                "--registry",
+                path_text(&registry),
+                "--expected-source-digest",
+                string_field(&preview["preview"], "source_digest"),
+                "--expected-preview-digest",
+                string_field(&preview["preview"], "preview_digest"),
+            ],
+        );
+
+        let mut full_registry: Value =
+            serde_json::from_slice(&fs::read(&registry).expect("read full registry v2"))
+                .expect("full registry v2 JSON");
+        let canonical_a = fs::canonicalize(&project_a).expect("canonical project A");
+        let project_a_ref = full_registry["locators"]
+            .as_array()
+            .expect("registry locators")
+            .iter()
+            .find(|locator| locator["normalized_value"] == path_text(&canonical_a))
+            .and_then(|locator| locator["project_ref_id"].as_str())
+            .expect("project A ProjectRef")
+            .to_owned();
+        let mut reduced_registry = full_registry.clone();
+        reduced_registry["projects"]
+            .as_array_mut()
+            .expect("registry projects")
+            .retain(|project| project["project_ref_id"] == project_a_ref);
+        reduced_registry["bindings"]
+            .as_array_mut()
+            .expect("registry bindings")
+            .retain(|binding| binding["project_ref_id"] == project_a_ref);
+        reduced_registry["locators"]
+            .as_array_mut()
+            .expect("registry locators")
+            .retain(|locator| locator["project_ref_id"] == project_a_ref);
+        reduced_registry["migration"]["mappings"]
+            .as_array_mut()
+            .expect("migration mappings")
+            .retain(|mapping| mapping["project_ref_id"] == project_a_ref);
+        reduced_registry["revision"] = json!(1);
+        full_registry["revision"] = json!(2);
+        write_json_atomically(&registry, &reduced_registry);
+        activate_routing(binary, &registry, None);
+
+        write_project_rollout(
+            &rollout_a.join("initial.jsonl"),
+            &project_a,
+            "global initial watcher evidence",
+        );
+        apply_source_policy(binary, &root, &registry, "source-a", &rollout_a);
+
+        assert!(!ensured_a.is_empty());
+        Self {
+            _temporary: temporary,
+            root,
+            registry,
+            project_a,
+            project_b,
+            rollout_b,
+            store_b,
+            branch_b,
+            full_registry,
+        }
+    }
+}
+
 struct RunningDaemon {
     child: Option<Child>,
     binary: PathBuf,
@@ -95,16 +237,40 @@ struct RunningDaemon {
 
 impl RunningDaemon {
     fn start(binary: &Path, root: &Path, periodic_seconds: u64) -> Self {
+        Self::start_inner(binary, root, None, periodic_seconds)
+    }
+
+    fn start_with_registry(
+        binary: &Path,
+        root: &Path,
+        registry: &Path,
+        periodic_seconds: u64,
+    ) -> Self {
+        Self::start_inner(binary, root, Some(registry), periodic_seconds)
+    }
+
+    fn start_inner(
+        binary: &Path,
+        root: &Path,
+        registry: Option<&Path>,
+        periodic_seconds: u64,
+    ) -> Self {
+        let mut arguments = args![
+            "automation",
+            "daemon",
+            "run",
+            "--root",
+            path_text(root),
+            "--periodic-seconds",
+            periodic_seconds,
+        ]
+        .to_vec();
+        if let Some(registry) = registry {
+            arguments.push("--registry".to_owned());
+            arguments.push(path_text(registry));
+        }
         let child = Command::new(binary)
-            .args([
-                "automation",
-                "daemon",
-                "run",
-                "--root",
-                root.to_str().expect("UTF-8 automation root"),
-                "--periodic-seconds",
-                &periodic_seconds.to_string(),
-            ])
+            .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -144,6 +310,31 @@ impl RunningDaemon {
         panic!("automation daemon did not stop within the bound");
     }
 
+    fn signal_and_wait(&mut self, signal: libc::c_int) -> std::process::ExitStatus {
+        let pid = self.child.as_ref().expect("running daemon child").id();
+        assert_eq!(
+            unsafe { libc::kill(pid as libc::pid_t, signal) },
+            0,
+            "signal automation daemon: {}",
+            std::io::Error::last_os_error()
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if let Some(status) = self
+                .child
+                .as_mut()
+                .expect("daemon child")
+                .try_wait()
+                .expect("inspect signalled daemon child")
+            {
+                self.child.take();
+                return status;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        panic!("signalled automation daemon did not stop within the bound");
+    }
+
     fn kill_hard(&mut self) {
         let mut child = self.child.take().expect("running daemon child");
         child.kill().expect("kill automation daemon");
@@ -181,6 +372,7 @@ fn empty_registry_daemon_startup_projects_failed() {
         .expect("protect empty automation root");
 
     let mut daemon = RunningDaemon::start(&binary, &root, 60);
+    wait_for_status(&binary, &root, |ledger| ledger["worker_active"] == false);
     let output = daemon_command(&binary, &root, "status");
     assert_success(&output, "read failed daemon status");
     let response: Value = serde_json::from_slice(&output.stdout).expect("daemon response JSON");
@@ -195,7 +387,7 @@ fn empty_registry_daemon_startup_projects_failed() {
     assert_eq!(ledger["last_worker_status"], "failed");
     assert_eq!(ledger["last_catalog_complete"], false);
     assert_eq!(ledger["daemon_enabled_by_default"], false);
-    assert_eq!(ledger["launch_agent_installed"], false);
+    assert_eq!(ledger["launch_agent_installed"], Value::Null);
     daemon.stop();
 }
 
@@ -204,19 +396,23 @@ fn daemon_reconciles_real_file_events_and_recovers_from_crash() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_workvcs"));
     let fixture = Fixture::new();
     let mut daemon = RunningDaemon::start(&binary, &fixture.root, 60);
-    let startup = daemon_status(&binary, &fixture.root);
+    let startup = wait_for_status(&binary, &fixture.root, |ledger| {
+        ledger["last_trigger"] == "startup" && ledger["worker_active"] == false
+    });
     assert_eq!(startup["last_trigger"], "startup");
     assert_eq!(startup["daemon_enabled_by_default"], false);
-    assert_eq!(startup["launch_agent_installed"], false);
+    assert_eq!(startup["launch_agent_installed"], Value::Null);
     let mut updated_at = u64_field(&startup, "updated_at_us");
 
     let manual = daemon_command(&binary, &fixture.root, "reconcile");
     assert_success(&manual, "request manual daemon reconciliation");
     let manual_response: Value =
         serde_json::from_slice(&manual.stdout).expect("manual daemon response JSON");
-    assert_eq!(manual_response["status"], "partial_failure");
+    assert_eq!(manual_response["status"], "accepted");
     let manual_ledger = wait_for_status(&binary, &fixture.root, |ledger| {
-        ledger["last_trigger"] == "manual" && u64_field(ledger, "updated_at_us") > updated_at
+        ledger["last_trigger"] == "manual"
+            && ledger["worker_active"] == false
+            && u64_field(ledger, "updated_at_us") > updated_at
     });
     updated_at = u64_field(&manual_ledger, "updated_at_us");
 
@@ -298,7 +494,7 @@ fn daemon_reconciles_real_file_events_and_recovers_from_crash() {
 
     let mut periodic = RunningDaemon::start(&binary, &fixture.root, 1);
     let periodic_ledger = wait_for_status(&binary, &fixture.root, |ledger| {
-        ledger["last_trigger"] == "periodic"
+        ledger["last_trigger"] == "periodic" && ledger["worker_active"] == false
     });
     assert_eq!(periodic_ledger["last_trigger"], "periodic");
     periodic.kill_hard();
@@ -311,11 +507,203 @@ fn daemon_reconciles_real_file_events_and_recovers_from_crash() {
     );
 
     let mut restarted = RunningDaemon::start(&binary, &fixture.root, 60);
-    let restarted_ledger = daemon_status(&binary, &fixture.root);
+    let restarted_ledger = wait_for_status(&binary, &fixture.root, |ledger| {
+        ledger["last_trigger"] == "startup" && ledger["worker_active"] == false
+    });
     assert_eq!(restarted_ledger["last_trigger"], "startup");
     assert_ne!(restarted_ledger["pid"], periodic_ledger["pid"]);
     restarted.stop();
     assert!(!stale_socket.exists());
+}
+
+#[test]
+fn daemon_signals_cancel_and_reap_slow_worker_before_socket_and_lock_recovery() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_workvcs"));
+    let fixture = Fixture::new();
+    for index in 0..800 {
+        write_rollout(
+            &fixture.rollout_root.join(format!("slow-{index:04}.jsonl")),
+            &format!("slow worker signal evidence {index}"),
+            "assistant evidence",
+        );
+    }
+
+    for (signal, expected_trigger) in [
+        (libc::SIGTERM, "signal_sigterm"),
+        (libc::SIGINT, "signal_sigint"),
+    ] {
+        let mut daemon = RunningDaemon::start(&binary, &fixture.root, 600);
+        let active = wait_for_status(&binary, &fixture.root, |ledger| {
+            ledger["worker_active"] == true && ledger["active_worker_pid"].is_number()
+        });
+        let worker_pid = u64_field(&active, "active_worker_pid") as libc::pid_t;
+        let status = daemon.signal_and_wait(signal);
+        assert!(status.success());
+        assert!(!fixture.root.join("runtime/v1.sock").exists());
+
+        let ledger: Value = serde_json::from_slice(
+            &fs::read(fixture.root.join("runtime/status.json"))
+                .expect("read graceful signal ledger"),
+        )
+        .expect("parse graceful signal ledger");
+        assert_eq!(ledger["last_trigger"], expected_trigger);
+        assert_eq!(ledger["worker_active"], false);
+        assert_eq!(ledger["active_worker_pid"], Value::Null);
+        assert_eq!(ledger["pending_reconcile"], false);
+        assert_eq!(ledger["last_worker_cancelled"], true);
+        assert!(ledger["last_worker_evidence_path"].is_string());
+
+        assert_eq!(unsafe { libc::kill(worker_pid, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH),
+            "reconciliation worker {worker_pid} remained after daemon signal"
+        );
+    }
+
+    let mut recovered = RunningDaemon::start(&binary, &fixture.root, 600);
+    recovered.stop();
+    assert!(!fixture.root.join("runtime/v1.sock").exists());
+}
+
+#[test]
+fn daemon_remains_responsive_and_runs_manual_request_queued_behind_slow_worker() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_workvcs"));
+    let fixture = Fixture::new();
+    for index in 0..400 {
+        write_rollout(
+            &fixture
+                .rollout_root
+                .join(format!("queued-slow-{index:04}.jsonl")),
+            &format!("slow worker queued manual evidence {index}"),
+            "assistant evidence",
+        );
+    }
+
+    let mut daemon = RunningDaemon::start(&binary, &fixture.root, 600);
+    let startup = wait_for_status(&binary, &fixture.root, |ledger| {
+        ledger["worker_active"] == true && ledger["active_worker_trigger"] == "startup"
+    });
+    let startup_updated_at = u64_field(&startup, "updated_at_us");
+    let request_started = Instant::now();
+    let manual = daemon_command(&binary, &fixture.root, "reconcile");
+    assert!(request_started.elapsed() < Duration::from_secs(2));
+    assert_success(&manual, "queue manual reconciliation behind slow worker");
+    let manual_response: Value =
+        serde_json::from_slice(&manual.stdout).expect("manual daemon response JSON");
+    assert_eq!(manual_response["status"], "accepted");
+    assert!(
+        manual_response["message"]
+            .as_str()
+            .expect("manual response message")
+            .contains("coalesced behind the active worker")
+    );
+
+    let queued = daemon_status(&binary, &fixture.root);
+    assert_eq!(queued["worker_active"], true);
+    assert_eq!(queued["pending_reconcile"], true);
+    assert_eq!(queued["active_worker_trigger"], "startup");
+    let completed = wait_for_status(&binary, &fixture.root, |ledger| {
+        ledger["last_trigger"] == "manual"
+            && ledger["worker_active"] == false
+            && u64_field(ledger, "updated_at_us") > startup_updated_at
+    });
+    assert_eq!(completed["pending_reconcile"], false);
+    assert_eq!(completed["last_worker_cancelled"], false);
+    daemon.stop();
+}
+
+#[test]
+fn registry_derived_daemon_reloads_global_watch_targets_without_output_feedback() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_workvcs"));
+    let fixture = RegistryDerivedFixture::new(&binary);
+    let mut daemon =
+        RunningDaemon::start_with_registry(&binary, &fixture.root, &fixture.registry, 600);
+    let startup = wait_for_status(&binary, &fixture.root, |ledger| {
+        ledger["last_trigger"] == "startup" && ledger["worker_active"] == false
+    });
+    assert_eq!(startup["worker_timeout_seconds"], Value::Null);
+    assert_eq!(startup["launch_agent_installed"], Value::Null);
+    let startup_report = last_worker_report(&fixture.root);
+    assert_eq!(startup_report["membership_mode"], "registry_derived");
+    assert_eq!(startup_report["registrations_considered"], 1);
+    let startup_events = u64_field(&startup, "watcher_events");
+    thread::sleep(Duration::from_millis(500));
+    let after_readback = daemon_status(&binary, &fixture.root);
+    assert_eq!(after_readback["updated_at_us"], startup["updated_at_us"]);
+    assert_eq!(u64_field(&after_readback, "watcher_events"), startup_events);
+
+    let before_policy = u64_field(&after_readback, "updated_at_us");
+    apply_source_policy(
+        &binary,
+        &fixture.root,
+        &fixture.registry,
+        "source-b",
+        &fixture.rollout_b,
+    );
+    let policy_reloaded = wait_for_reconciliation(&binary, &fixture.root, before_policy);
+    assert_eq!(policy_reloaded["worker_active"], false);
+    assert_eq!(
+        last_worker_report(&fixture.root)["source_policy_revision"],
+        2
+    );
+
+    let before_new_root = u64_field(&policy_reloaded, "updated_at_us");
+    write_project_rollout(
+        &fixture.rollout_b.join("policy-added.jsonl"),
+        &fixture.project_a,
+        "policy-added rollout watcher evidence",
+    );
+    let new_root = wait_for_reconciliation(&binary, &fixture.root, before_new_root);
+    assert!(u64_field(&last_worker_report(&fixture.root), "rollout_files_new") >= 1);
+
+    let prior_activation_digest = key_value(
+        &routing_preview(&binary, &fixture.registry),
+        "activation_digest",
+    );
+    let before_membership = u64_field(&new_root, "updated_at_us");
+    write_json_atomically(&fixture.registry, &fixture.full_registry);
+    activate_routing(&binary, &fixture.registry, Some(prior_activation_digest));
+    let membership_reloaded =
+        wait_for_report(&binary, &fixture.root, before_membership, |report| {
+            report["registrations_considered"] == 2
+        });
+    let membership_events = u64_field(&membership_reloaded, "watcher_events");
+
+    record_finding(
+        &binary,
+        &fixture.store_b,
+        &fixture.branch_b,
+        "new registry member Store watcher evidence",
+    );
+    let member_store = wait_for_reconciliation(
+        &binary,
+        &fixture.root,
+        u64_field(&membership_reloaded, "updated_at_us"),
+    );
+    assert!(u64_field(&member_store, "watcher_events") > membership_events);
+    assert_eq!(
+        last_worker_report(&fixture.root)["registrations_considered"],
+        2
+    );
+
+    write_project_rollout(
+        &fixture.rollout_b.join("member-added.jsonl"),
+        &fixture.project_b,
+        "new ProjectRef rollout watcher evidence",
+    );
+    let member_rollout = wait_for_reconciliation(
+        &binary,
+        &fixture.root,
+        u64_field(&member_store, "updated_at_us"),
+    );
+    assert!(u64_field(&member_rollout, "watcher_events") > membership_events);
+    assert_eq!(
+        last_worker_report(&fixture.root)["rollout_archives_failed"],
+        0
+    );
+
+    daemon.stop();
 }
 
 #[test]
@@ -629,6 +1017,83 @@ fn write_rollout(path: &Path, user_text: &str, assistant_text: &str) {
     fs::write(path, format!("{bytes}\n")).expect("write rollout source");
 }
 
+fn write_project_rollout(path: &Path, cwd: &Path, user_text: &str) {
+    let records = [
+        json!({"type":"session_meta","timestamp":"2026-01-01T00:00:00Z","payload":{"id":"01900000-0000-7000-8000-000000000021","cwd":cwd}}),
+        json!({"type":"response_item","timestamp":"2026-01-01T00:00:01Z","payload":{"type":"message","role":"user","id":"01900000-0000-7000-8000-000000000022","content":[{"type":"input_text","text":user_text}]}}),
+        json!({"type":"response_item","timestamp":"2026-01-01T00:00:02Z","payload":{"type":"message","role":"assistant","id":"01900000-0000-7000-8000-000000000023","content":[{"type":"output_text","text":"assistant text must remain excluded"}]}}),
+    ];
+    let bytes = records
+        .iter()
+        .map(|record| serde_json::to_string(record).expect("serialize project rollout record"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(path, format!("{bytes}\n")).expect("write project rollout source");
+}
+
+fn write_json_atomically(path: &Path, value: &Value) {
+    let temporary = path.with_extension("watcher-test.tmp");
+    let mut bytes = serde_json::to_vec(value).expect("serialize JSON fixture");
+    bytes.push(b'\n');
+    fs::write(&temporary, bytes).expect("write JSON fixture candidate");
+    fs::rename(&temporary, path).expect("publish JSON fixture atomically");
+}
+
+fn apply_source_policy(
+    binary: &Path,
+    root: &Path,
+    registry: &Path,
+    source_id: &str,
+    rollout_root: &Path,
+) {
+    let preview = run_ok(
+        binary,
+        &args![
+            "automation",
+            "source-policy",
+            "preview",
+            "--registry",
+            path_text(registry),
+            "--root",
+            path_text(root),
+            "--source-id",
+            source_id,
+            "--rollout-root",
+            path_text(rollout_root),
+            "--role-policy",
+            "user-only",
+            "--format",
+            "json",
+        ],
+    );
+    let preview: Value =
+        serde_json::from_slice(&preview.stdout).expect("source-policy preview JSON");
+    run_ok(
+        binary,
+        &args![
+            "automation",
+            "source-policy",
+            "apply",
+            "--registry",
+            path_text(registry),
+            "--root",
+            path_text(root),
+            "--source-id",
+            source_id,
+            "--rollout-root",
+            path_text(rollout_root),
+            "--role-policy",
+            "user-only",
+            "--expected-revision",
+            preview["policy_revision"],
+            "--expected-digest",
+            string_field(&preview, "policy_digest_sha256"),
+            "--format",
+            "json",
+        ],
+    );
+}
+
 fn daemon_command(binary: &Path, root: &Path, action: &str) -> Output {
     Command::new(binary)
         .args([
@@ -653,8 +1118,31 @@ fn daemon_status(binary: &Path, root: &Path) -> Value {
 fn wait_for_reconciliation(binary: &Path, root: &Path, after_us: u64) -> Value {
     wait_for_status(binary, root, |ledger| {
         ledger["last_trigger"] == "watcher_dirty_or_overflow"
+            && ledger["worker_active"] == false
             && u64_field(ledger, "updated_at_us") > after_us
     })
+}
+
+fn wait_for_report(
+    binary: &Path,
+    root: &Path,
+    after_us: u64,
+    predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last = None;
+    while Instant::now() < deadline {
+        let ledger = daemon_status(binary, root);
+        if ledger["worker_active"] == false && u64_field(&ledger, "updated_at_us") > after_us {
+            let report = last_worker_report(root);
+            if predicate(&report) {
+                return ledger;
+            }
+        }
+        last = Some(ledger);
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!("daemon report predicate timed out; last ledger: {last:?}");
 }
 
 fn wait_for_status(binary: &Path, root: &Path, predicate: impl Fn(&Value) -> bool) -> Value {

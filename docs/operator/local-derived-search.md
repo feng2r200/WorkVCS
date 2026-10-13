@@ -224,6 +224,28 @@ historical reference archive. Roots must be absolute, real, owner-controlled,
 and non-overlapping. Registration never changes the ProjectRef registry or the
 canonical Store.
 
+Registry-derived mode sees every current valid ProjectRef in the selected
+registry without one registration per project. Authorize exact rollout roots
+with the separate policy, whose default role selection is user-only:
+
+```sh
+workvcs automation membership --registry /absolute/project-bindings.json
+workvcs automation source-policy preview \
+  --registry /absolute/project-bindings.json \
+  --source-id codex-sessions --rollout-root /absolute/codex/sessions
+workvcs automation source-policy apply \
+  --registry /absolute/project-bindings.json \
+  --source-id codex-sessions --rollout-root /absolute/codex/sessions \
+  --expected-revision <PREVIEW_REVISION> --expected-digest <PREVIEW_DIGEST>
+```
+
+Global-policy and enabled legacy registrations cannot be combined. Policy
+adoption changes no ProjectRef binding or canonical Store. New valid registry
+members participate on the next complete round; unresolved or unsafe source
+ownership remains explicitly quarantined. The daemon observes registry,
+routing, policy, member Store families and allowed rollout roots, and refreshes
+watch targets after complete rounds.
+
 Run one finite reconciliation before considering a resident coordinator:
 
 ```sh
@@ -270,6 +292,35 @@ workvcs automation daemon reconcile
 workvcs automation daemon stop
 ```
 
+For explicit macOS login startup, first configure the global source policy and
+validate a finite reconciliation. Then use the separate adoption script:
+
+```sh
+scripts/workvcs-launchagent.sh --render --registry /absolute/project-bindings.json
+scripts/workvcs-launchagent.sh --install --registry /absolute/project-bindings.json
+scripts/workvcs-launchagent.sh --start --registry /absolute/project-bindings.json
+scripts/workvcs-launchagent.sh --status --registry /absolute/project-bindings.json
+```
+
+The script uses the stable installed binary and fixes the exact registry and
+derived root in `~/Library/LaunchAgents/io.workvcs.automation.plist`. Installation
+does not load the job. Explicit start enables and loads it, with RunAtLoad and
+KeepAlive for login startup and process recovery. Inspect the script's status
+for OS installation and running state; the coordinator's
+`launch_agent_installed: null` means it does not own that observation.
+
+To disable background execution while retaining recoverable configuration:
+
+```sh
+scripts/workvcs-launchagent.sh --disable --registry /absolute/project-bindings.json
+```
+
+`--stop` unloads the current login session only. A direct `daemon stop` is
+restarted by KeepAlive while the LaunchAgent remains loaded. Use `--disable`
+when background execution must stay disabled across logins. Existing different
+or symlinked plists are preserved and refused; identical installation is a
+no-op. See ADR-0532 for the explicit adoption contract.
+
 `daemon run` stays attached to its terminal. It holds one owner-private lock
 and Unix socket, verifies same-user clients, bounds protocol frames, and starts
 a short-lived reconciliation worker at startup, on a manual request, after a
@@ -278,8 +329,14 @@ The watcher only marks dirty through a capacity-one signal; status separately
 reports observed events, coalescing, backend errors and the last watcher error.
 A setup or overflow error triggers a full scan and does not masquerade as a
 healthy event stream. The coordinator owns no Store handle, model, or Qdrant
-shard. A worker is terminated and reported failed if it exceeds its bounded
-runtime. Its bounded stdout and stderr are retained under
+shard. Workers run asynchronously so status and stop remain responsive during
+a complete scan. The default has no wall-clock cutoff. Set
+`daemon run --worker-timeout-seconds N` only when an explicit worker deadline is
+wanted (`0` means no deadline); expiry terminates and reports that worker as
+failed. A stop request cancels and reaps the active worker. Manual, watcher and
+periodic triggers arriving during a scan coalesce into one later complete
+round; a manual request returning `accepted` is queued work, not completed
+reconciliation. Its bounded stdout and stderr are retained under
 `runtime/worker-evidence/` with exact byte counts, full-stream hashes and
 explicit truncation state. The daemon accepts success or partial success only
 after parsing that report and matching the exact current-basis catalog

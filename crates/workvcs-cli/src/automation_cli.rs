@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Stdio};
 #[cfg(unix)]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -29,12 +29,16 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 const AUTOMATION_PROTOCOL_VERSION: u32 = 1;
 const MAX_DAEMON_FRAME_BYTES: usize = 16 * 1024;
 const MAX_WORKER_STREAM_BYTES: usize = 64 * 1024;
 const RECONCILE_QUERY: &str = "automation reconciliation";
-const RECONCILE_WORKER_TIMEOUT: Duration = Duration::from_secs(300);
+
+#[cfg(unix)]
+static DAEMON_TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum AutomationFormatArg {
@@ -267,6 +271,12 @@ pub(crate) enum AutomationDaemonCommand {
         root: Option<PathBuf>,
         #[arg(long, default_value_t = 900)]
         periodic_seconds: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Optional reconciliation worker wall-clock deadline; 0 disables automatic termination"
+        )]
+        worker_timeout_seconds: u64,
     },
     Status {
         #[arg(long)]
@@ -521,13 +531,24 @@ struct DaemonLedger {
     rejected_requests: u64,
     last_protocol_error: Option<String>,
     daemon_enabled_by_default: bool,
-    launch_agent_installed: bool,
+    launch_agent_installed: Option<bool>,
+    worker_active: bool,
+    active_worker_pid: Option<u32>,
+    active_worker_trigger: Option<String>,
+    active_worker_started_at_us: Option<u128>,
+    worker_timeout_seconds: Option<u64>,
+    pending_reconcile: bool,
+    last_worker_duration_ms: Option<u128>,
+    last_worker_cancelled: bool,
 }
 
 #[derive(Debug)]
 struct WorkerOutcome {
     exit_code: Option<i32>,
     timed_out: bool,
+    cancelled: bool,
+    duration_ms: u128,
+    timeout_seconds: Option<u64>,
     stdout: CapturedStream,
     stderr: CapturedStream,
 }
@@ -547,6 +568,9 @@ struct WorkerEvidence {
     trigger: String,
     exit_code: Option<i32>,
     timed_out: bool,
+    cancelled: bool,
+    duration_ms: u128,
+    timeout_seconds: Option<u64>,
     stdout_path: PathBuf,
     stdout_bytes: u64,
     stdout_sha256: String,
@@ -558,12 +582,178 @@ struct WorkerEvidence {
 }
 
 #[cfg(unix)]
+struct ActiveWorker {
+    child: Option<Child>,
+    stdout_reader: Option<std::thread::JoinHandle<std::io::Result<CapturedStream>>>,
+    stderr_reader: Option<std::thread::JoinHandle<std::io::Result<CapturedStream>>>,
+    trigger: String,
+    started: Instant,
+    started_at_us: u128,
+    timeout_seconds: Option<u64>,
+}
+
+#[cfg(unix)]
+impl Drop for ActiveWorker {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+        }
+        if let Some(reader) = self.stdout_reader.take() {
+            let _ = reader.join();
+        }
+        if let Some(reader) = self.stderr_reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+#[cfg(unix)]
+struct CompletedWorker {
+    trigger: String,
+    outcome: WorkerOutcome,
+}
+
+#[cfg(unix)]
+struct DaemonSignalHandlers {
+    previous_sigterm: libc::sigaction,
+    previous_sigint: libc::sigaction,
+}
+
+#[cfg(unix)]
+impl Drop for DaemonSignalHandlers {
+    fn drop(&mut self) {
+        unsafe {
+            libc::sigaction(libc::SIGTERM, &self.previous_sigterm, std::ptr::null_mut());
+            libc::sigaction(libc::SIGINT, &self.previous_sigint, std::ptr::null_mut());
+        }
+        DAEMON_TERMINATION_SIGNAL.store(0, Ordering::SeqCst);
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn daemon_termination_signal_handler(signal: libc::c_int) {
+    let _ =
+        DAEMON_TERMINATION_SIGNAL.compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+#[cfg(unix)]
+fn install_daemon_signal_handlers() -> Result<DaemonSignalHandlers> {
+    DAEMON_TERMINATION_SIGNAL.store(0, Ordering::SeqCst);
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = daemon_termination_signal_handler as *const () as usize;
+    action.sa_flags = 0;
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+    }
+    let mut previous_sigterm: libc::sigaction = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigaction(libc::SIGTERM, &action, &mut previous_sigterm) } != 0 {
+        return Err(storage_error("install daemon SIGTERM handler")(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    let mut previous_sigint: libc::sigaction = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigaction(libc::SIGINT, &action, &mut previous_sigint) } != 0 {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::sigaction(libc::SIGTERM, &previous_sigterm, std::ptr::null_mut());
+        }
+        return Err(storage_error("install daemon SIGINT handler")(error));
+    }
+    Ok(DaemonSignalHandlers {
+        previous_sigterm,
+        previous_sigint,
+    })
+}
+
+#[cfg(unix)]
+fn take_daemon_termination_signal() -> Option<i32> {
+    let signal = DAEMON_TERMINATION_SIGNAL.swap(0, Ordering::SeqCst);
+    (signal != 0).then_some(signal)
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct PendingReconcile {
+    manual: bool,
+    watcher: bool,
+    periodic: bool,
+}
+
+#[cfg(unix)]
+impl PendingReconcile {
+    fn any(&self) -> bool {
+        self.manual || self.watcher || self.periodic
+    }
+
+    fn take_trigger(&mut self) -> Option<&'static str> {
+        let trigger = if self.manual {
+            Some("manual")
+        } else if self.watcher {
+            Some("watcher_dirty_or_overflow")
+        } else if self.periodic {
+            Some("periodic")
+        } else {
+            None
+        };
+        if trigger.is_some() {
+            *self = Self::default();
+        }
+        trigger
+    }
+}
+
+#[cfg(unix)]
 #[derive(Default)]
 struct WatcherHealth {
     events: AtomicU64,
     errors: AtomicU64,
     coalesced_events: AtomicU64,
     last_error: Mutex<Option<String>>,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum WatchFilterRule {
+    Exact(PathBuf),
+    StoreFamily(PathBuf),
+    Tree(PathBuf),
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct WatchFilterSet {
+    rules: Vec<WatchFilterRule>,
+}
+
+#[cfg(unix)]
+impl WatchFilterSet {
+    fn matches(&self, event: &notify::Event) -> bool {
+        event.need_rescan()
+            || event
+                .paths
+                .iter()
+                .any(|path| self.rules.iter().any(|rule| watch_rule_matches(rule, path)))
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, Default)]
+struct WatchTargetPlan {
+    backend_targets: BTreeMap<PathBuf, (bool, &'static str)>,
+    filter: WatchFilterSet,
+    discovery_error: Option<String>,
+}
+
+#[cfg(unix)]
+struct DaemonWatcher {
+    receiver: Receiver<()>,
+    watcher: Option<notify::RecommendedWatcher>,
+    health: Arc<WatcherHealth>,
+    filter: Arc<Mutex<WatchFilterSet>>,
+    backend_targets: BTreeMap<PathBuf, (bool, &'static str)>,
 }
 
 pub(crate) fn run_automation(command: AutomationCommand) -> Result<String> {
@@ -2978,6 +3168,7 @@ fn run_daemon_command(command: AutomationDaemonCommand) -> Result<String> {
             registry,
             root,
             periodic_seconds,
+            worker_timeout_seconds,
         } => {
             if periodic_seconds == 0 {
                 return Err(WorkVcsError::QueryInvalid(
@@ -2985,7 +3176,12 @@ fn run_daemon_command(command: AutomationDaemonCommand) -> Result<String> {
                 ));
             }
             let root = resolve_automation_root(root, registry.as_deref())?;
-            run_daemon(&root, registry.as_deref(), periodic_seconds)?;
+            run_daemon(
+                &root,
+                registry.as_deref(),
+                periodic_seconds,
+                (worker_timeout_seconds > 0).then_some(worker_timeout_seconds),
+            )?;
             Ok(String::new())
         }
         AutomationDaemonCommand::Status { registry, root } => daemon_request(
@@ -3004,7 +3200,12 @@ fn run_daemon_command(command: AutomationDaemonCommand) -> Result<String> {
 }
 
 #[cfg(unix)]
-fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Result<()> {
+fn run_daemon(
+    root: &Path,
+    registry: Option<&Path>,
+    periodic_seconds: u64,
+    worker_timeout_seconds: Option<u64>,
+) -> Result<()> {
     ensure_owner_private_directory(root)?;
     let runtime = root.join("runtime");
     ensure_owner_private_directory(&runtime)?;
@@ -3015,6 +3216,7 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
             "automation daemon is already running or cannot acquire its lock: {error}"
         ))
     })?;
+    let _signal_handlers = install_daemon_signal_handlers()?;
     let socket_path = runtime.join("v1.sock");
     if socket_path.exists() {
         let metadata =
@@ -3033,7 +3235,7 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
         .set_nonblocking(true)
         .map_err(storage_error("configure daemon socket"))?;
 
-    let (watch_receiver, mut watcher, watcher_health) = start_watcher(root)?;
+    let mut watcher = start_watcher(root, registry)?;
     let started_at_us = epoch_micros();
     let mut ledger = DaemonLedger {
         protocol_version: AUTOMATION_PROTOCOL_VERSION,
@@ -3061,39 +3263,107 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
         rejected_requests: 0,
         last_protocol_error: None,
         daemon_enabled_by_default: false,
-        launch_agent_installed: false,
+        launch_agent_installed: None,
+        worker_active: false,
+        active_worker_pid: None,
+        active_worker_trigger: None,
+        active_worker_started_at_us: None,
+        worker_timeout_seconds,
+        pending_reconcile: false,
+        last_worker_duration_ms: None,
+        last_worker_cancelled: false,
     };
-    let startup = spawn_reconcile_worker(root, registry)?;
-    record_worker_with_registry(&mut ledger, "startup", startup, root, registry)?;
-    project_watcher_health(&watcher_health, &mut ledger);
+    let mut active_worker = Some(start_reconcile_worker(
+        root,
+        registry,
+        "startup",
+        worker_timeout_seconds,
+    )?);
+    project_active_worker(&active_worker, &mut ledger);
+    project_watcher_health(&watcher.health, &mut ledger);
     write_daemon_ledger(&runtime, &ledger)?;
     let mut periodic_deadline = Instant::now() + Duration::from_secs(periodic_seconds);
     let mut dirty_since: Option<Instant> = None;
+    let mut pending_reconcile = PendingReconcile::default();
     let mut running = true;
 
     while running {
-        while watch_receiver.try_recv().is_ok() {
-            dirty_since.get_or_insert_with(Instant::now);
+        if let Some(signal) = take_daemon_termination_signal() {
+            let trigger = match signal {
+                libc::SIGTERM => "signal_sigterm",
+                libc::SIGINT => "signal_sigint",
+                _ => "signal_termination",
+            };
+            complete_daemon_shutdown(
+                &mut active_worker,
+                &mut pending_reconcile,
+                &mut ledger,
+                &runtime,
+                root,
+                registry,
+                trigger,
+            )?;
+            running = false;
+            continue;
         }
-        project_watcher_health(&watcher_health, &mut ledger);
-        if dirty_since.is_some_and(|instant| instant.elapsed() >= Duration::from_millis(250)) {
-            let outcome = spawn_reconcile_worker(root, registry)?;
+        if let Some(completed) = poll_active_worker(&mut active_worker)? {
             record_worker_with_registry(
                 &mut ledger,
-                "watcher_dirty_or_overflow",
-                outcome,
+                &completed.trigger,
+                completed.outcome,
                 root,
                 registry,
             )?;
+            refresh_watcher(&mut watcher, root, registry);
+            if let Some(trigger) = pending_reconcile.take_trigger() {
+                active_worker = Some(start_reconcile_worker(
+                    root,
+                    registry,
+                    trigger,
+                    worker_timeout_seconds,
+                )?);
+            }
+            project_active_worker(&active_worker, &mut ledger);
+            ledger.pending_reconcile = pending_reconcile.any();
+            project_watcher_health(&watcher.health, &mut ledger);
+            write_daemon_ledger(&runtime, &ledger)?;
+        }
+        while watcher.receiver.try_recv().is_ok() {
+            dirty_since.get_or_insert_with(Instant::now);
+        }
+        project_watcher_health(&watcher.health, &mut ledger);
+        if dirty_since.is_some_and(|instant| instant.elapsed() >= Duration::from_millis(250)) {
+            if active_worker.is_some() {
+                pending_reconcile.watcher = true;
+            } else {
+                active_worker = Some(start_reconcile_worker(
+                    root,
+                    registry,
+                    "watcher_dirty_or_overflow",
+                    worker_timeout_seconds,
+                )?);
+            }
             dirty_since = None;
-            project_watcher_health(&watcher_health, &mut ledger);
+            project_active_worker(&active_worker, &mut ledger);
+            ledger.pending_reconcile = pending_reconcile.any();
+            project_watcher_health(&watcher.health, &mut ledger);
             write_daemon_ledger(&runtime, &ledger)?;
         }
         if Instant::now() >= periodic_deadline {
-            let outcome = spawn_reconcile_worker(root, registry)?;
-            record_worker_with_registry(&mut ledger, "periodic", outcome, root, registry)?;
+            if active_worker.is_some() {
+                pending_reconcile.periodic = true;
+            } else {
+                active_worker = Some(start_reconcile_worker(
+                    root,
+                    registry,
+                    "periodic",
+                    worker_timeout_seconds,
+                )?);
+            }
             periodic_deadline = Instant::now() + Duration::from_secs(periodic_seconds);
-            project_watcher_health(&watcher_health, &mut ledger);
+            project_active_worker(&active_worker, &mut ledger);
+            ledger.pending_reconcile = pending_reconcile.any();
+            project_watcher_health(&watcher.health, &mut ledger);
             write_daemon_ledger(&runtime, &ledger)?;
         }
         loop {
@@ -3162,27 +3432,42 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
                     };
                     match request.action.as_str() {
                         "status" => {
-                            project_watcher_health(&watcher_health, &mut ledger);
+                            project_watcher_health(&watcher.health, &mut ledger);
                             project_daemon_status(&ledger, &mut response)?;
                         }
                         "reconcile" => {
-                            let outcome = spawn_reconcile_worker(root, registry)?;
-                            record_worker_with_registry(
-                                &mut ledger,
-                                "manual",
-                                outcome,
-                                root,
-                                registry,
-                            )?;
-                            project_watcher_health(&watcher_health, &mut ledger);
-                            response.worker_exit_code = ledger.last_worker_exit_code;
-                            project_worker_status(&ledger, &mut response);
+                            if active_worker.is_some() {
+                                pending_reconcile.manual = true;
+                                response.message =
+                                    "reconciliation accepted and coalesced behind the active worker"
+                                        .to_owned();
+                            } else {
+                                active_worker = Some(start_reconcile_worker(
+                                    root,
+                                    registry,
+                                    "manual",
+                                    worker_timeout_seconds,
+                                )?);
+                                response.message = "reconciliation accepted and started".to_owned();
+                            }
+                            response.status = "accepted".to_owned();
+                            response.worker_exit_code = None;
+                            project_active_worker(&active_worker, &mut ledger);
+                            ledger.pending_reconcile = pending_reconcile.any();
+                            project_watcher_health(&watcher.health, &mut ledger);
                             write_daemon_ledger(&runtime, &ledger)?;
                         }
                         "shutdown" => {
-                            ledger.last_trigger = "shutdown".to_owned();
-                            ledger.updated_at_us = epoch_micros();
-                            write_daemon_ledger(&runtime, &ledger)?;
+                            complete_daemon_shutdown(
+                                &mut active_worker,
+                                &mut pending_reconcile,
+                                &mut ledger,
+                                &runtime,
+                                root,
+                                registry,
+                                "shutdown",
+                            )?;
+                            response.worker_exit_code = ledger.last_worker_exit_code;
                             running = false;
                         }
                         _ => {
@@ -3209,36 +3494,69 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    drop(watcher.take());
+    drop(watcher.watcher.take());
     drop(listener);
     fs::remove_file(&socket_path).map_err(storage_error("remove daemon socket"))?;
     Ok(())
 }
 
+#[cfg(unix)]
+fn complete_daemon_shutdown(
+    active_worker: &mut Option<ActiveWorker>,
+    pending_reconcile: &mut PendingReconcile,
+    ledger: &mut DaemonLedger,
+    runtime: &Path,
+    root: &Path,
+    registry: Option<&Path>,
+    trigger: &str,
+) -> Result<()> {
+    if let Some(completed) = cancel_active_worker(active_worker)? {
+        record_worker_with_registry(
+            ledger,
+            &completed.trigger,
+            completed.outcome,
+            root,
+            registry,
+        )?;
+    }
+    *pending_reconcile = PendingReconcile::default();
+    project_active_worker(active_worker, ledger);
+    ledger.pending_reconcile = false;
+    ledger.last_trigger = trigger.to_owned();
+    ledger.updated_at_us = epoch_micros();
+    write_daemon_ledger(runtime, ledger)
+}
+
 #[cfg(not(unix))]
-fn run_daemon(_root: &Path, _registry: Option<&Path>, _periodic_seconds: u64) -> Result<()> {
+fn run_daemon(
+    _root: &Path,
+    _registry: Option<&Path>,
+    _periodic_seconds: u64,
+    _worker_timeout_seconds: Option<u64>,
+) -> Result<()> {
     Err(WorkVcsError::QueryUnsupported(
         "automation daemon currently requires a Unix local-socket platform".to_owned(),
     ))
 }
 
 #[cfg(unix)]
-fn start_watcher(
-    root: &Path,
-) -> Result<(
-    Receiver<()>,
-    Option<notify::RecommendedWatcher>,
-    Arc<WatcherHealth>,
-)> {
-    use notify::{RecursiveMode, Watcher};
-    let registry = read_automation_registry(root)?;
+fn start_watcher(root: &Path, project_registry: Option<&Path>) -> Result<DaemonWatcher> {
+    let plan = watcher_target_plan(root, project_registry)?;
     let (sender, receiver) = mpsc::sync_channel(1);
     let health = Arc::new(WatcherHealth::default());
     let callback_health = Arc::clone(&health);
     let callback_sender = sender.clone();
-    let mut watcher = notify::recommended_watcher(
+    let filter = Arc::new(Mutex::new(WatchFilterSet::default()));
+    let callback_filter = Arc::clone(&filter);
+    let watcher = notify::recommended_watcher(
         move |event: std::result::Result<notify::Event, notify::Error>| match event {
-            Ok(event) if watcher_event_requires_reconcile(&event) => {
+            Ok(event)
+                if watcher_event_requires_reconcile(&event)
+                    && callback_filter
+                        .lock()
+                        .map(|filter| filter.matches(&event))
+                        .unwrap_or(true) =>
+            {
                 signal_watcher_event(&callback_sender, &callback_health, Ok(()));
             }
             Ok(_) => {}
@@ -3248,35 +3566,217 @@ fn start_watcher(
         },
     )
     .map_err(|error| WorkVcsError::StorageFailure(format!("cannot create watcher: {error}")))?;
+    let mut state = DaemonWatcher {
+        receiver,
+        watcher: Some(watcher),
+        health,
+        filter,
+        backend_targets: BTreeMap::new(),
+    };
+    replace_watcher_targets(&mut state, plan);
+    Ok(state)
+}
+
+#[cfg(unix)]
+fn refresh_watcher(state: &mut DaemonWatcher, root: &Path, project_registry: Option<&Path>) {
+    match watcher_target_plan(root, project_registry) {
+        Ok(plan) => replace_watcher_targets(state, plan),
+        Err(error) => record_watcher_error(
+            &state.health,
+            format!("cannot refresh watcher targets: {error}"),
+        ),
+    }
+}
+
+#[cfg(unix)]
+fn watcher_target_plan(root: &Path, project_registry: Option<&Path>) -> Result<WatchTargetPlan> {
+    if automation_source_policy_path(root).exists() {
+        Ok(registry_derived_watcher_target_plan(root, project_registry))
+    } else {
+        legacy_watcher_target_plan(root)
+    }
+}
+
+#[cfg(unix)]
+fn legacy_watcher_target_plan(root: &Path) -> Result<WatchTargetPlan> {
+    let registry = read_automation_registry(root)?;
+    let mut plan = WatchTargetPlan::default();
+    add_exact_watch(
+        &mut plan,
+        automation_source_policy_path(root),
+        "automation source policy",
+    );
     for registration in registry
         .registrations
         .iter()
         .filter(|item| item.enabled && !item.revoked)
     {
-        if let Err(error) = watcher.watch(&registration.store_path, RecursiveMode::NonRecursive) {
-            signal_watcher_event(
-                &sender,
-                &health,
-                Err(format!(
-                    "cannot watch Store {}: {error}",
-                    registration.store_path.display()
-                )),
-            );
-        }
+        add_store_watch(&mut plan, registration.store_path.clone());
         for rollout_root in &registration.rollout_roots {
-            if let Err(error) = watcher.watch(rollout_root, RecursiveMode::Recursive) {
-                signal_watcher_event(
-                    &sender,
-                    &health,
-                    Err(format!(
-                        "cannot watch rollout root {}: {error}",
-                        rollout_root.display()
-                    )),
-                );
-            }
+            add_tree_watch(&mut plan, rollout_root.clone(), "rollout root");
         }
     }
-    Ok((receiver, Some(watcher), health))
+    Ok(plan)
+}
+
+#[cfg(unix)]
+fn registry_derived_watcher_target_plan(
+    root: &Path,
+    project_registry: Option<&Path>,
+) -> WatchTargetPlan {
+    let mut plan = WatchTargetPlan::default();
+    add_exact_watch(
+        &mut plan,
+        automation_source_policy_path(root),
+        "automation source policy",
+    );
+    let mut errors = Vec::new();
+
+    match effective_registry_config(project_registry.map(Path::to_path_buf)).and_then(|effective| {
+        let registry_path = canonical_registry_path(
+            absolute_cli_path("project registry", effective.registry_path.clone())?,
+            false,
+        )?;
+        let activation_path = routing_activation_path(&effective, &registry_path);
+        Ok((registry_path, activation_path))
+    }) {
+        Ok((registry_path, activation_path)) => {
+            add_exact_watch(&mut plan, registry_path, "ProjectRef registry");
+            add_exact_watch(&mut plan, activation_path, "routing activation");
+        }
+        Err(error) => errors.push(format!("cannot resolve global registry controls: {error}")),
+    }
+
+    match registry_derived_membership(project_registry) {
+        Ok(membership) => {
+            for member in membership.members {
+                add_store_watch(&mut plan, member.store_path);
+            }
+        }
+        Err(error) => errors.push(format!("cannot resolve global Store membership: {error}")),
+    }
+
+    match read_automation_source_policy(root) {
+        Ok(policy) => {
+            for source in policy
+                .sources
+                .iter()
+                .filter(|source| source.enabled && !source.revoked)
+            {
+                add_tree_watch(&mut plan, source.rollout_root.clone(), "rollout root");
+            }
+        }
+        Err(error) => errors.push(format!("cannot read automation source policy: {error}")),
+    }
+
+    if !errors.is_empty() {
+        plan.discovery_error = Some(errors.join("; "));
+    }
+    plan
+}
+
+#[cfg(unix)]
+fn add_exact_watch(plan: &mut WatchTargetPlan, path: PathBuf, label: &'static str) {
+    let path = normalized_watch_path(path);
+    if let Some(parent) = path.parent() {
+        add_backend_watch(plan, parent.to_path_buf(), false, label);
+    }
+    plan.filter.rules.push(WatchFilterRule::Exact(path));
+}
+
+#[cfg(unix)]
+fn add_store_watch(plan: &mut WatchTargetPlan, path: PathBuf) {
+    let path = normalized_watch_path(path);
+    if let Some(parent) = path.parent() {
+        add_backend_watch(plan, parent.to_path_buf(), false, "Store family");
+    }
+    plan.filter.rules.push(WatchFilterRule::StoreFamily(path));
+}
+
+#[cfg(unix)]
+fn add_tree_watch(plan: &mut WatchTargetPlan, path: PathBuf, label: &'static str) {
+    let path = normalized_watch_path(path);
+    add_backend_watch(plan, path.clone(), true, label);
+    plan.filter.rules.push(WatchFilterRule::Tree(path));
+}
+
+#[cfg(unix)]
+fn normalized_watch_path(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+            .unwrap_or(path)
+    })
+}
+
+#[cfg(unix)]
+fn add_backend_watch(
+    plan: &mut WatchTargetPlan,
+    path: PathBuf,
+    recursive: bool,
+    label: &'static str,
+) {
+    plan.backend_targets
+        .entry(path)
+        .and_modify(|(existing_recursive, _)| *existing_recursive |= recursive)
+        .or_insert((recursive, label));
+}
+
+#[cfg(unix)]
+fn replace_watcher_targets(state: &mut DaemonWatcher, plan: WatchTargetPlan) {
+    use notify::{RecursiveMode, Watcher};
+
+    let Some(watcher) = state.watcher.as_mut() else {
+        return;
+    };
+    for path in state.backend_targets.keys() {
+        let _ = watcher.unwatch(path);
+    }
+    state.backend_targets.clear();
+    for (path, (recursive, label)) in &plan.backend_targets {
+        let mode = if *recursive {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        match watcher.watch(path, mode) {
+            Ok(()) => {
+                state
+                    .backend_targets
+                    .insert(path.clone(), (*recursive, *label));
+            }
+            Err(error) => record_watcher_error(
+                &state.health,
+                format!("cannot watch {label} {}: {error}", path.display()),
+            ),
+        }
+    }
+    match state.filter.lock() {
+        Ok(mut current) => *current = plan.filter,
+        Err(_) => {
+            record_watcher_error(&state.health, "watcher filter state is poisoned".to_owned())
+        }
+    }
+    if let Some(error) = plan.discovery_error {
+        record_watcher_error(&state.health, error);
+    }
+}
+
+#[cfg(unix)]
+fn watch_rule_matches(rule: &WatchFilterRule, path: &Path) -> bool {
+    match rule {
+        WatchFilterRule::Exact(expected) => path == expected,
+        WatchFilterRule::Tree(root) => path.starts_with(root),
+        WatchFilterRule::StoreFamily(store) => {
+            path == store
+                || ["-wal", "-shm", "-journal"].iter().any(|suffix| {
+                    let mut candidate = store.as_os_str().to_os_string();
+                    candidate.push(suffix);
+                    path.as_os_str() == candidate
+                })
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -3300,10 +3800,7 @@ fn signal_watcher_event(
             health.events.fetch_add(1, Ordering::Relaxed);
         }
         Err(error) => {
-            health.errors.fetch_add(1, Ordering::Relaxed);
-            if let Ok(mut last_error) = health.last_error.lock() {
-                *last_error = Some(bound_text(&error, 2_048));
-            }
+            record_watcher_error(health, error);
         }
     }
     match sender.try_send(()) {
@@ -3312,6 +3809,14 @@ fn signal_watcher_event(
             health.coalesced_events.fetch_add(1, Ordering::Relaxed);
         }
         Err(TrySendError::Disconnected(())) => {}
+    }
+}
+
+#[cfg(unix)]
+fn record_watcher_error(health: &WatcherHealth, error: String) {
+    health.errors.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut last_error) = health.last_error.lock() {
+        *last_error = Some(bound_text(&error, 2_048));
     }
 }
 
@@ -3327,7 +3832,13 @@ fn project_watcher_health(health: &WatcherHealth, ledger: &mut DaemonLedger) {
         .unwrap_or_else(|_| Some("watcher health state is poisoned".to_owned()));
 }
 
-fn spawn_reconcile_worker(root: &Path, registry: Option<&Path>) -> Result<WorkerOutcome> {
+#[cfg(unix)]
+fn start_reconcile_worker(
+    root: &Path,
+    registry: Option<&Path>,
+    trigger: &str,
+    timeout_seconds: Option<u64>,
+) -> Result<ActiveWorker> {
     let executable =
         std::env::current_exe().map_err(storage_error("resolve current executable"))?;
     let mut command = ProcessCommand::new(executable);
@@ -3348,9 +3859,169 @@ fn spawn_reconcile_worker(root: &Path, registry: Option<&Path>) -> Result<Worker
         .stderr(Stdio::piped())
         .spawn()
         .map_err(storage_error("spawn reconciliation worker"))?;
-    wait_for_worker(&mut child, RECONCILE_WORKER_TIMEOUT)
+    let stdout = child.stdout.take().ok_or_else(|| {
+        WorkVcsError::StorageFailure("reconciliation worker stdout is not captured".to_owned())
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        WorkVcsError::StorageFailure("reconciliation worker stderr is not captured".to_owned())
+    })?;
+    Ok(ActiveWorker {
+        child: Some(child),
+        stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
+        stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
+        trigger: trigger.to_owned(),
+        started: Instant::now(),
+        started_at_us: epoch_micros(),
+        timeout_seconds,
+    })
 }
 
+#[cfg(unix)]
+fn poll_active_worker(active: &mut Option<ActiveWorker>) -> Result<Option<CompletedWorker>> {
+    poll_active_worker_before_terminate(active, || {})
+}
+
+#[cfg(unix)]
+fn poll_active_worker_before_terminate(
+    active: &mut Option<ActiveWorker>,
+    before_terminate: impl FnOnce(),
+) -> Result<Option<CompletedWorker>> {
+    let Some(worker) = active.as_mut() else {
+        return Ok(None);
+    };
+    if let Some(status) = worker
+        .child
+        .as_mut()
+        .expect("active worker child is present")
+        .try_wait()
+        .map_err(storage_error("wait for reconciliation worker"))?
+    {
+        let worker = active.take().expect("active worker is present");
+        return finish_active_worker(worker, status, false, false).map(Some);
+    }
+    if worker
+        .timeout_seconds
+        .is_some_and(|seconds| worker.started.elapsed() >= Duration::from_secs(seconds))
+    {
+        before_terminate();
+        let (status, terminated) = terminate_and_reap(
+            worker
+                .child
+                .as_mut()
+                .expect("active worker child is present"),
+            "timed-out reconciliation worker",
+        )?;
+        let worker = active.take().expect("active worker is present");
+        return finish_active_worker(worker, status, terminated, false).map(Some);
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn cancel_active_worker(active: &mut Option<ActiveWorker>) -> Result<Option<CompletedWorker>> {
+    cancel_active_worker_before_terminate(active, || {})
+}
+
+#[cfg(unix)]
+fn cancel_active_worker_before_terminate(
+    active: &mut Option<ActiveWorker>,
+    before_terminate: impl FnOnce(),
+) -> Result<Option<CompletedWorker>> {
+    let Some(worker) = active.as_mut() else {
+        return Ok(None);
+    };
+    let child = worker
+        .child
+        .as_mut()
+        .expect("active worker child is present");
+    let (status, cancelled) = match child.try_wait().map_err(storage_error(
+        "inspect reconciliation worker before shutdown",
+    ))? {
+        Some(status) => (status, false),
+        None => {
+            before_terminate();
+            terminate_and_reap(child, "reconciliation worker during shutdown")?
+        }
+    };
+    let worker = active.take().expect("active worker is present");
+    finish_active_worker(worker, status, false, cancelled).map(Some)
+}
+
+#[cfg(unix)]
+fn terminate_and_reap(
+    child: &mut Child,
+    operation: &'static str,
+) -> Result<(std::process::ExitStatus, bool)> {
+    match child.kill() {
+        Ok(()) => {}
+        Err(error)
+            if error.raw_os_error() == Some(libc::ESRCH)
+                || error.kind() == std::io::ErrorKind::InvalidInput => {}
+        Err(error) => {
+            return Err(WorkVcsError::StorageFailure(format!(
+                "cannot terminate {operation}: {error}"
+            )));
+        }
+    }
+    let status = child.wait().map_err(|error| {
+        WorkVcsError::StorageFailure(format!("cannot reap {operation}: {error}"))
+    })?;
+    Ok((status, status.signal() == Some(libc::SIGKILL)))
+}
+
+#[cfg(unix)]
+fn finish_active_worker(
+    mut worker: ActiveWorker,
+    status: std::process::ExitStatus,
+    timed_out: bool,
+    cancelled: bool,
+) -> Result<CompletedWorker> {
+    let duration_ms = worker.started.elapsed().as_millis();
+    worker.child.take();
+    let stdout = join_worker_capture(
+        worker
+            .stdout_reader
+            .take()
+            .expect("active worker stdout reader is present"),
+        "stdout",
+    )?;
+    let stderr = join_worker_capture(
+        worker
+            .stderr_reader
+            .take()
+            .expect("active worker stderr reader is present"),
+        "stderr",
+    )?;
+    let trigger = std::mem::take(&mut worker.trigger);
+    Ok(CompletedWorker {
+        trigger,
+        outcome: WorkerOutcome {
+            exit_code: status.code(),
+            timed_out,
+            cancelled,
+            duration_ms,
+            timeout_seconds: worker.timeout_seconds,
+            stdout,
+            stderr,
+        },
+    })
+}
+
+#[cfg(unix)]
+fn project_active_worker(active: &Option<ActiveWorker>, ledger: &mut DaemonLedger) {
+    ledger.updated_at_us = epoch_micros();
+    ledger.worker_active = active.is_some();
+    ledger.active_worker_pid = active
+        .as_ref()
+        .and_then(|worker| worker.child.as_ref().map(Child::id));
+    ledger.active_worker_trigger = active.as_ref().map(|worker| worker.trigger.clone());
+    ledger.active_worker_started_at_us = active.as_ref().map(|worker| worker.started_at_us);
+    if let Some(worker) = active {
+        ledger.last_trigger = worker.trigger.clone();
+    }
+}
+
+#[cfg(test)]
 fn wait_for_worker(child: &mut Child, timeout: Duration) -> Result<WorkerOutcome> {
     let stdout = child.stdout.take().ok_or_else(|| {
         WorkVcsError::StorageFailure("reconciliation worker stdout is not captured".to_owned())
@@ -3370,13 +4041,10 @@ fn wait_for_worker(child: &mut Child, timeout: Duration) -> Result<WorkerOutcome
             break status;
         }
         if started.elapsed() >= timeout {
-            timed_out = true;
-            child
-                .kill()
-                .map_err(storage_error("terminate timed-out reconciliation worker"))?;
-            break child
-                .wait()
-                .map_err(storage_error("reap timed-out reconciliation worker"))?;
+            let (status, terminated) =
+                terminate_and_reap(child, "timed-out reconciliation worker")?;
+            timed_out = terminated;
+            break status;
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -3385,6 +4053,9 @@ fn wait_for_worker(child: &mut Child, timeout: Duration) -> Result<WorkerOutcome
     Ok(WorkerOutcome {
         exit_code: status.code(),
         timed_out,
+        cancelled: false,
+        duration_ms: started.elapsed().as_millis(),
+        timeout_seconds: Some(timeout.as_secs()),
         stdout,
         stderr,
     })
@@ -3449,6 +4120,9 @@ fn persist_worker_evidence(root: &Path, trigger: &str, outcome: &WorkerOutcome) 
         trigger: trigger.to_owned(),
         exit_code: outcome.exit_code,
         timed_out: outcome.timed_out,
+        cancelled: outcome.cancelled,
+        duration_ms: outcome.duration_ms,
+        timeout_seconds: outcome.timeout_seconds,
         stdout_path,
         stdout_bytes: outcome.stdout.total_bytes,
         stdout_sha256: outcome.stdout.sha256.clone(),
@@ -3548,6 +4222,8 @@ fn record_worker_with_registry(
     ledger.last_worker_status = Some("failed".to_owned());
     ledger.last_worker_exit_code = outcome.exit_code;
     ledger.last_worker_timed_out = outcome.timed_out;
+    ledger.last_worker_cancelled = outcome.cancelled;
+    ledger.last_worker_duration_ms = Some(outcome.duration_ms);
     ledger.last_worker_output_truncated = outcome.stdout.truncated || outcome.stderr.truncated;
     ledger.last_worker_evidence_path = Some(evidence_path.clone());
     ledger.last_worker_stdout_bytes = outcome.stdout.total_bytes;
@@ -3558,7 +4234,18 @@ fn record_worker_with_registry(
     ledger.last_catalog_path = None;
     ledger.last_catalog_manifest_sha256 = None;
     ledger.last_catalog_complete = None;
+    ledger.worker_active = false;
+    ledger.active_worker_pid = None;
+    ledger.active_worker_trigger = None;
+    ledger.active_worker_started_at_us = None;
 
+    if outcome.cancelled {
+        ledger.last_error = Some(format!(
+            "reconciliation worker was cancelled during daemon shutdown; exact captured evidence: {}",
+            evidence_path.display()
+        ));
+        return Ok(());
+    }
     if ledger.last_worker_output_truncated {
         ledger.last_error = Some(format!(
             "reconciliation worker output exceeded the {} byte per-stream bound; bounded evidence and full-stream digests are recorded at {}",
@@ -3569,8 +4256,8 @@ fn record_worker_with_registry(
     }
     if outcome.timed_out {
         ledger.last_error = Some(format!(
-            "reconciliation worker exceeded {} seconds and was terminated; exact captured evidence: {}",
-            RECONCILE_WORKER_TIMEOUT.as_secs(),
+            "reconciliation worker exceeded the explicitly configured {} second deadline and was terminated; exact captured evidence: {}",
+            outcome.timeout_seconds.unwrap_or_default(),
             evidence_path.display()
         ));
         return Ok(());
@@ -3674,7 +4361,11 @@ fn bound_text(value: &str, max_bytes: usize) -> String {
 }
 
 fn project_worker_status(ledger: &DaemonLedger, response: &mut DaemonResponse) {
-    if ledger.last_worker_status.as_deref() == Some("failed")
+    if ledger.worker_active {
+        response.status = "in_progress".to_owned();
+        response.message = "reconciliation worker is active".to_owned();
+        response.worker_exit_code = None;
+    } else if ledger.last_worker_status.as_deref() == Some("failed")
         || ledger.last_worker_exit_code != Some(0)
         || ledger.last_error.is_some()
     {
@@ -4270,7 +4961,70 @@ mod tests {
             rejected_requests: 0,
             last_protocol_error: None,
             daemon_enabled_by_default: false,
-            launch_agent_installed: false,
+            launch_agent_installed: None,
+            worker_active: false,
+            active_worker_pid: None,
+            active_worker_trigger: None,
+            active_worker_started_at_us: None,
+            worker_timeout_seconds: None,
+            pending_reconcile: false,
+            last_worker_duration_ms: None,
+            last_worker_cancelled: false,
+        }
+    }
+
+    #[cfg(unix)]
+    fn publish_failed_reconcile_report(root: &Path) -> ReconcileReport {
+        let registry = read_automation_registry(root).unwrap();
+        let source = AutomationCatalogSource {
+            registration_id: "registration-1".to_owned(),
+            project_ref_id: ProjectRefId::new_v7(),
+            lane: AutomationLane::HistoricalReference,
+            artifact_kind: AutomationArtifactKind::SourceArchive,
+            artifact_path: root.join("missing"),
+            artifact_manifest_sha256: "0".repeat(64),
+            source_anchor: "unavailable".to_owned(),
+            status: AutomationSourceStatus::Failed,
+            error_code: Some("source_missing".to_owned()),
+            error: Some("source is missing".to_owned()),
+        };
+        let catalog = publish_automation_catalog(
+            root,
+            registry.revision,
+            registry.digest_sha256.clone(),
+            vec![source],
+        )
+        .unwrap();
+        ReconcileReport {
+            status: "failed".to_owned(),
+            complete: false,
+            membership_mode: "legacy_registration".to_owned(),
+            automation_registry_revision: registry.revision,
+            automation_registry_digest_sha256: registry.digest_sha256,
+            project_registry_id: None,
+            project_registry_revision: None,
+            project_registry_digest: None,
+            source_policy_revision: None,
+            source_policy_digest_sha256: None,
+            registrations_considered: 1,
+            registrations_ready: 0,
+            registrations_quarantined: 1,
+            rollout_files_discovered: 0,
+            rollout_files_new: 0,
+            rollout_files_appended: 0,
+            rollout_files_unchanged: 0,
+            rollout_files_rewritten: 0,
+            rollout_files_deleted: 0,
+            rollout_archives_ready: 0,
+            rollout_archives_failed: 1,
+            canonical_generations_ready: 0,
+            canonical_generations_failed: 1,
+            catalog_path: catalog.catalog_path,
+            catalog_manifest_sha256: catalog.manifest_sha256,
+            canonical_source_written: false,
+            project_registry_written: false,
+            source_files_written: false,
+            existing_artifacts_deleted: false,
         }
     }
 
@@ -4565,9 +5319,9 @@ mod tests {
         );
         #[cfg(unix)]
         {
-            let (_receiver, _watcher, health) = start_watcher(&root).unwrap();
+            let watcher = start_watcher(&root, None).unwrap();
             let mut ledger = test_ledger();
-            project_watcher_health(&health, &mut ledger);
+            project_watcher_health(&watcher.health, &mut ledger);
             assert!(ledger.watcher_errors >= 1);
             assert!(
                 ledger
@@ -4957,6 +5711,9 @@ mod tests {
             WorkerOutcome {
                 exit_code: Some(0),
                 timed_out: false,
+                cancelled: false,
+                duration_ms: 1,
+                timeout_seconds: None,
                 stdout: capture_worker_stream(b"not-json".as_slice()).unwrap(),
                 stderr: capture_worker_stream(b"".as_slice()).unwrap(),
             },
@@ -4978,6 +5735,9 @@ mod tests {
             WorkerOutcome {
                 exit_code: Some(0),
                 timed_out: false,
+                cancelled: false,
+                duration_ms: 1,
+                timeout_seconds: None,
                 stdout: capture_worker_stream(oversized.as_slice()).unwrap(),
                 stderr: capture_worker_stream(b"".as_slice()).unwrap(),
             },
@@ -4990,62 +5750,189 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn active_worker_timeout_and_shutdown_cancellation_are_explicit() {
+        fn sleeping_worker(trigger: &str, timeout_seconds: Option<u64>) -> ActiveWorker {
+            let mut child = ProcessCommand::new("/bin/sh")
+                .arg("-c")
+                .arg("sleep 10")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            ActiveWorker {
+                child: Some(child),
+                stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
+                stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
+                trigger: trigger.to_owned(),
+                started: Instant::now(),
+                started_at_us: epoch_micros(),
+                timeout_seconds,
+            }
+        }
+
+        fn short_lived_barrier_worker(
+            trigger: &str,
+            timeout_seconds: Option<u64>,
+            stdout_payload: &str,
+            exit_code: i32,
+        ) -> (ActiveWorker, std::process::ChildStdin) {
+            let mut child = ProcessCommand::new("/bin/sh")
+                .arg("-c")
+                .arg("read ready; printf '%s' \"$PAYLOAD\"; exit \"$EXIT_CODE\"")
+                .env("PAYLOAD", stdout_payload)
+                .env("EXIT_CODE", exit_code.to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stdin = child.stdin.take().unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            (
+                ActiveWorker {
+                    child: Some(child),
+                    stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
+                    stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
+                    trigger: trigger.to_owned(),
+                    started: Instant::now(),
+                    started_at_us: epoch_micros(),
+                    timeout_seconds,
+                },
+                stdin,
+            )
+        }
+
+        fn release_short_lived_worker(mut stdin: std::process::ChildStdin) {
+            stdin.write_all(b"ready\n").unwrap();
+            drop(stdin);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let mut timed_out = Some(sleeping_worker("explicit-timeout", Some(1)));
+        timed_out.as_mut().unwrap().started = Instant::now() - Duration::from_secs(2);
+        let timed_out = poll_active_worker(&mut timed_out).unwrap().unwrap();
+        assert!(timed_out.outcome.timed_out);
+        assert!(!timed_out.outcome.cancelled);
+        assert_eq!(timed_out.outcome.timeout_seconds, Some(1));
+
+        let mut cancelled = Some(sleeping_worker("shutdown", None));
+        let cancelled = cancel_active_worker(&mut cancelled).unwrap().unwrap();
+        assert!(cancelled.outcome.cancelled);
+        assert!(!cancelled.outcome.timed_out);
+        assert_eq!(cancelled.outcome.timeout_seconds, None);
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().join("automation");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut cancelled_ledger = test_ledger();
+        record_worker(
+            &mut cancelled_ledger,
+            &cancelled.trigger,
+            cancelled.outcome,
+            &root,
+        )
+        .unwrap();
+        assert!(cancelled_ledger.last_worker_cancelled);
+        assert!(cancelled_ledger.last_worker_evidence_path.is_some());
+        assert!(
+            cancelled_ledger
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("cancelled")
+        );
+
+        let valid_report = serde_json::to_string(&publish_failed_reconcile_report(&root)).unwrap();
+        let (mut natural_timeout_worker, timeout_release) =
+            short_lived_barrier_worker("natural-timeout-race", Some(1), &valid_report, 0);
+        natural_timeout_worker.started = Instant::now() - Duration::from_secs(2);
+        let mut natural_timeout = Some(natural_timeout_worker);
+        let natural_timeout = poll_active_worker_before_terminate(&mut natural_timeout, || {
+            release_short_lived_worker(timeout_release);
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(natural_timeout.outcome.exit_code, Some(0));
+        assert!(!natural_timeout.outcome.timed_out);
+        assert!(!natural_timeout.outcome.cancelled);
+        let mut natural_timeout_ledger = test_ledger();
+        record_worker(
+            &mut natural_timeout_ledger,
+            &natural_timeout.trigger,
+            natural_timeout.outcome,
+            &root,
+        )
+        .unwrap();
+        assert_eq!(
+            natural_timeout_ledger.last_worker_status.as_deref(),
+            Some("failed")
+        );
+        assert!(natural_timeout_ledger.last_error.is_none());
+        assert!(!natural_timeout_ledger.last_worker_timed_out);
+
+        let (natural_shutdown_worker, shutdown_release) = short_lived_barrier_worker(
+            "natural-shutdown-race",
+            None,
+            "natural shutdown completion",
+            7,
+        );
+        let mut natural_shutdown = Some(natural_shutdown_worker);
+        let natural_shutdown = cancel_active_worker_before_terminate(&mut natural_shutdown, || {
+            release_short_lived_worker(shutdown_release);
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(natural_shutdown.outcome.exit_code, Some(7));
+        assert!(!natural_shutdown.outcome.timed_out);
+        assert!(!natural_shutdown.outcome.cancelled);
+        assert_eq!(
+            natural_shutdown.outcome.stdout.bytes,
+            b"natural shutdown completion"
+        );
+        let mut natural_shutdown_ledger = test_ledger();
+        record_worker(
+            &mut natural_shutdown_ledger,
+            &natural_shutdown.trigger,
+            natural_shutdown.outcome,
+            &root,
+        )
+        .unwrap();
+        assert!(!natural_shutdown_ledger.last_worker_cancelled);
+        assert!(
+            natural_shutdown_ledger
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("exited with Some(7)")
+        );
+
+        let mut ledger = test_ledger();
+        let active = Some(sleeping_worker("startup", None));
+        project_active_worker(&active, &mut ledger);
+        let mut response = DaemonResponse {
+            version: AUTOMATION_PROTOCOL_VERSION,
+            status: "completed".to_owned(),
+            action: "status".to_owned(),
+            message: "request completed".to_owned(),
+            worker_exit_code: None,
+        };
+        project_worker_status(&ledger, &mut response);
+        assert_eq!(response.status, "in_progress");
+        let mut active = active;
+        cancel_active_worker(&mut active).unwrap().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn worker_report_projects_failed_catalog_without_false_success() {
         let temporary = TempDir::new().unwrap();
         let root = temporary.path().join("automation");
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-        let registry = read_automation_registry(&root).unwrap();
-        let source = AutomationCatalogSource {
-            registration_id: "registration-1".to_owned(),
-            project_ref_id: ProjectRefId::new_v7(),
-            lane: AutomationLane::HistoricalReference,
-            artifact_kind: AutomationArtifactKind::SourceArchive,
-            artifact_path: root.join("missing"),
-            artifact_manifest_sha256: "0".repeat(64),
-            source_anchor: "unavailable".to_owned(),
-            status: AutomationSourceStatus::Failed,
-            error_code: Some("source_missing".to_owned()),
-            error: Some("source is missing".to_owned()),
-        };
-        let catalog = publish_automation_catalog(
-            &root,
-            registry.revision,
-            registry.digest_sha256.clone(),
-            vec![source],
-        )
-        .unwrap();
-        let report = ReconcileReport {
-            status: "failed".to_owned(),
-            complete: false,
-            membership_mode: "legacy_registration".to_owned(),
-            automation_registry_revision: registry.revision,
-            automation_registry_digest_sha256: registry.digest_sha256,
-            project_registry_id: None,
-            project_registry_revision: None,
-            project_registry_digest: None,
-            source_policy_revision: None,
-            source_policy_digest_sha256: None,
-            registrations_considered: 1,
-            registrations_ready: 0,
-            registrations_quarantined: 1,
-            rollout_files_discovered: 0,
-            rollout_files_new: 0,
-            rollout_files_appended: 0,
-            rollout_files_unchanged: 0,
-            rollout_files_rewritten: 0,
-            rollout_files_deleted: 0,
-            rollout_archives_ready: 0,
-            rollout_archives_failed: 1,
-            canonical_generations_ready: 0,
-            canonical_generations_failed: 1,
-            catalog_path: catalog.catalog_path,
-            catalog_manifest_sha256: catalog.manifest_sha256,
-            canonical_source_written: false,
-            project_registry_written: false,
-            source_files_written: false,
-            existing_artifacts_deleted: false,
-        };
+        let report = publish_failed_reconcile_report(&root);
         let bytes = serde_json::to_vec(&report).unwrap();
         let mut ledger = test_ledger();
         record_worker(
@@ -5054,6 +5941,9 @@ mod tests {
             WorkerOutcome {
                 exit_code: Some(0),
                 timed_out: false,
+                cancelled: false,
+                duration_ms: 1,
+                timeout_seconds: None,
                 stdout: capture_worker_stream(bytes.as_slice()).unwrap(),
                 stderr: capture_worker_stream([].as_slice()).unwrap(),
             },

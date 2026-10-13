@@ -23,6 +23,9 @@ and an immutable lane-separated global derived catalog. They do not add a
 mutable global Knowledge Space or automatic canonical writes. Exact
 implementation, validation, merge, Push, CI and stable adoption remain
 separate evidence layers.
+ADR-0531 derives current membership from the registry and keeps rollout-root
+permission in a separate policy. ADR-0532 adds explicit macOS LaunchAgent
+adoption, dynamic global watcher targets and responsive asynchronous workers.
 
 - [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
 - [ADR-0526: On-demand Local Search Generations](decisions/adr/0526-on-demand-local-search-generations.md)
@@ -30,6 +33,8 @@ separate evidence layers.
 - [ADR-0528: Explicit History, Federated Read, and Incremental Local Search](decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)
 - [ADR-0529: Single-user Local Automation Runtime](decisions/adr/0529-single-user-local-automation-runtime.md)
 - [ADR-0530: Global Derived Search Catalog and Automatic History](decisions/adr/0530-global-derived-search-catalog-and-automatic-history.md)
+- [ADR-0531: Registry-derived Automation Membership and Global Source Policy](decisions/adr/0531-registry-derived-automation-membership-and-global-source-policy.md)
+- [ADR-0532: Explicit macOS Daemon Adoption](decisions/adr/0532-explicit-macos-daemon-adoption.md)
 - [Local Derived Search Architecture](architecture/local-derived-search.md)
 - [Local Derived Search Operator Guide](operator/local-derived-search.md)
 - [Local Derived Search Candidate Evidence](provenance/local-derived-search-candidate.md)

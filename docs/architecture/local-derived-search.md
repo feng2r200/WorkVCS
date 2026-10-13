@@ -303,7 +303,11 @@ authorization retain their existing contracts.
 
 This scope includes only explicitly policy-authorized automatic transcript
 discovery into the historical-reference lane and the disabled-by-default local
-runtime defined by ADR-0529/0530 as amended by ADR-0531. It still excludes
+runtime defined by ADR-0529/0530 as amended by ADR-0531/0532. Explicit macOS
+startup adoption uses a stable executable and exact registry/root arguments;
+one asynchronous worker keeps control responsive during complete scans, with
+no default wall-clock cutoff. Registry/policy changes refresh watcher targets.
+The scope still excludes
 canonical transcript extraction,
 semantic merge, a global canonical Knowledge Space, replication, cross-Store
 mutation, automatic Agent execution, service auto-installation and automatic

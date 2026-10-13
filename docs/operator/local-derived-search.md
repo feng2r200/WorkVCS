@@ -253,6 +253,19 @@ Unbound, unavailable or unsupported contexts remain explicit source failures;
 the coordinator does not request broader filesystem permission or guess an
 owner from a path prefix. Ordinary foreground project discovery is unchanged.
 
+An existing absolute path alias can be accepted only when bounded metadata
+inspection proves that a single stable symlink expands the claimed cwd into
+an active physical member boundary. The coordinator inspects the first
+diverging component below a finite shared ancestor with at least two normal
+path components, without opening an unknown directory body. It does not follow
+relative, chained, ambiguous or
+external aliases. Exact native Git identity and member-target checks still
+apply after expansion; a direct boundary failure cannot fall back to alias
+discovery. Alias and repository observations are revalidated before cached
+reuse and publication, so replacement or retargeting cannot retain stale
+ownership. This metadata check is not a claim that all filesystem operations
+are permission-free; real background adoption must be verified separately.
+
 Run one finite reconciliation before considering a resident coordinator:
 
 ```sh

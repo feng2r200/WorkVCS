@@ -1,7 +1,7 @@
 # Global Daemon Source Validation
 
 Observed: 2026-10-14
-Scope: WorkVCS 1.4.3 source acceptance under ADR-0532.
+Scope: WorkVCS 1.4.4 source acceptance under ADR-0532.
 Execution Plan: `01a135cc-272b-75f4-b93a-477d966a84bd`.
 
 ## Recovered remaining work
@@ -47,8 +47,8 @@ also returned successfully; final installed validation is a separate check.
   unsafe file/directory permissions, preserves identical installation and
   confirms the actual loaded job before reporting running or startup state.
 
-The final frozen source passed 1,096 workspace tests across 179 targets using
-Rust/Cargo 1.98.1 in an isolated build directory. All 28 automation-module tests,
+The final frozen source passed 1,097 workspace tests across 179 targets using
+Rust/Cargo 1.98.1 in an isolated build directory. All 29 automation-module tests,
 seven daemon E2E tests and four installer tests passed, including slow active
 worker response, queued manual work, SIGTERM/SIGINT cleanup/restart,
 registry/policy/member changes, no feedback, PID-bound IPC readiness and
@@ -57,9 +57,14 @@ Formatting, full-workspace/all-target/all-feature Clippy, schema, CLI smoke and
 the unchanged 98-row ProjectRef acceptance matrix passed.
 
 The raw full-suite log is immutable WorkVCS Evidence
-`01a1363b-931e-760d-a541-a5ff5c8af84b`; the independent source-review evidence is
-`01a13637-0c5f-75dc-8602-f88d51d8b4ec`. Earlier mixed-source/shared-target runs
-failed and are retained separately, not counted as successful evidence.
+`01a13672-bedf-7528-be2e-7261435ba56e`. The earlier 1.4.3 runtime/installer
+source-review evidence is `01a13637-0c5f-75dc-8602-f88d51d8b4ec`; the bounded
+alias review and final test-only delta are
+`01a13667-08db-71b7-95fa-ded724f9815b` and
+`01a1366e-a4b3-7101-a209-8c05251bee28`. Earlier mixed-source/shared-target
+failures and the pre-lint 1.4.4 run are retained separately, not counted as the
+final frozen proof. Six test clone lints and one equivalent move-to-borrow
+consistency rewrite preceded the final freeze; product logic did not change.
 
 ## Independent challenge
 
@@ -73,7 +78,7 @@ unit and real slow-worker E2E verification. No blocking/high finding remained.
 Actual 1.4.2 LaunchAgent adoption additionally falsified foreground-only
 validation: an unnecessary Git subprocess at an unknown historical Documents
 cwd waited for TCC permission. Automation now matches native cwd/Git metadata
-to active registry identities, rejects unknown contexts before probing them,
+to active registry identities without opening unknown directory bodies,
 verifies standard external worktree backlinks and rejects symlink escapes.
 Cached local identity is revalidated before publication; ordinary foreground
 project discovery is unchanged. No system privacy grant or historical owner
@@ -88,6 +93,23 @@ Independent slow-drip validation failed in 2.008 seconds, while a valid newline
 frame returned in 0.009 seconds without waiting for peer EOF. The CI oracle also
 now preserves the explicit stale-routing failure instead of parsing its empty
 stdout as a successful report.
+
+Actual 1.4.3 background adoption then exposed a coverage regression: 69
+previously ready StockLens sources used the existing absolute
+`/Users/ld/Workspaces` alias to `/Users/ld/Projects`. A strict lexical pre-gate
+rejected them despite an existing exact active ProjectRef identity. The final
+source restores bounded single-link alias discovery through stable metadata,
+proves lexical expansion into an active physical boundary before target access,
+and then applies full-path no-symlink, native Git and exact owner checks.
+Cached observations bind the original logical cwd and are reselected before
+reuse and publication. Relative/external/direct-suffix aliases, inode
+replacement and retargeting to another member are exercised; the real daemon
+E2E proves ready archive/query ownership and no external Git invocation.
+Chained and multiple-resolution ambiguous cases have independent static
+fail-closed review, not separate constructed tests. Metadata checks are not
+atomic dir-fd proofs; before/after fingerprints and final revalidation retain
+the existing same-user local threat model. Live restoration of the exact
+69-source cohort and background permission behavior remain activation checks.
 
 This source-stage snapshot does not itself prove live startup, login/restart
 adoption, main push, CI or installed-build parity. Those exact observations and

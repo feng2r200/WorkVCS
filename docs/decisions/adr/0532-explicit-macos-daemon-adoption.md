@@ -29,6 +29,14 @@ roots. Control-plane changes refresh the targets. Watchers remain dirty hints;
 full reconciliation determines membership, attribution and catalog currentness.
 Derived outputs must not create a watcher feedback loop.
 
+Background source attribution must prove exact active member ownership,
+including when an existing historical path is an alias. A path prefix or stale
+cached observation cannot establish ownership or expand the authorized read
+boundary. Changed or ambiguous identity fails closed without repairing the
+registry or granting broader filesystem access. Native metadata implementation
+and its bounded alias checks are described in the operator documentation and
+source validation evidence, not as a new locator-precedence contract.
+
 The coordinator cannot attest that an OS startup item is installed. Its ledger
 reports `launch_agent_installed: null`; the installer inspects the exact plist
 and launchctl state to report installed, loaded, running and disabled state.

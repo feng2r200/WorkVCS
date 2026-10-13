@@ -723,12 +723,40 @@ fn registry_derived_daemon_reloads_global_watch_targets_without_output_feedback(
 fn registry_derived_historical_owner_avoids_git_and_quarantines_unbound_cwd() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_workvcs"));
     let fixture = RegistryDerivedFixture::new(&binary);
+    let fixture_root = fs::canonicalize(fixture.project_a.parent().expect("fixture root"))
+        .expect("canonical fixture root");
+    let canonical_project_a = fs::canonicalize(&fixture.project_a).expect("canonical project A");
+    let project_a_ref = fixture.full_registry["locators"]
+        .as_array()
+        .expect("registry locators")
+        .iter()
+        .find(|locator| locator["normalized_value"] == path_text(&canonical_project_a))
+        .and_then(|locator| locator["project_ref_id"].as_str())
+        .expect("project A ProjectRef")
+        .to_owned();
     let unbound_cwd = fixture.root.join("unbound-historical-cwd");
     fs::create_dir(&unbound_cwd).expect("unbound historical cwd");
     write_project_rollout(
         &fixture.rollout_b.join("unbound-owner.jsonl"),
         &unbound_cwd,
         "unbound historical owner evidence",
+    );
+    let alias_root = fixture_root.join("verified-project-alias");
+    std::os::unix::fs::symlink(&fixture_root, &alias_root).expect("verified project alias");
+    let alias_cwd = alias_root.join("project-a");
+    write_project_rollout(
+        &fixture.rollout_b.join("alias-owner.jsonl"),
+        &alias_cwd,
+        "verified alias historical owner evidence",
+    );
+    let external_alias = fixture_root.join("external-project-alias");
+    let nonexistent_external = fixture_root.join("protected-target-does-not-exist");
+    std::os::unix::fs::symlink(&nonexistent_external, &external_alias)
+        .expect("external project alias");
+    write_project_rollout(
+        &fixture.rollout_b.join("external-alias-owner.jsonl"),
+        &external_alias.join("project-a"),
+        "external alias must remain unbound",
     );
     apply_source_policy(
         &binary,
@@ -773,8 +801,8 @@ fn registry_derived_historical_owner_avoids_git_and_quarantines_unbound_cwd() {
     assert!(!git_marker.exists());
     let report: Value = serde_json::from_slice(&output.stdout).expect("reconcile report JSON");
     assert_eq!(report["membership_mode"], "registry_derived");
-    assert!(u64_field(&report, "rollout_archives_ready") >= 1);
-    assert!(u64_field(&report, "rollout_archives_failed") >= 1);
+    assert!(u64_field(&report, "rollout_archives_ready") >= 2);
+    assert!(u64_field(&report, "rollout_archives_failed") >= 2);
     assert_eq!(report["complete"], false);
 
     let catalog = read_catalog(&report);
@@ -792,6 +820,52 @@ fn registry_derived_historical_owner_avoids_git_and_quarantines_unbound_cwd() {
             }),
         "catalog did not retain the unbound historical source failure: {catalog:#}"
     );
+    let external_source = fs::canonicalize(fixture.rollout_b.join("external-alias-owner.jsonl"))
+        .expect("canonical external-alias historical source");
+    assert!(
+        catalog["sources"]
+            .as_array()
+            .expect("catalog sources")
+            .iter()
+            .any(|source| {
+                source["status"] == "failed"
+                    && source["error_code"] == "project_owner_unbound"
+                    && source["artifact_path"] == path_text(&external_source)
+            }),
+        "catalog did not keep the external alias unbound: {catalog:#}"
+    );
+
+    let query = run_ok(
+        &binary,
+        &args![
+            "automation",
+            "catalog",
+            "query",
+            "--root",
+            path_text(&fixture.root),
+            "--registry",
+            path_text(&fixture.registry),
+            "--catalog",
+            string_field(&report, "catalog_path"),
+            "--query",
+            "verified alias historical owner evidence".to_owned(),
+        ],
+    );
+    let query: Value = serde_json::from_slice(&query.stdout).expect("alias catalog query JSON");
+    assert!(u64_field(&query, "matched_items") >= 1);
+    assert!(
+        query["items"]
+            .as_array()
+            .expect("alias query items")
+            .iter()
+            .any(|item| {
+                item["project_ref_id"] == project_a_ref
+                    && item["lane"] == "historical_reference"
+                    && item["artifact_kind"] == "source_archive"
+            }),
+        "alias source was not attributed to project A: {query:#}"
+    );
+    assert!(!nonexistent_external.exists());
 }
 
 #[test]

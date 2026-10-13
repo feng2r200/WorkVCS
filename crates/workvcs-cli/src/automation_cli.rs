@@ -26,6 +26,8 @@ use workvcs_core::{
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -391,7 +393,34 @@ struct HistoricalOwnerObservation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoricalAliasFingerprint {
+    anchor: PathBuf,
+    link_path: PathBuf,
+    link_target: PathBuf,
+    link_target_sha256: String,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    length: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoricalProbeResolution {
+    original_cwd: PathBuf,
+    boundary: PathBuf,
+    probe_cwd: PathBuf,
+    alias: Option<HistoricalAliasFingerprint>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct HistoricalOwnerCacheEntry {
+    resolution: HistoricalProbeResolution,
     observation: HistoricalOwnerObservation,
     owner: std::result::Result<RegistryDerivedMember, HistoricalOwnerFailure>,
 }
@@ -1591,7 +1620,7 @@ fn reconcile_registry_derived_once(
             &mut rollout_archives_failed,
         )?;
     }
-    validate_historical_owner_cache(&historical_owner_cache)?;
+    validate_historical_owner_cache(&historical_owner_cache, &membership)?;
     let current_membership = registry_derived_membership(Some(&membership.registry_path))?;
     if current_membership != membership {
         return Err(WorkVcsError::ControlPlaneInvalid(
@@ -2868,7 +2897,7 @@ fn resolve_registry_derived_source_member(
             ),
         )
     })?;
-    let lexical_cwds = historical_cwd_aliases_without_io(&cwd).map_err(|error| {
+    let normalized_cwd = normalize_historical_cwd_without_io(&cwd).map_err(|error| {
         failure(
             error,
             format!(
@@ -2877,20 +2906,60 @@ fn resolve_registry_derived_source_member(
             ),
         )
     })?;
-    let probe_cwd = select_historical_probe_path(
+    let lexical_cwds = historical_cwd_aliases_without_io(&normalized_cwd).map_err(|error| {
+        failure(
+            error,
+            format!(
+                "cannot derive historical rollout cwd aliases for {} without filesystem access",
+                cwd.display()
+            ),
+        )
+    })?;
+    let selected = select_historical_probe_path(
+        &normalized_cwd,
         &membership.historical_owner_boundaries,
         &lexical_cwds,
-    )
-    .map_err(|error| {
-            failure(
+    );
+    let cached = cache.get(&normalized_cwd);
+    let selected = match (selected, cached) {
+        (Ok(selected), _) => selected,
+        (Err(error), Some(cached)) => {
+            return Err(failure(
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "historical rollout cwd {} could not reproduce its cached local resolution {:?}: {error}",
+                    cwd.display(),
+                    cached.resolution
+                )),
+                format!(
+                    "cannot reuse historical owner attribution for rollout source {}",
+                    source.display()
+                ),
+            ));
+        }
+        (Err(error), None) => {
+            return Err(failure(
                 error,
                 format!(
                     "cannot safely enter historical rollout cwd {} from an active local identity boundary",
                     cwd.display()
                 ),
-            )
-        })?;
-    let Some(probe_cwd) = probe_cwd else {
+            ));
+        }
+    };
+    let Some(resolution) = selected else {
+        if let Some(cached) = cached {
+            return Err(failure(
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "historical rollout cwd {} no longer reproduces cached local resolution {:?}",
+                    cwd.display(),
+                    cached.resolution
+                )),
+                format!(
+                    "cannot reuse historical owner attribution for rollout source {}",
+                    source.display()
+                ),
+            ));
+        }
         let error = WorkVcsError::ProjectOwnerUnbound {
             registry_path: membership.registry_path.display().to_string(),
             resolution_rank: "verified-local-boundary".to_owned(),
@@ -2906,7 +2975,7 @@ fn resolve_registry_derived_source_member(
             ),
         ));
     };
-    let observation = observe_historical_owner(&probe_cwd).map_err(|error| {
+    let observation = observe_historical_owner(&resolution.probe_cwd).map_err(|error| {
         failure(
             error,
             format!(
@@ -2915,12 +2984,26 @@ fn resolve_registry_derived_source_member(
             ),
         )
     })?;
-    if let Some(cached) = cache.get(&probe_cwd) {
+    if let Some(cached) = cached {
+        if cached.resolution != resolution {
+            return Err(failure(
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "historical rollout cwd {} changed local resolution during reconciliation from {:?} to {:?}",
+                    cwd.display(),
+                    cached.resolution,
+                    resolution
+                )),
+                format!(
+                    "cannot reuse historical owner attribution for rollout source {}",
+                    source.display()
+                ),
+            ));
+        }
         if cached.observation != observation {
             return Err(failure(
                 WorkVcsError::ControlPlaneInvalid(format!(
                     "historical rollout cwd {} changed identity metadata during reconciliation from {}:{}@{} to {}:{}@{}",
-                    probe_cwd.display(),
+                    resolution.probe_cwd.display(),
                     cached.observation.identity.identity_kind,
                     cached.observation.identity.identity,
                     cached.observation.metadata_sha256,
@@ -2965,8 +3048,9 @@ fn resolve_registry_derived_source_member(
             )
         });
     cache.insert(
-        probe_cwd,
+        normalized_cwd,
         HistoricalOwnerCacheEntry {
+            resolution,
             observation,
             owner: resolved.clone(),
         },
@@ -2974,18 +3058,52 @@ fn resolve_registry_derived_source_member(
     resolved
 }
 
-fn validate_historical_owner_cache(cache: &HistoricalOwnerCache) -> Result<()> {
-    for (cwd, cached) in cache {
-        let current = observe_historical_owner(cwd).map_err(|error| {
+fn validate_historical_owner_cache(
+    cache: &HistoricalOwnerCache,
+    membership: &RegistryDerivedMembership,
+) -> Result<()> {
+    for (original_cwd, cached) in cache {
+        let candidates = historical_cwd_aliases_without_io(original_cwd).map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "historical rollout cwd {} aliases could not be revalidated after reconciliation: {error}",
+                original_cwd.display()
+            ))
+        })?;
+        let current_resolution = select_historical_probe_path(
+            original_cwd,
+            &membership.historical_owner_boundaries,
+            &candidates,
+        )
+        .map_err(|error| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "historical rollout cwd {} local resolution could not be revalidated after reconciliation: {error}",
+                original_cwd.display()
+            ))
+        })?
+        .ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "historical rollout cwd {} no longer resolves through its cached active local identity boundary",
+                original_cwd.display()
+            ))
+        })?;
+        if current_resolution != cached.resolution {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "historical rollout cwd {} changed local resolution during reconciliation from {:?} to {:?}",
+                original_cwd.display(),
+                cached.resolution,
+                current_resolution
+            )));
+        }
+        let current = observe_historical_owner(&current_resolution.probe_cwd).map_err(|error| {
             WorkVcsError::ControlPlaneInvalid(format!(
                 "historical rollout cwd {} could not be revalidated after reconciliation: {error}",
-                cwd.display()
+                original_cwd.display()
             ))
         })?;
         if current != cached.observation {
             return Err(WorkVcsError::ControlPlaneInvalid(format!(
                 "historical rollout cwd {} changed identity metadata during reconciliation from {}:{}@{} to {}:{}@{}",
-                cwd.display(),
+                original_cwd.display(),
                 cached.observation.identity.identity_kind,
                 cached.observation.identity.identity,
                 cached.observation.metadata_sha256,
@@ -3068,9 +3186,10 @@ fn verify_historical_probe_path(boundary: &Path, candidate: &Path) -> Result<Pat
 }
 
 fn select_historical_probe_path(
+    original_cwd: &Path,
     boundaries: &[PathBuf],
     candidates: &[PathBuf],
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<HistoricalProbeResolution>> {
     let mut matches = boundaries
         .iter()
         .flat_map(|boundary| {
@@ -3081,22 +3200,272 @@ fn select_historical_probe_path(
             })
         })
         .collect::<Vec<_>>();
-    let Some(maximum_depth) = matches
+    if let Some(maximum_depth) = matches
         .iter()
         .map(|(boundary, _)| boundary.components().count())
         .max()
-    else {
-        return Ok(None);
-    };
-    matches.retain(|(boundary, _)| boundary.components().count() == maximum_depth);
-    let mut last_error = None;
-    for (boundary, candidate) in matches {
-        match verify_historical_probe_path(boundary, candidate) {
-            Ok(path) => return Ok(Some(path)),
-            Err(error) => last_error = Some(error),
+    {
+        matches.retain(|(boundary, _)| boundary.components().count() == maximum_depth);
+        let mut last_error = None;
+        for (boundary, candidate) in matches {
+            match verify_historical_probe_path(boundary, candidate) {
+                Ok(path) => {
+                    return Ok(Some(HistoricalProbeResolution {
+                        original_cwd: original_cwd.to_path_buf(),
+                        boundary: boundary.clone(),
+                        probe_cwd: path,
+                        alias: None,
+                    }));
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        return Err(last_error.expect("a matching historical boundary has a validation result"));
+    }
+
+    select_dynamic_historical_alias(original_cwd, boundaries, candidates)
+}
+
+#[cfg(unix)]
+fn select_dynamic_historical_alias(
+    original_cwd: &Path,
+    boundaries: &[PathBuf],
+    candidates: &[PathBuf],
+) -> Result<Option<HistoricalProbeResolution>> {
+    let mut resolutions = Vec::new();
+    let mut safely_inspected_candidate = false;
+    let mut last_anchor_error = None;
+    for candidate_cwd in candidates {
+        for boundary in boundaries {
+            let Some(anchor) = common_historical_path_ancestor(candidate_cwd, boundary) else {
+                continue;
+            };
+            if anchor
+                .components()
+                .filter(|component| matches!(component, std::path::Component::Normal(_)))
+                .count()
+                < 2
+            {
+                continue;
+            }
+            let relative = candidate_cwd
+                .strip_prefix(&anchor)
+                .expect("shared path ancestor is a prefix");
+            let Some(std::path::Component::Normal(alias_name)) = relative.components().next()
+            else {
+                continue;
+            };
+            if let Err(error) = verify_absolute_directory_path_without_symlinks(
+                &anchor,
+                "historical alias trusted anchor",
+            ) {
+                last_anchor_error = Some(error);
+                continue;
+            }
+            let alias_path = anchor.join(alias_name);
+            let metadata = match fs::symlink_metadata(&alias_path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    safely_inspected_candidate = true;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(WorkVcsError::QueryInvalid(format!(
+                        "cannot inspect historical alias candidate {}: {error}",
+                        alias_path.display()
+                    )));
+                }
+            };
+            safely_inspected_candidate = true;
+            if !metadata.file_type().is_symlink() {
+                continue;
+            }
+            let fingerprint = snapshot_historical_alias(&anchor, &alias_path)?;
+            let target = normalize_absolute_single_hop_alias_target(&fingerprint.link_target)?;
+            let suffix = candidate_cwd.strip_prefix(&alias_path).map_err(|_| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "historical alias candidate {} is not a prefix of {}",
+                    alias_path.display(),
+                    candidate_cwd.display()
+                ))
+            })?;
+            let expanded = normalize_historical_cwd_without_io(&target.join(suffix))?;
+            if !expanded.starts_with(boundary) {
+                continue;
+            }
+            let probe_cwd = verify_historical_probe_path(boundary, &expanded)?;
+            let stable_fingerprint = snapshot_historical_alias(&anchor, &alias_path)?;
+            if stable_fingerprint != fingerprint {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "historical alias {} changed while its active-boundary resolution was being verified",
+                    alias_path.display()
+                )));
+            }
+            resolutions.push(HistoricalProbeResolution {
+                original_cwd: original_cwd.to_path_buf(),
+                boundary: boundary.clone(),
+                probe_cwd,
+                alias: Some(stable_fingerprint),
+            });
         }
     }
-    Err(last_error.expect("a matching historical boundary has a validation result"))
+    resolutions.sort_by(|left, right| {
+        left.probe_cwd
+            .cmp(&right.probe_cwd)
+            .then_with(|| {
+                right
+                    .boundary
+                    .components()
+                    .count()
+                    .cmp(&left.boundary.components().count())
+            })
+            .then_with(|| left.boundary.cmp(&right.boundary))
+    });
+    resolutions.dedup();
+    let Some(first) = resolutions.first() else {
+        if !safely_inspected_candidate && let Some(error) = last_anchor_error {
+            return Err(error);
+        }
+        return Ok(None);
+    };
+    if resolutions
+        .iter()
+        .any(|candidate| candidate.probe_cwd != first.probe_cwd)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "historical rollout cwd {} has ambiguous active-boundary alias resolutions",
+            original_cwd.display()
+        )));
+    }
+    Ok(resolutions.into_iter().next())
+}
+
+#[cfg(not(unix))]
+fn select_dynamic_historical_alias(
+    _original_cwd: &Path,
+    _boundaries: &[PathBuf],
+    _candidates: &[PathBuf],
+) -> Result<Option<HistoricalProbeResolution>> {
+    Ok(None)
+}
+
+fn common_historical_path_ancestor(left: &Path, right: &Path) -> Option<PathBuf> {
+    let mut shared = PathBuf::new();
+    let mut matched = false;
+    for (left_component, right_component) in left.components().zip(right.components()) {
+        if left_component != right_component {
+            break;
+        }
+        shared.push(left_component.as_os_str());
+        matched = true;
+    }
+    matched.then_some(shared)
+}
+
+#[cfg(unix)]
+fn historical_alias_metadata_fingerprint(
+    anchor: &Path,
+    link_path: &Path,
+    link_target: &Path,
+    metadata: &fs::Metadata,
+) -> HistoricalAliasFingerprint {
+    let mut digest = Sha256::new();
+    digest.update(link_target.as_os_str().as_bytes());
+    HistoricalAliasFingerprint {
+        anchor: anchor.to_path_buf(),
+        link_path: link_path.to_path_buf(),
+        link_target: link_target.to_path_buf(),
+        link_target_sha256: hex::encode(digest.finalize()),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        uid: metadata.uid(),
+        gid: metadata.gid(),
+        length: metadata.len(),
+        modified_seconds: metadata.mtime(),
+        modified_nanoseconds: metadata.mtime_nsec(),
+        changed_seconds: metadata.ctime(),
+        changed_nanoseconds: metadata.ctime_nsec(),
+    }
+}
+
+#[cfg(unix)]
+fn snapshot_historical_alias(
+    anchor: &Path,
+    link_path: &Path,
+) -> Result<HistoricalAliasFingerprint> {
+    let before = fs::symlink_metadata(link_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect historical alias {} before reading it: {error}",
+            link_path.display()
+        ))
+    })?;
+    if !before.file_type().is_symlink() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "historical alias {} changed to a non-symlink",
+            link_path.display()
+        )));
+    }
+    let target = fs::read_link(link_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot read historical alias {}: {error}",
+            link_path.display()
+        ))
+    })?;
+    let after = fs::symlink_metadata(link_path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect historical alias {} after reading it: {error}",
+            link_path.display()
+        ))
+    })?;
+    if !after.file_type().is_symlink() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "historical alias {} changed to a non-symlink while it was read",
+            link_path.display()
+        )));
+    }
+    let before = historical_alias_metadata_fingerprint(anchor, link_path, &target, &before);
+    let after = historical_alias_metadata_fingerprint(anchor, link_path, &target, &after);
+    if before != after {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "historical alias {} changed while it was being read",
+            link_path.display()
+        )));
+    }
+    Ok(after)
+}
+
+#[cfg(unix)]
+fn normalize_absolute_single_hop_alias_target(target: &Path) -> Result<PathBuf> {
+    if !target.is_absolute() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "historical alias target {} is relative; only absolute single-hop aliases are supported",
+            target.display()
+        )));
+    }
+    let mut normalized = PathBuf::new();
+    for component in target.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            std::path::Component::Prefix(_)
+            | std::path::Component::CurDir
+            | std::path::Component::ParentDir => {
+                return Err(WorkVcsError::IntegrityInvalid(format!(
+                    "historical alias target {} is not an absolute normalized single-hop path",
+                    target.display()
+                )));
+            }
+        }
+    }
+    if normalized.as_os_str().as_bytes() != target.as_os_str().as_bytes() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "historical alias target {} is not an absolute normalized single-hop path",
+            target.display()
+        )));
+    }
+    Ok(normalized)
 }
 
 fn verify_absolute_directory_path_without_symlinks(path: &Path, label: &str) -> Result<()> {
@@ -5887,7 +6256,12 @@ mod tests {
         )
         .unwrap();
         let boundaries = historical_repository_boundaries(&common_dir);
-        let error = select_historical_probe_path(&boundaries, &[unsafe_root]).unwrap_err();
+        let error = select_historical_probe_path(
+            &unsafe_root,
+            &boundaries,
+            std::slice::from_ref(&unsafe_root),
+        )
+        .unwrap_err();
         assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
         assert!(error.to_string().contains("is a symlink"));
 
@@ -5932,14 +6306,15 @@ mod tests {
             fs::create_dir(&replacement).unwrap();
             fs::rename(&cwd, &moved_cwd).unwrap();
             std::os::unix::fs::symlink(&replacement, &cwd).unwrap();
-            let error = validate_historical_owner_cache(&cache).unwrap_err();
+            let error = validate_historical_owner_cache(&cache, &membership).unwrap_err();
             assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
             assert!(
                 error
                     .to_string()
-                    .contains("historical rollout cwd component")
+                    .contains("historical identity boundary component"),
+                "{error}"
             );
-            assert!(error.to_string().contains("is a symlink"));
+            assert!(error.to_string().contains("is a symlink"), "{error}");
             fs::remove_file(&cwd).unwrap();
             fs::rename(&moved_cwd, &cwd).unwrap();
 
@@ -5971,7 +6346,7 @@ mod tests {
                 .contains("changed identity metadata during reconciliation")
         );
 
-        let error = validate_historical_owner_cache(&cache).unwrap_err();
+        let error = validate_historical_owner_cache(&cache, &membership).unwrap_err();
         assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
         assert!(
             error
@@ -5984,6 +6359,125 @@ mod tests {
         let changed = observe_historical_owner(&cwd).unwrap();
         assert_eq!(changed.identity, first.identity);
         assert_ne!(changed.metadata_sha256, first.metadata_sha256);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn historical_owner_alias_is_exact_stable_and_fail_closed() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let fixture_root = temporary.path().canonicalize().unwrap();
+        let membership = registry_derived_membership(Some(&fixture.registry_path)).unwrap();
+        let physical_source = fixture.rollout_root.join("thread.jsonl");
+        let physical_cwd = rollout_cwd_from_session_meta(&physical_source).unwrap();
+        let alias_root = fixture_root.join("known-alias");
+        let alias_target = physical_cwd.parent().unwrap().to_path_buf();
+        std::os::unix::fs::symlink(&alias_target, &alias_root).unwrap();
+        let alias_cwd = alias_root.join(physical_cwd.file_name().unwrap());
+        let alias_source = fixture.rollout_root.join("alias.jsonl");
+        write_registry_derived_test_rollout(
+            &alias_source,
+            &alias_cwd,
+            "verified historical alias evidence",
+        );
+        let mut cache = HistoricalOwnerCache::new();
+        let member =
+            resolve_registry_derived_source_member(&alias_source, &membership, &mut cache).unwrap();
+        assert_eq!(member.project_ref_id, fixture.project_ref_id);
+        let cached = cache.get(&alias_cwd).unwrap();
+        assert_eq!(cached.resolution.original_cwd, alias_cwd);
+        assert_eq!(cached.resolution.probe_cwd, physical_cwd);
+        let fingerprint = cached.resolution.alias.as_ref().unwrap();
+        assert_eq!(fingerprint.link_path, alias_root);
+        assert_eq!(fingerprint.link_target, alias_target);
+        validate_historical_owner_cache(&cache, &membership).unwrap();
+
+        let held_alias = fixture_root.join("held-original-alias");
+        fs::rename(&alias_root, &held_alias).unwrap();
+        std::os::unix::fs::symlink(&alias_target, &alias_root).unwrap();
+        let error = resolve_registry_derived_source_member(&alias_source, &membership, &mut cache)
+            .unwrap_err();
+        assert_eq!(error.code, "control_plane_invalid");
+        assert!(error.error.contains("changed local resolution"));
+
+        let physical_a_parent = fixture_root.join("physical-a");
+        let physical_b_parent = fixture_root.join("physical-b");
+        let physical_a = physical_a_parent.join("project");
+        let physical_b = physical_b_parent.join("project");
+        fs::create_dir_all(&physical_a).unwrap();
+        fs::create_dir_all(&physical_b).unwrap();
+        let retarget_alias = fixture_root.join("retarget-alias");
+        std::os::unix::fs::symlink(&physical_a_parent, &retarget_alias).unwrap();
+        let retarget_cwd = retarget_alias.join("project");
+        let mut retarget_membership = membership.clone();
+        retarget_membership.historical_owner_boundaries =
+            vec![physical_a.clone(), physical_b.clone()];
+        let retarget_candidates = historical_cwd_aliases_without_io(&retarget_cwd).unwrap();
+        let resolution = select_historical_probe_path(
+            &retarget_cwd,
+            &retarget_membership.historical_owner_boundaries,
+            &retarget_candidates,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(resolution.probe_cwd, physical_a);
+        let observation = observe_historical_owner(&resolution.probe_cwd).unwrap();
+        let mut retarget_cache = HistoricalOwnerCache::new();
+        retarget_cache.insert(
+            retarget_cwd.clone(),
+            HistoricalOwnerCacheEntry {
+                resolution,
+                observation,
+                owner: Ok(retarget_membership.members[0].clone()),
+            },
+        );
+        let held_retarget = fixture_root.join("held-retarget-alias");
+        fs::rename(&retarget_alias, &held_retarget).unwrap();
+        std::os::unix::fs::symlink(&physical_b_parent, &retarget_alias).unwrap();
+        let error =
+            validate_historical_owner_cache(&retarget_cache, &retarget_membership).unwrap_err();
+        assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+        assert!(error.to_string().contains("changed local resolution"));
+
+        let relative_alias = fixture_root.join("relative-alias");
+        std::os::unix::fs::symlink("physical-a", &relative_alias).unwrap();
+        let relative_cwd = relative_alias.join("project");
+        let error = select_historical_probe_path(
+            &relative_cwd,
+            std::slice::from_ref(&physical_a),
+            std::slice::from_ref(&relative_cwd),
+        )
+        .unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+        assert!(error.to_string().contains("target") && error.to_string().contains("relative"));
+
+        let external_alias = fixture_root.join("external-alias");
+        let nonexistent_external = fixture_root.join("external-target-does-not-exist");
+        std::os::unix::fs::symlink(&nonexistent_external, &external_alias).unwrap();
+        let external_cwd = external_alias.join("project");
+        assert!(
+            select_historical_probe_path(
+                &external_cwd,
+                std::slice::from_ref(&physical_a),
+                std::slice::from_ref(&external_cwd),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(!nonexistent_external.exists());
+
+        let direct_external = fixture_root.join("direct-external");
+        fs::create_dir(&direct_external).unwrap();
+        let direct_suffix = physical_a.join("suffix-link");
+        std::os::unix::fs::symlink(&direct_external, &direct_suffix).unwrap();
+        let error = select_historical_probe_path(
+            &direct_suffix,
+            std::slice::from_ref(&physical_a),
+            std::slice::from_ref(&direct_suffix),
+        )
+        .unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+        assert!(error.to_string().contains("symlink that could escape"));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use super::entity::canonical_json_string;
-use super::goal::{GOAL_ENTITY_KIND, goal_at};
-use super::plan::{PLAN_ENTITY_KIND, plan_at};
-use super::state_at;
-use super::task::{TASK_ENTITY_KIND, task_at};
+use super::goal::{GOAL_ENTITY_KIND, goal_at_with_cache};
+use super::plan::{PLAN_ENTITY_KIND, plan_at_with_cache};
+use super::task::{TASK_ENTITY_KIND, task_at_with_cache};
+use super::{ReplayCache, state_at, state_at_with_cache};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, relation_version_digest,
     validate_import_fixed_point, work_state_mapping_digest,
@@ -261,15 +261,24 @@ pub(crate) fn structural_references_at(
     connection: &StoreConnection,
     commit_id: CommitId,
 ) -> Result<Vec<StructuralReferenceSnapshot>> {
-    let replayed = state_at(connection, commit_id)?;
+    structural_references_at_with_cache(connection, commit_id, &mut ReplayCache::default())
+}
+
+pub(crate) fn structural_references_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<StructuralReferenceSnapshot>> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut references = Vec::new();
     for (relation_id, relation_version_id) in replayed.state.relations() {
-        let Some(reference) = load_structural_reference_version(
+        let Some(reference) = load_structural_reference_version_with_cache(
             connection,
             replayed.workspace_id,
             commit_id,
             *relation_id,
             *relation_version_id,
+            replay_cache,
         )?
         else {
             continue;
@@ -317,12 +326,13 @@ struct BranchRow {
     head_commit_id: CommitId,
 }
 
-fn load_structural_reference_version(
+fn load_structural_reference_version_with_cache(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     commit_id: CommitId,
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
+    replay_cache: &mut ReplayCache,
 ) -> Result<Option<StructuralReferenceSnapshot>> {
     let row = connection
         .inner()
@@ -433,8 +443,14 @@ fn load_structural_reference_version(
 
     let referrer_entity_id = decode_entity_id("relation.source_object_id", referrer_entity_id)?;
     let target_entity_id = decode_entity_id("relation.target_object_id", target_entity_id)?;
-    let referrer = load_reference_endpoint(connection, commit_id, referrer_entity_id)?;
-    let target = load_reference_endpoint(connection, commit_id, target_entity_id)?;
+    let referrer = load_reference_endpoint_with_cache(
+        connection,
+        commit_id,
+        referrer_entity_id,
+        replay_cache,
+    )?;
+    let target =
+        load_reference_endpoint_with_cache(connection, commit_id, target_entity_id, replay_cache)?;
     if referrer.workspace_id != workspace_id || target.workspace_id != workspace_id {
         return Err(WorkVcsError::RelationInvalid(format!(
             "structural reference relation {relation_id} endpoints must belong to workspace {workspace_id}"
@@ -465,6 +481,20 @@ fn load_reference_endpoint(
     commit_id: CommitId,
     entity_id: EntityId,
 ) -> Result<ReferenceEndpoint> {
+    load_reference_endpoint_with_cache(
+        connection,
+        commit_id,
+        entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+fn load_reference_endpoint_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<ReferenceEndpoint> {
     let Some((workspace_id, entity_kind)) = load_current_entity_kind(connection, entity_id)? else {
         return Err(WorkVcsError::RelationInvalid(format!(
             "structural reference endpoint entity {entity_id} does not exist"
@@ -477,19 +507,34 @@ fn load_reference_endpoint(
     };
 
     match kind {
-        StructuralReferenceEndpointKind::Goal => goal_at(connection, commit_id, entity_id)
+        StructuralReferenceEndpointKind::Goal => goal_at_with_cache(
+            connection,
+            commit_id,
+            entity_id,
+            replay_cache,
+        )
             .map(|snapshot| ReferenceEndpoint {
                 workspace_id: snapshot.workspace_id,
                 kind,
             })
             .map_err(relation_invalid_from),
-        StructuralReferenceEndpointKind::Plan => plan_at(connection, commit_id, entity_id)
+        StructuralReferenceEndpointKind::Plan => plan_at_with_cache(
+            connection,
+            commit_id,
+            entity_id,
+            replay_cache,
+        )
             .map(|snapshot| ReferenceEndpoint {
                 workspace_id: snapshot.workspace_id,
                 kind,
             })
             .map_err(relation_invalid_from),
-        StructuralReferenceEndpointKind::Task => task_at(connection, commit_id, entity_id)
+        StructuralReferenceEndpointKind::Task => task_at_with_cache(
+            connection,
+            commit_id,
+            entity_id,
+            replay_cache,
+        )
             .map(|snapshot| ReferenceEndpoint {
                 workspace_id: snapshot.workspace_id,
                 kind,

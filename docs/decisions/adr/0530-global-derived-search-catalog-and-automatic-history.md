@@ -1,6 +1,6 @@
 # ADR-0530: Global Derived Search Catalog and Automatic History
 
-Status: Accepted; implementation and local delivery authorized
+Status: Superseded in part by ADR-0531; legacy registration mode remains accepted
 Date: 2026-10-13
 Accepted by: The user's integrated WorkVCS post-V1 and Token-efficiency
 authorization after independent review. The execution contract is persisted in
@@ -13,6 +13,13 @@ but require a caller to repeat the source set and import steps. Automatic local
 discovery can make that evidence cheaper to use only if historical conversation
 text remains visibly non-authoritative and cross-project retrieval never turns
 into a mutable global Knowledge Space.
+
+## Later supersession
+
+ADR-0531 replaces the per-ProjectRef registration source declaration with a
+separate global source policy and a registry-derived member snapshot for the
+new mode. This ADR continues to govern immutable historical archives, lane
+separation, catalog completeness, publication and cleanup boundaries.
 
 ## Decision
 

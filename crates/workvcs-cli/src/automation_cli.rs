@@ -15,9 +15,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use workvcs_core::{
     AutomationArtifactKind, AutomationCatalogManifest, AutomationCatalogSource, AutomationLane,
     AutomationRegistration, AutomationRegistrationProposal, AutomationRolePolicy,
-    AutomationSourceStatus, SearchDerivedStatus, SourceArchiveInspectOptions,
-    apply_automation_registration, preview_automation_registration, publish_automation_catalog,
-    read_automation_catalog, read_automation_registry, revoke_automation_registration,
+    AutomationSourcePolicyEntry, AutomationSourcePolicyProposal, AutomationSourceStatus,
+    RegistryDerivedCatalogBasis, SearchDerivedStatus, SourceArchiveInspectOptions,
+    apply_automation_registration, apply_automation_source_policy, automation_source_policy_path,
+    preview_automation_registration, preview_automation_source_policy, publish_automation_catalog,
+    publish_registry_derived_automation_catalog, read_automation_catalog, read_automation_registry,
+    read_automation_source_policy, revoke_automation_registration, revoke_automation_source_policy,
 };
 
 #[cfg(unix)]
@@ -122,6 +125,20 @@ pub(crate) enum AutomationCommand {
         #[arg(long, value_enum, default_value_t = AutomationFormatArg::Json)]
         format: AutomationFormatArg,
     },
+    #[command(about = "Manage the separate global rollout-root source policy")]
+    SourcePolicy {
+        #[command(subcommand)]
+        command: AutomationSourcePolicyCommand,
+    },
+    #[command(
+        about = "List the active ProjectRef registry members for registry-derived automation"
+    )]
+    Membership {
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = AutomationFormatArg::Json)]
+        format: AutomationFormatArg,
+    },
     #[command(about = "Run one foreground-compatible complete reconciliation round")]
     Reconcile {
         #[arg(long)]
@@ -142,6 +159,72 @@ pub(crate) enum AutomationCommand {
     Daemon {
         #[command(subcommand)]
         command: AutomationDaemonCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AutomationSourcePolicyCommand {
+    #[command(about = "Preview one global source-policy entry without writing")]
+    Preview {
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long)]
+        rollout_root: PathBuf,
+        #[arg(long, value_enum, default_value_t = AutomationRolePolicyArg::UserOnly)]
+        role_policy: AutomationRolePolicyArg,
+        #[arg(long = "exclude-project-ref")]
+        excluded_project_refs: Vec<String>,
+        #[arg(long, value_enum, default_value_t = AutomationFormatArg::Json)]
+        format: AutomationFormatArg,
+    },
+    #[command(about = "Apply one global source-policy entry against an exact policy basis")]
+    Apply {
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long)]
+        rollout_root: PathBuf,
+        #[arg(long, value_enum, default_value_t = AutomationRolePolicyArg::UserOnly)]
+        role_policy: AutomationRolePolicyArg,
+        #[arg(long = "exclude-project-ref")]
+        excluded_project_refs: Vec<String>,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        expected_digest: String,
+        #[arg(long, value_enum, default_value_t = AutomationFormatArg::Json)]
+        format: AutomationFormatArg,
+    },
+    #[command(about = "List global source-policy entries, including revoked history")]
+    List {
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = AutomationFormatArg::Json)]
+        format: AutomationFormatArg,
+    },
+    #[command(about = "Revoke one global source-policy entry without deleting derived artifacts")]
+    Revoke {
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        expected_digest: String,
+        #[arg(long, value_enum, default_value_t = AutomationFormatArg::Json)]
+        format: AutomationFormatArg,
     },
 }
 
@@ -210,8 +293,14 @@ pub(crate) enum AutomationDaemonCommand {
 struct ReconcileReport {
     status: String,
     complete: bool,
+    membership_mode: String,
     automation_registry_revision: u64,
     automation_registry_digest_sha256: String,
+    project_registry_id: Option<String>,
+    project_registry_revision: Option<u64>,
+    project_registry_digest: Option<String>,
+    source_policy_revision: Option<u64>,
+    source_policy_digest_sha256: Option<String>,
     registrations_considered: usize,
     registrations_ready: usize,
     registrations_quarantined: usize,
@@ -231,6 +320,40 @@ struct ReconcileReport {
     project_registry_written: bool,
     source_files_written: bool,
     existing_artifacts_deleted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct RegistryDerivedMember {
+    project_ref_id: ProjectRefId,
+    store_path: PathBuf,
+    store_id: StoreId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+}
+
+impl RegistryDerivedMember {
+    fn identity(&self) -> SearchSourceIdentity {
+        SearchSourceIdentity::new(
+            self.project_ref_id,
+            self.store_id,
+            self.workspace_id,
+            self.branch_id,
+        )
+    }
+
+    fn catalog_member_id(&self) -> String {
+        format!("project-ref:{}", self.project_ref_id)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct RegistryDerivedMembership {
+    registry_path: PathBuf,
+    registry_id: String,
+    registry_revision: u64,
+    registry_digest: String,
+    routing_activation_path: PathBuf,
+    members: Vec<RegistryDerivedMember>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -272,6 +395,23 @@ struct SourceInventoryV1 {
     schema_version: u32,
     observed_at_us: u128,
     files: BTreeMap<String, SourceFingerprint>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlobalSourceInventoryEntry {
+    source_id: String,
+    member: RegistryDerivedMember,
+    fingerprint: SourceFingerprint,
+    archive: Option<SourceArchiveReference>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlobalSourceInventory {
+    schema_version: u32,
+    observed_at_us: u128,
+    files: BTreeMap<String, GlobalSourceInventoryEntry>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -330,6 +470,12 @@ struct CatalogQueryItem {
     source_score: f64,
     federated_score: f64,
     payload: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+struct CatalogSourceBinding {
+    identity: SearchSourceIdentity,
+    store_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -498,6 +644,10 @@ pub(crate) fn run_automation(command: AutomationCommand) -> Result<String> {
             )?;
             render_value(&result, format)
         }
+        AutomationCommand::SourcePolicy { command } => run_source_policy(command),
+        AutomationCommand::Membership { registry, format } => {
+            render_value(&registry_derived_membership(registry.as_deref())?, format)
+        }
         AutomationCommand::Reconcile {
             registry,
             root,
@@ -517,6 +667,144 @@ pub(crate) fn run_automation(command: AutomationCommand) -> Result<String> {
         AutomationCommand::Catalog { command } => run_catalog(command),
         AutomationCommand::Daemon { command } => run_daemon_command(command),
     }
+}
+
+fn run_source_policy(command: AutomationSourcePolicyCommand) -> Result<String> {
+    match command {
+        AutomationSourcePolicyCommand::Preview {
+            registry,
+            root,
+            source_id,
+            rollout_root,
+            role_policy,
+            excluded_project_refs,
+            format,
+        } => {
+            let (root, proposal) = source_policy_proposal(
+                root,
+                registry,
+                source_id,
+                rollout_root,
+                role_policy.into(),
+                excluded_project_refs,
+            )?;
+            render_value(&preview_automation_source_policy(&root, proposal)?, format)
+        }
+        AutomationSourcePolicyCommand::Apply {
+            registry,
+            root,
+            source_id,
+            rollout_root,
+            role_policy,
+            excluded_project_refs,
+            expected_revision,
+            expected_digest,
+            format,
+        } => {
+            let (root, proposal) = source_policy_proposal(
+                root,
+                registry,
+                source_id,
+                rollout_root,
+                role_policy.into(),
+                excluded_project_refs,
+            )?;
+            let result = apply_automation_source_policy(
+                &root,
+                expected_revision,
+                &expected_digest,
+                proposal,
+            )?;
+            render_value(&result, format)
+        }
+        AutomationSourcePolicyCommand::List {
+            registry,
+            root,
+            format,
+        } => render_value(
+            &read_automation_source_policy(&resolve_automation_root(root, registry.as_deref())?)?,
+            format,
+        ),
+        AutomationSourcePolicyCommand::Revoke {
+            registry,
+            root,
+            source_id,
+            expected_revision,
+            expected_digest,
+            format,
+        } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            let result = revoke_automation_source_policy(
+                &root,
+                expected_revision,
+                &expected_digest,
+                &source_id,
+            )?;
+            render_value(&result, format)
+        }
+    }
+}
+
+fn source_policy_proposal(
+    root: Option<PathBuf>,
+    registry: Option<PathBuf>,
+    source_id: String,
+    rollout_root: PathBuf,
+    role_policy: AutomationRolePolicy,
+    excluded_project_refs: Vec<String>,
+) -> Result<(PathBuf, AutomationSourcePolicyProposal)> {
+    let root = resolve_automation_root(root, registry.as_deref())?;
+    let excluded_project_refs = excluded_project_refs
+        .into_iter()
+        .map(|value| ProjectRefId::parse_canonical(&value))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((
+        root,
+        AutomationSourcePolicyProposal {
+            source_id,
+            rollout_root,
+            role_policy,
+            excluded_project_refs,
+        },
+    ))
+}
+
+fn registry_derived_membership(
+    project_registry: Option<&Path>,
+) -> Result<RegistryDerivedMembership> {
+    let effective = effective_registry_config(project_registry.map(Path::to_path_buf))?;
+    let registry_path = canonical_registry_path(
+        absolute_cli_path("project registry", effective.registry_path.clone())?,
+        false,
+    )?;
+    let (registry, digest) = match load_project_registry_readonly(&registry_path, true)? {
+        LoadedProjectRegistry::V1 { .. } => {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "registry-derived automation requires an active registry v2".to_owned(),
+            ));
+        }
+        LoadedProjectRegistry::V2 { registry, digest } => (registry, digest),
+    };
+    let activation = require_active_read_routing(&effective, &registry_path, &registry)?;
+    let members = registry
+        .bindings()
+        .iter()
+        .map(|binding| RegistryDerivedMember {
+            project_ref_id: binding.project_ref_id(),
+            store_path: PathBuf::from(binding.store_path().as_str()),
+            store_id: binding.store_id(),
+            workspace_id: binding.workspace_id(),
+            branch_id: binding.branch_id(),
+        })
+        .collect();
+    Ok(RegistryDerivedMembership {
+        registry_path,
+        registry_id: registry.registry_id().to_string(),
+        registry_revision: registry.revision(),
+        registry_digest: digest.to_string(),
+        routing_activation_path: activation.path,
+        members,
+    })
 }
 
 fn registration_proposal(
@@ -643,6 +931,14 @@ impl ReconciliationLock {
 }
 
 fn reconcile_once(root: &Path, project_registry: Option<&Path>) -> Result<ReconcileReport> {
+    if automation_source_policy_path(root).exists() {
+        reconcile_registry_derived_once(root, project_registry)
+    } else {
+        reconcile_legacy_once(root, project_registry)
+    }
+}
+
+fn reconcile_legacy_once(root: &Path, project_registry: Option<&Path>) -> Result<ReconcileReport> {
     let _reconciliation_lock = ReconciliationLock::acquire(root)?;
     let registry = read_automation_registry(root)?;
     let mut catalog_sources = Vec::new();
@@ -814,8 +1110,14 @@ fn reconcile_once(root: &Path, project_registry: Option<&Path>) -> Result<Reconc
             "partial_failure".to_owned()
         },
         complete: publication.manifest.complete,
+        membership_mode: "legacy_registration".to_owned(),
         automation_registry_revision: registry.revision,
         automation_registry_digest_sha256: registry.digest_sha256,
+        project_registry_id: None,
+        project_registry_revision: None,
+        project_registry_digest: None,
+        source_policy_revision: None,
+        source_policy_digest_sha256: None,
         registrations_considered: registrations.len(),
         registrations_ready,
         registrations_quarantined,
@@ -836,6 +1138,514 @@ fn reconcile_once(root: &Path, project_registry: Option<&Path>) -> Result<Reconc
         source_files_written: false,
         existing_artifacts_deleted: false,
     })
+}
+
+fn reconcile_registry_derived_once(
+    root: &Path,
+    project_registry: Option<&Path>,
+) -> Result<ReconcileReport> {
+    let _reconciliation_lock = ReconciliationLock::acquire(root)?;
+    let membership = registry_derived_membership(project_registry)?;
+    let source_policy = read_automation_source_policy(root)?;
+    let active_sources = source_policy
+        .sources
+        .iter()
+        .filter(|source| source.enabled && !source.revoked)
+        .collect::<Vec<_>>();
+    let mut catalog_sources = Vec::new();
+    let mut canonical_generations_ready = 0;
+    let mut canonical_generations_failed = 0;
+    let mut rollout_files_discovered = 0;
+    let mut rollout_files_new = 0;
+    let mut rollout_files_appended = 0;
+    let mut rollout_files_unchanged = 0;
+    let mut rollout_files_rewritten = 0;
+    let mut rollout_files_deleted = 0;
+    let mut rollout_archives_ready = 0;
+    let mut rollout_archives_failed = 0;
+
+    for member in &membership.members {
+        let canonical_root = root
+            .join("generations")
+            .join("registry-derived")
+            .join(member.project_ref_id.to_string())
+            .join("lexical");
+        match Engine::open_readonly(&member.store_path) {
+            Ok(engine) => {
+                let mut options = SearchQueryOptions::managed(
+                    member.identity(),
+                    &canonical_root,
+                    RECONCILE_QUERY,
+                )?
+                .with_protected_path(membership.registry_path.clone());
+                options = options.with_protected_path(membership.routing_activation_path.clone());
+                match engine.search(options) {
+                    Ok(result) if result.status == SearchDerivedStatus::Ready => {
+                        let manifest = result.manifest.ok_or_else(|| {
+                            WorkVcsError::IntegrityInvalid(
+                                "ready registry-derived search result omitted its manifest"
+                                    .to_owned(),
+                            )
+                        })?;
+                        canonical_generations_ready += 1;
+                        catalog_sources.push(AutomationCatalogSource {
+                            registration_id: member.catalog_member_id(),
+                            project_ref_id: member.project_ref_id,
+                            lane: AutomationLane::CanonicalCurrent,
+                            artifact_kind: AutomationArtifactKind::LexicalGeneration,
+                            artifact_path: result.index_path,
+                            artifact_manifest_sha256: sha256_serialized(&manifest)?,
+                            source_anchor: format!(
+                                "commit:{};state:{}",
+                                manifest.source_commit_id, manifest.source_state_digest
+                            ),
+                            status: AutomationSourceStatus::Ready,
+                            error_code: None,
+                            error: None,
+                        });
+                    }
+                    Ok(result) => {
+                        canonical_generations_failed += 1;
+                        catalog_sources.push(failed_global_catalog_source(
+                            member,
+                            AutomationLane::CanonicalCurrent,
+                            AutomationArtifactKind::LexicalGeneration,
+                            result.index_path,
+                            result.reason_code.as_deref().unwrap_or("refresh_required"),
+                            result
+                                .reason
+                                .as_deref()
+                                .unwrap_or("derived generation is not ready"),
+                        ));
+                    }
+                    Err(error) => {
+                        canonical_generations_failed += 1;
+                        catalog_sources.push(failed_global_catalog_source(
+                            member,
+                            AutomationLane::CanonicalCurrent,
+                            AutomationArtifactKind::LexicalGeneration,
+                            canonical_root.clone(),
+                            &error.code().to_string(),
+                            &error.to_string(),
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                canonical_generations_failed += 1;
+                catalog_sources.push(failed_global_catalog_source(
+                    member,
+                    AutomationLane::CanonicalCurrent,
+                    AutomationArtifactKind::LexicalGeneration,
+                    canonical_root,
+                    &error.code().to_string(),
+                    &error.to_string(),
+                ));
+            }
+        }
+    }
+
+    let previous_inventory = read_global_source_inventory(root)?;
+    let mut current_inventory = BTreeMap::new();
+    for source in active_sources {
+        run_registry_derived_historical_reconciliation(
+            root,
+            source,
+            &membership,
+            &previous_inventory,
+            &mut current_inventory,
+            &mut catalog_sources,
+            &mut rollout_files_discovered,
+            &mut rollout_files_new,
+            &mut rollout_files_appended,
+            &mut rollout_files_unchanged,
+            &mut rollout_files_rewritten,
+            &mut rollout_files_deleted,
+            &mut rollout_archives_ready,
+            &mut rollout_archives_failed,
+        )?;
+    }
+    write_global_source_inventory(root, current_inventory)?;
+
+    let publication = publish_registry_derived_automation_catalog(
+        root,
+        RegistryDerivedCatalogBasis {
+            project_registry_id: membership.registry_id.clone(),
+            project_registry_revision: membership.registry_revision,
+            project_registry_digest: membership.registry_digest.clone(),
+            source_policy_revision: source_policy.revision,
+            source_policy_digest_sha256: source_policy.digest_sha256.clone(),
+        },
+        catalog_sources,
+    )?;
+    let ready_sources = publication
+        .manifest
+        .sources
+        .iter()
+        .filter(|source| source.status == AutomationSourceStatus::Ready)
+        .count();
+    Ok(ReconcileReport {
+        status: if publication.manifest.complete {
+            "completed".to_owned()
+        } else if ready_sources == 0 {
+            "failed".to_owned()
+        } else {
+            "partial_failure".to_owned()
+        },
+        complete: publication.manifest.complete,
+        membership_mode: "registry_derived".to_owned(),
+        automation_registry_revision: 0,
+        automation_registry_digest_sha256: "0".repeat(64),
+        project_registry_id: Some(membership.registry_id),
+        project_registry_revision: Some(membership.registry_revision),
+        project_registry_digest: Some(membership.registry_digest),
+        source_policy_revision: Some(source_policy.revision),
+        source_policy_digest_sha256: Some(source_policy.digest_sha256),
+        registrations_considered: membership.members.len(),
+        registrations_ready: membership.members.len(),
+        registrations_quarantined: 0,
+        rollout_files_discovered,
+        rollout_files_new,
+        rollout_files_appended,
+        rollout_files_unchanged,
+        rollout_files_rewritten,
+        rollout_files_deleted,
+        rollout_archives_ready,
+        rollout_archives_failed,
+        canonical_generations_ready,
+        canonical_generations_failed,
+        catalog_path: publication.catalog_path,
+        catalog_manifest_sha256: publication.manifest_sha256,
+        canonical_source_written: false,
+        project_registry_written: false,
+        source_files_written: false,
+        existing_artifacts_deleted: false,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_registry_derived_historical_reconciliation(
+    root: &Path,
+    source_policy: &AutomationSourcePolicyEntry,
+    membership: &RegistryDerivedMembership,
+    previous_inventory: &GlobalSourceInventory,
+    current_inventory: &mut BTreeMap<String, GlobalSourceInventoryEntry>,
+    catalog_sources: &mut Vec<AutomationCatalogSource>,
+    rollout_files_discovered: &mut usize,
+    rollout_files_new: &mut usize,
+    rollout_files_appended: &mut usize,
+    rollout_files_unchanged: &mut usize,
+    rollout_files_rewritten: &mut usize,
+    rollout_files_deleted: &mut usize,
+    rollout_archives_ready: &mut usize,
+    rollout_archives_failed: &mut usize,
+) -> Result<()> {
+    let archive_root = root
+        .join("history")
+        .join("registry-derived")
+        .join(&source_policy.source_id);
+    let files = match collect_rollout_files(&source_policy.rollout_root) {
+        Ok(files) => files,
+        Err(error) => {
+            let mut retained = 0;
+            for (path, entry) in previous_inventory
+                .files
+                .iter()
+                .filter(|(_, entry)| entry.source_id == source_policy.source_id)
+            {
+                retained += 1;
+                current_inventory.insert(path.clone(), entry.clone());
+                retain_or_quarantine_global_archive(
+                    source_policy,
+                    membership,
+                    entry,
+                    source_policy.rollout_root.clone(),
+                    &error.code().to_string(),
+                    &error.to_string(),
+                    catalog_sources,
+                    rollout_archives_ready,
+                    rollout_archives_failed,
+                )?;
+            }
+            *rollout_archives_failed += 1;
+            if retained == 0 {
+                catalog_sources.push(failed_unattributed_catalog_source(
+                    source_policy.rollout_root.clone(),
+                    &error.code().to_string(),
+                    &error.to_string(),
+                )?);
+            }
+            return Ok(());
+        }
+    };
+    *rollout_files_discovered += files.len();
+    for file in files {
+        let path_key = file
+            .to_str()
+            .ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "registry-derived rollout path must be valid UTF-8".to_owned(),
+                )
+            })?
+            .to_owned();
+        let previous = previous_inventory
+            .files
+            .get(&path_key)
+            .filter(|entry| entry.source_id == source_policy.source_id);
+        let fingerprint = match fingerprint_source(&file) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                if let Some(entry) = previous {
+                    current_inventory.insert(path_key.clone(), entry.clone());
+                    retain_or_quarantine_global_archive(
+                        source_policy,
+                        membership,
+                        entry,
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                        catalog_sources,
+                        rollout_archives_ready,
+                        rollout_archives_failed,
+                    )?;
+                } else {
+                    catalog_sources.push(failed_unattributed_catalog_source(
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    )?);
+                }
+                *rollout_archives_failed += 1;
+                continue;
+            }
+        };
+        let member = match resolve_registry_derived_source_member(&file, membership) {
+            Ok(member) if !source_policy_excludes_member(source_policy, &member) => member,
+            Ok(member) => {
+                let error = WorkVcsError::ControlPlaneInvalid(format!(
+                    "rollout source {} resolves to excluded ProjectRef {}",
+                    file.display(),
+                    member.project_ref_id
+                ));
+                if let Some(entry) = previous {
+                    current_inventory.insert(path_key.clone(), entry.clone());
+                    catalog_sources.push(failed_global_catalog_source(
+                        &entry.member,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    ));
+                } else {
+                    catalog_sources.push(failed_unattributed_catalog_source(
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    )?);
+                }
+                *rollout_archives_failed += 1;
+                continue;
+            }
+            Err(error) => {
+                if let Some(entry) = previous {
+                    current_inventory.insert(path_key.clone(), entry.clone());
+                    catalog_sources.push(failed_global_catalog_source(
+                        &entry.member,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    ));
+                } else {
+                    catalog_sources.push(failed_unattributed_catalog_source(
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    )?);
+                }
+                *rollout_archives_failed += 1;
+                continue;
+            }
+        };
+        let change = classify_source_change(
+            &file,
+            previous.map(|entry| &entry.fingerprint),
+            &fingerprint,
+        )?;
+        match change {
+            SourceChange::New => *rollout_files_new += 1,
+            SourceChange::Appended => *rollout_files_appended += 1,
+            SourceChange::Unchanged => *rollout_files_unchanged += 1,
+            SourceChange::Rewritten => *rollout_files_rewritten += 1,
+        }
+        let prior_archive = previous
+            .filter(|entry| entry.member == member)
+            .and_then(|entry| entry.archive.clone());
+        let mut entry = GlobalSourceInventoryEntry {
+            source_id: source_policy.source_id.clone(),
+            member: member.clone(),
+            fingerprint: fingerprint.clone(),
+            archive: prior_archive,
+        };
+        let reusable = change == SourceChange::Unchanged
+            && entry.archive.as_ref().is_some_and(|reference| {
+                archive_reference_matches_source(reference, &file, &fingerprint)
+            });
+        if reusable {
+            retain_global_archive(
+                &member,
+                &entry,
+                catalog_sources,
+                rollout_archives_ready,
+                rollout_archives_failed,
+            );
+        } else {
+            let member_archive_root = archive_root.join(member.project_ref_id.to_string());
+            let options = SourceArchiveImportOptions::new(
+                member.identity(),
+                &member_archive_root,
+                vec![file.clone()],
+            )?
+            .include_assistant(matches!(
+                source_policy.role_policy,
+                AutomationRolePolicy::UserAndAssistant
+            ));
+            match Engine::import_source_archive(options) {
+                Ok(result) => {
+                    let reference = archive_reference(result.archive_path, &result.manifest)?;
+                    if !archive_reference_matches_source(&reference, &file, &fingerprint) {
+                        return Err(WorkVcsError::IntegrityInvalid(
+                            "registry-derived source changed during archive import".to_owned(),
+                        ));
+                    }
+                    entry.archive = Some(reference.clone());
+                    *rollout_archives_ready += 1;
+                    catalog_sources.push(AutomationCatalogSource {
+                        registration_id: member.catalog_member_id(),
+                        project_ref_id: member.project_ref_id,
+                        lane: AutomationLane::HistoricalReference,
+                        artifact_kind: AutomationArtifactKind::SourceArchive,
+                        artifact_path: reference.artifact_path,
+                        artifact_manifest_sha256: reference.artifact_manifest_sha256,
+                        source_anchor: reference.source_anchor,
+                        status: AutomationSourceStatus::Ready,
+                        error_code: None,
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    retain_global_archive(
+                        &member,
+                        &entry,
+                        catalog_sources,
+                        rollout_archives_ready,
+                        rollout_archives_failed,
+                    );
+                    *rollout_archives_failed += 1;
+                    catalog_sources.push(failed_global_catalog_source(
+                        &member,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    ));
+                }
+            }
+        }
+        current_inventory.insert(path_key, entry);
+    }
+
+    let deleted_sources = previous_inventory
+        .files
+        .iter()
+        .filter(|(path, entry)| {
+            entry.source_id == source_policy.source_id && !current_inventory.contains_key(*path)
+        })
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .collect::<Vec<_>>();
+    for (deleted, entry) in deleted_sources {
+        *rollout_files_deleted += 1;
+        current_inventory.insert(deleted.clone(), entry.clone());
+        retain_or_quarantine_global_archive(
+            source_policy,
+            membership,
+            &entry,
+            PathBuf::from(&deleted),
+            "source_deleted",
+            "previously configured rollout source is no longer present",
+            catalog_sources,
+            rollout_archives_ready,
+            rollout_archives_failed,
+        )?;
+        *rollout_archives_failed += 1;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retain_or_quarantine_global_archive(
+    source_policy: &AutomationSourcePolicyEntry,
+    membership: &RegistryDerivedMembership,
+    entry: &GlobalSourceInventoryEntry,
+    artifact_path: PathBuf,
+    error_code: &str,
+    error: &str,
+    catalog_sources: &mut Vec<AutomationCatalogSource>,
+    rollout_archives_ready: &mut usize,
+    rollout_archives_failed: &mut usize,
+) -> Result<()> {
+    if let Some(member) = active_registry_member(membership, &entry.member)
+        && !source_policy_excludes_member(source_policy, &member)
+    {
+        retain_global_archive(
+            &member,
+            entry,
+            catalog_sources,
+            rollout_archives_ready,
+            rollout_archives_failed,
+        );
+    }
+    catalog_sources.push(failed_global_catalog_source(
+        &entry.member,
+        AutomationLane::HistoricalReference,
+        AutomationArtifactKind::SourceArchive,
+        artifact_path,
+        error_code,
+        error,
+    ));
+    Ok(())
+}
+
+fn retain_global_archive(
+    member: &RegistryDerivedMember,
+    entry: &GlobalSourceInventoryEntry,
+    catalog_sources: &mut Vec<AutomationCatalogSource>,
+    rollout_archives_ready: &mut usize,
+    rollout_archives_failed: &mut usize,
+) {
+    let Some(reference) = entry.archive.as_ref() else {
+        return;
+    };
+    match ready_global_archive_catalog_source(member, reference) {
+        Ok(source) => {
+            *rollout_archives_ready += 1;
+            catalog_sources.push(source);
+        }
+        Err(error) => {
+            *rollout_archives_failed += 1;
+            catalog_sources.push(failed_global_catalog_source(
+                member,
+                AutomationLane::HistoricalReference,
+                AutomationArtifactKind::SourceArchive,
+                reference.artifact_path.clone(),
+                &error.code().to_string(),
+                &error.to_string(),
+            ));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1368,6 +2178,99 @@ fn write_source_inventory(
     result
 }
 
+fn global_source_inventory_path(root: &Path) -> PathBuf {
+    root.join("inventory").join("registry-derived.json")
+}
+
+fn read_global_source_inventory(root: &Path) -> Result<GlobalSourceInventory> {
+    let path = global_source_inventory_path(root);
+    if !path.exists() {
+        return Ok(GlobalSourceInventory {
+            schema_version: 1,
+            observed_at_us: 0,
+            files: BTreeMap::new(),
+        });
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    let mut file = options
+        .open(&path)
+        .map_err(storage_error("open registry-derived source inventory"))?;
+    #[cfg(unix)]
+    {
+        let metadata = file
+            .metadata()
+            .map_err(storage_error("inspect registry-derived source inventory"))?;
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "registry-derived source inventory is not owner-private".to_owned(),
+            ));
+        }
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(storage_error("read registry-derived source inventory"))?;
+    let inventory: GlobalSourceInventory = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!(
+            "registry-derived source inventory is malformed: {error}"
+        ))
+    })?;
+    if inventory.schema_version != 1 {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "registry-derived source inventory has unsupported schema version {}",
+            inventory.schema_version
+        )));
+    }
+    Ok(inventory)
+}
+
+fn write_global_source_inventory(
+    root: &Path,
+    files: BTreeMap<String, GlobalSourceInventoryEntry>,
+) -> Result<()> {
+    let directory = root.join("inventory");
+    ensure_owner_private_directory(&directory)?;
+    let destination = global_source_inventory_path(root);
+    let temporary = directory.join(format!(
+        ".registry-derived.{}.{}.tmp",
+        std::process::id(),
+        epoch_micros()
+    ));
+    let inventory = GlobalSourceInventory {
+        schema_version: 1,
+        observed_at_us: epoch_micros(),
+        files,
+    };
+    let mut bytes = serde_json::to_vec(&inventory).map_err(serialization_error)?;
+    bytes.push(b'\n');
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let result = (|| {
+        let mut file = options
+            .open(&temporary)
+            .map_err(storage_error("create registry-derived source inventory"))?;
+        file.write_all(&bytes)
+            .map_err(storage_error("write registry-derived source inventory"))?;
+        file.sync_all()
+            .map_err(storage_error("sync registry-derived source inventory"))?;
+        drop(file);
+        fs::rename(&temporary, &destination)
+            .map_err(storage_error("publish registry-derived source inventory"))?;
+        sync_directory(&directory)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn archive_reference(
     archive_path: PathBuf,
     manifest: &workvcs_core::SourceArchiveManifest,
@@ -1461,6 +2364,223 @@ fn failed_catalog_source(
     }
 }
 
+fn ready_global_archive_catalog_source(
+    member: &RegistryDerivedMember,
+    reference: &SourceArchiveReference,
+) -> Result<AutomationCatalogSource> {
+    let inspection = Engine::inspect_source_archive(SourceArchiveInspectOptions::new(
+        member.identity(),
+        &reference.artifact_path,
+    ))?;
+    if !inspection.archive_readback_verified
+        || inspection.manifest.manifest_sha256 != reference.artifact_manifest_sha256
+    {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "remembered registry-derived source archive manifest or readback changed".to_owned(),
+        ));
+    }
+    let inspected = archive_reference(inspection.archive_path, &inspection.manifest)?;
+    if &inspected != reference {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "remembered registry-derived source archive reference does not match immutable archive contents"
+                .to_owned(),
+        ));
+    }
+    Ok(AutomationCatalogSource {
+        registration_id: member.catalog_member_id(),
+        project_ref_id: member.project_ref_id,
+        lane: AutomationLane::HistoricalReference,
+        artifact_kind: AutomationArtifactKind::SourceArchive,
+        artifact_path: reference.artifact_path.clone(),
+        artifact_manifest_sha256: reference.artifact_manifest_sha256.clone(),
+        source_anchor: reference.source_anchor.clone(),
+        status: AutomationSourceStatus::Ready,
+        error_code: None,
+        error: None,
+    })
+}
+
+fn failed_global_catalog_source(
+    member: &RegistryDerivedMember,
+    lane: AutomationLane,
+    artifact_kind: AutomationArtifactKind,
+    artifact_path: PathBuf,
+    error_code: &str,
+    error: &str,
+) -> AutomationCatalogSource {
+    AutomationCatalogSource {
+        registration_id: member.catalog_member_id(),
+        project_ref_id: member.project_ref_id,
+        lane,
+        artifact_kind,
+        artifact_path,
+        artifact_manifest_sha256: "0".repeat(64),
+        source_anchor: "unavailable".to_owned(),
+        status: AutomationSourceStatus::Failed,
+        error_code: Some(error_code.to_owned()),
+        error: Some(error.to_owned()),
+    }
+}
+
+fn failed_unattributed_catalog_source(
+    artifact_path: PathBuf,
+    error_code: &str,
+    error: &str,
+) -> Result<AutomationCatalogSource> {
+    // Catalog v1 sources require a ProjectRef even for failures.  This fixed
+    // non-member sentinel keeps an attribution failure visible without
+    // asserting that it belongs to a real ProjectRef.
+    let project_ref_id = ProjectRefId::parse_canonical("01900000-0000-7000-8000-000000000000")?;
+    Ok(AutomationCatalogSource {
+        registration_id: "registry-derived-quarantine".to_owned(),
+        project_ref_id,
+        lane: AutomationLane::HistoricalReference,
+        artifact_kind: AutomationArtifactKind::SourceArchive,
+        artifact_path,
+        artifact_manifest_sha256: "0".repeat(64),
+        source_anchor: "quarantine:unattributed".to_owned(),
+        status: AutomationSourceStatus::Failed,
+        error_code: Some(error_code.to_owned()),
+        error: Some(error.to_owned()),
+    })
+}
+
+fn rollout_cwd_from_session_meta(source: &Path) -> Result<PathBuf> {
+    let bytes = fs::read(source).map_err(storage_error("read rollout metadata"))?;
+    let mut observed = None::<String>;
+    let mut session_meta_records = 0_usize;
+    for (offset, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_slice(line).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "rollout source {} line {} is invalid JSON: {error}",
+                source.display(),
+                offset + 1
+            ))
+        })?;
+        if value.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        session_meta_records += 1;
+        let cwd = value
+            .get("payload")
+            .and_then(|payload| payload.get("cwd"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "rollout source {} session_meta has no trusted cwd",
+                    source.display()
+                ))
+            })?;
+        let candidate = Path::new(cwd);
+        if !candidate.is_absolute()
+            || candidate.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "rollout source {} session_meta cwd is not an absolute normalized path",
+                source.display()
+            )));
+        }
+        if let Some(previous) = &observed {
+            if previous != cwd {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "rollout source {} has inconsistent session_meta cwd values",
+                    source.display()
+                )));
+            }
+        } else {
+            observed = Some(cwd.to_owned());
+        }
+    }
+    if session_meta_records == 0 {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "rollout source {} has no session_meta metadata",
+            source.display()
+        )));
+    }
+    observed.map(PathBuf::from).ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "rollout source {} has no usable session_meta cwd",
+            source.display()
+        ))
+    })
+}
+
+fn resolve_registry_derived_source_member(
+    source: &Path,
+    membership: &RegistryDerivedMembership,
+) -> Result<RegistryDerivedMember> {
+    let cwd = rollout_cwd_from_session_meta(source)?;
+    let discovery = discover_project_readonly_with_locator(
+        cwd,
+        Some(membership.registry_path.clone()),
+        None,
+        None,
+        None,
+    )?;
+    if discovery.registry_path != membership.registry_path
+        || discovery.registry_revision != Some(membership.registry_revision)
+        || discovery.registry_digest.to_string() != membership.registry_digest
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "ProjectRef registry changed while resolving rollout source attribution".to_owned(),
+        ));
+    }
+    let project_ref_id = discovery.project_ref_id.ok_or_else(|| {
+        WorkVcsError::ControlPlaneInvalid(
+            "rollout source resolution did not yield a ProjectRef".to_owned(),
+        )
+    })?;
+    let member = membership
+        .members
+        .iter()
+        .find(|member| member.project_ref_id == project_ref_id)
+        .cloned()
+        .ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(format!(
+                "rollout source ProjectRef {project_ref_id} is not in the selected registry membership"
+            ))
+        })?;
+    if Path::new(&discovery.binding.store_path) != member.store_path
+        || discovery.binding.store_id != member.store_id
+        || discovery.binding.workspace_id != member.workspace_id
+        || discovery.binding.branch_id != member.branch_id
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "rollout source ProjectRef binding changed while resolving attribution".to_owned(),
+        ));
+    }
+    Ok(member)
+}
+
+fn source_policy_excludes_member(
+    source: &AutomationSourcePolicyEntry,
+    member: &RegistryDerivedMember,
+) -> bool {
+    source
+        .excluded_project_refs
+        .binary_search(&member.project_ref_id)
+        .is_ok()
+}
+
+fn active_registry_member(
+    membership: &RegistryDerivedMembership,
+    candidate: &RegistryDerivedMember,
+) -> Option<RegistryDerivedMember> {
+    membership
+        .members
+        .iter()
+        .find(|member| *member == candidate)
+        .cloned()
+}
+
 fn run_catalog(command: AutomationCatalogCommand) -> Result<String> {
     match command {
         AutomationCatalogCommand::Show { catalog } => {
@@ -1469,7 +2589,10 @@ fn run_catalog(command: AutomationCatalogCommand) -> Result<String> {
         }
         AutomationCatalogCommand::Latest { registry, root } => {
             let root = resolve_automation_root(root, registry.as_deref())?;
-            render_json(&latest_catalog_for_current_basis(&root)?)
+            render_json(&latest_catalog_for_current_basis(
+                &root,
+                registry.as_deref(),
+            )?)
         }
         AutomationCatalogCommand::Query {
             registry,
@@ -1486,16 +2609,28 @@ fn run_catalog(command: AutomationCatalogCommand) -> Result<String> {
             let root = resolve_automation_root(root, registry.as_deref())?;
             let catalog = match catalog {
                 Some(catalog) => catalog,
-                None => latest_catalog_for_current_basis(&root)?.catalog_path,
+                None => latest_catalog_for_current_basis(&root, registry.as_deref())?.catalog_path,
             };
-            let report = query_catalog(&root, &catalog, &query, limit)?;
+            let report = query_catalog(&root, registry.as_deref(), &catalog, &query, limit)?;
             render_json(&report)
         }
     }
 }
 
-fn latest_catalog_for_current_basis(root: &Path) -> Result<CatalogLatestReport> {
-    let registry = read_automation_registry(root)?;
+fn latest_catalog_for_current_basis(
+    root: &Path,
+    project_registry: Option<&Path>,
+) -> Result<CatalogLatestReport> {
+    let global_mode = automation_source_policy_path(root).exists();
+    let membership = global_mode
+        .then(|| registry_derived_membership(project_registry))
+        .transpose()?;
+    let source_policy = global_mode
+        .then(|| read_automation_source_policy(root))
+        .transpose()?;
+    let legacy_registry = (!global_mode)
+        .then(|| read_automation_registry(root))
+        .transpose()?;
     let catalogs = root.join("catalogs");
     let entries = fs::read_dir(&catalogs).map_err(storage_error("read automation catalogs"))?;
     let mut selected: Option<(PathBuf, AutomationCatalogManifest)> = None;
@@ -1507,9 +2642,24 @@ fn latest_catalog_for_current_basis(root: &Path) -> Result<CatalogLatestReport> 
         }
         let path = entry.path();
         let manifest = read_automation_catalog(&path)?;
-        if manifest.automation_registry_revision != registry.revision
-            || manifest.automation_registry_digest_sha256 != registry.digest_sha256
+        let matches = if let (Some(membership), Some(source_policy)) = (&membership, &source_policy)
         {
+            manifest.project_registry_id.as_deref() == Some(membership.registry_id.as_str())
+                && manifest.project_registry_revision == Some(membership.registry_revision)
+                && manifest.project_registry_digest.as_deref()
+                    == Some(membership.registry_digest.as_str())
+                && manifest.source_policy_revision == Some(source_policy.revision)
+                && manifest.source_policy_digest_sha256.as_deref()
+                    == Some(source_policy.digest_sha256.as_str())
+        } else if let Some(registry) = &legacy_registry {
+            manifest.project_registry_id.is_none()
+                && manifest.project_registry_revision.is_none()
+                && manifest.automation_registry_revision == registry.revision
+                && manifest.automation_registry_digest_sha256 == registry.digest_sha256
+        } else {
+            false
+        };
+        if !matches {
             continue;
         }
         let should_select = selected
@@ -1522,9 +2672,12 @@ fn latest_catalog_for_current_basis(root: &Path) -> Result<CatalogLatestReport> 
         }
     }
     let (catalog_path, manifest) = selected.ok_or_else(|| {
-        WorkVcsError::ControlPlaneInvalid(
-            "no immutable catalog matches the current automation registry basis".to_owned(),
-        )
+        WorkVcsError::ControlPlaneInvalid(if global_mode {
+            "no immutable catalog matches the current ProjectRef registry and source-policy basis"
+                .to_owned()
+        } else {
+            "no immutable catalog matches the current automation registry basis".to_owned()
+        })
     })?;
     let catalog_manifest_sha256 = catalog_path
         .file_name()
@@ -1544,29 +2697,84 @@ fn latest_catalog_for_current_basis(root: &Path) -> Result<CatalogLatestReport> 
 
 fn query_catalog(
     root: &Path,
+    project_registry: Option<&Path>,
     catalog_path: &Path,
     query: &str,
     limit: Option<usize>,
 ) -> Result<CatalogQueryReport> {
     let catalog = read_automation_catalog(catalog_path)?;
-    let registry = read_automation_registry(root)?;
-    if catalog.automation_registry_revision != registry.revision
-        || catalog.automation_registry_digest_sha256 != registry.digest_sha256
-    {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "catalog registration basis is stale: catalog revision {} digest {}, current revision {} digest {}",
-            catalog.automation_registry_revision,
-            catalog.automation_registry_digest_sha256,
-            registry.revision,
-            registry.digest_sha256
-        )));
-    }
-    let registrations = registry
-        .registrations
-        .iter()
-        .filter(|item| item.enabled && !item.revoked)
-        .map(|item| (item.registration_id.as_str(), item))
-        .collect::<BTreeMap<_, _>>();
+    let bindings = if catalog.project_registry_revision.is_some() {
+        if !automation_source_policy_path(root).exists() {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "registry-derived catalog is stale because global source-policy mode is no longer active"
+                    .to_owned(),
+            ));
+        }
+        let membership = registry_derived_membership(project_registry)?;
+        let source_policy = read_automation_source_policy(root)?;
+        if catalog.project_registry_id.as_deref() != Some(membership.registry_id.as_str())
+            || catalog.project_registry_revision != Some(membership.registry_revision)
+            || catalog.project_registry_digest.as_deref()
+                != Some(membership.registry_digest.as_str())
+            || catalog.source_policy_revision != Some(source_policy.revision)
+            || catalog.source_policy_digest_sha256.as_deref()
+                != Some(source_policy.digest_sha256.as_str())
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "registry-derived catalog membership or source-policy basis is stale".to_owned(),
+            ));
+        }
+        membership
+            .members
+            .into_iter()
+            .map(|member| {
+                (
+                    member.catalog_member_id(),
+                    CatalogSourceBinding {
+                        identity: member.identity(),
+                        store_path: member.store_path,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        if automation_source_policy_path(root).exists() {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "legacy catalog is stale because global source-policy mode is active".to_owned(),
+            ));
+        }
+        let registry = read_automation_registry(root)?;
+        if catalog.automation_registry_revision != registry.revision
+            || catalog.automation_registry_digest_sha256 != registry.digest_sha256
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "catalog registration basis is stale: catalog revision {} digest {}, current revision {} digest {}",
+                catalog.automation_registry_revision,
+                catalog.automation_registry_digest_sha256,
+                registry.revision,
+                registry.digest_sha256
+            )));
+        }
+        registry
+            .registrations
+            .iter()
+            .filter(|item| item.enabled && !item.revoked)
+            .map(|item| {
+                (
+                    item.registration_id.clone(),
+                    CatalogSourceBinding {
+                        identity: SearchSourceIdentity::new(
+                            item.project_ref_id,
+                            item.store_id,
+                            item.workspace_id,
+                            item.branch_id,
+                        ),
+                        store_path: item.store_path.clone(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
     let mut reports = Vec::new();
     let mut items = Vec::new();
     let mut failed = 0;
@@ -1589,7 +2797,7 @@ fn query_catalog(
             });
             continue;
         }
-        let Some(registration) = registrations.get(source.registration_id.as_str()) else {
+        let Some(binding) = bindings.get(source.registration_id.as_str()) else {
             failed += 1;
             reports.push(CatalogQuerySourceReport {
                 registration_id: source.registration_id.clone(),
@@ -1598,14 +2806,14 @@ fn query_catalog(
                 artifact_kind: source.artifact_kind,
                 artifact_path: source.artifact_path.clone(),
                 source_anchor: source.source_anchor.clone(),
-                status: "revoked_or_unregistered".to_owned(),
-                error_code: Some("registration_not_active".to_owned()),
-                error: Some("catalog source registration is no longer active".to_owned()),
+                status: "not_in_current_membership".to_owned(),
+                error_code: Some("membership_not_active".to_owned()),
+                error: Some("catalog source membership is no longer active".to_owned()),
                 matched_items: 0,
             });
             continue;
         };
-        let result = query_catalog_source(registration, source, query);
+        let result = query_catalog_source(binding, source, query);
         match result {
             Ok(mut source_items) => {
                 succeeded += 1;
@@ -1685,21 +2893,15 @@ fn query_catalog(
 }
 
 fn query_catalog_source(
-    registration: &AutomationRegistration,
+    binding: &CatalogSourceBinding,
     source: &AutomationCatalogSource,
     query: &str,
 ) -> Result<Vec<CatalogQueryItem>> {
-    let identity = SearchSourceIdentity::new(
-        registration.project_ref_id,
-        registration.store_id,
-        registration.workspace_id,
-        registration.branch_id,
-    );
     match source.artifact_kind {
         AutomationArtifactKind::LexicalGeneration => {
-            let engine = Engine::open_readonly(&registration.store_path)?;
+            let engine = Engine::open_readonly(&binding.store_path)?;
             let result = engine.search(SearchQueryOptions::new(
-                identity,
+                binding.identity,
                 &source.artifact_path,
                 query,
             )?)?;
@@ -1738,7 +2940,7 @@ fn query_catalog_source(
         }
         AutomationArtifactKind::SourceArchive => {
             let result = Engine::query_source_archive(SourceArchiveQueryOptions::new(
-                identity,
+                binding.identity,
                 &source.artifact_path,
                 query,
             )?)?;
@@ -1862,7 +3064,7 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
         launch_agent_installed: false,
     };
     let startup = spawn_reconcile_worker(root, registry)?;
-    record_worker(&mut ledger, "startup", startup, root)?;
+    record_worker_with_registry(&mut ledger, "startup", startup, root, registry)?;
     project_watcher_health(&watcher_health, &mut ledger);
     write_daemon_ledger(&runtime, &ledger)?;
     let mut periodic_deadline = Instant::now() + Duration::from_secs(periodic_seconds);
@@ -1876,14 +3078,20 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
         project_watcher_health(&watcher_health, &mut ledger);
         if dirty_since.is_some_and(|instant| instant.elapsed() >= Duration::from_millis(250)) {
             let outcome = spawn_reconcile_worker(root, registry)?;
-            record_worker(&mut ledger, "watcher_dirty_or_overflow", outcome, root)?;
+            record_worker_with_registry(
+                &mut ledger,
+                "watcher_dirty_or_overflow",
+                outcome,
+                root,
+                registry,
+            )?;
             dirty_since = None;
             project_watcher_health(&watcher_health, &mut ledger);
             write_daemon_ledger(&runtime, &ledger)?;
         }
         if Instant::now() >= periodic_deadline {
             let outcome = spawn_reconcile_worker(root, registry)?;
-            record_worker(&mut ledger, "periodic", outcome, root)?;
+            record_worker_with_registry(&mut ledger, "periodic", outcome, root, registry)?;
             periodic_deadline = Instant::now() + Duration::from_secs(periodic_seconds);
             project_watcher_health(&watcher_health, &mut ledger);
             write_daemon_ledger(&runtime, &ledger)?;
@@ -1959,7 +3167,13 @@ fn run_daemon(root: &Path, registry: Option<&Path>, periodic_seconds: u64) -> Re
                         }
                         "reconcile" => {
                             let outcome = spawn_reconcile_worker(root, registry)?;
-                            record_worker(&mut ledger, "manual", outcome, root)?;
+                            record_worker_with_registry(
+                                &mut ledger,
+                                "manual",
+                                outcome,
+                                root,
+                                registry,
+                            )?;
                             project_watcher_health(&watcher_health, &mut ledger);
                             response.worker_exit_code = ledger.last_worker_exit_code;
                             project_worker_status(&ledger, &mut response);
@@ -2310,12 +3524,23 @@ fn read_private_runtime_file(path: &Path, expected_max: usize) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn record_worker(
     ledger: &mut DaemonLedger,
     trigger: &str,
     outcome: WorkerOutcome,
     root: &Path,
+) -> Result<()> {
+    record_worker_with_registry(ledger, trigger, outcome, root, None)
+}
+
+#[cfg(unix)]
+fn record_worker_with_registry(
+    ledger: &mut DaemonLedger,
+    trigger: &str,
+    outcome: WorkerOutcome,
+    root: &Path,
+    project_registry: Option<&Path>,
 ) -> Result<()> {
     let evidence_path = persist_worker_evidence(root, trigger, &outcome)?;
     ledger.updated_at_us = epoch_micros();
@@ -2402,7 +3627,7 @@ fn record_worker(
         ));
         return Ok(());
     }
-    let latest = match latest_catalog_for_current_basis(root) {
+    let latest = match latest_catalog_for_current_basis(root, project_registry) {
         Ok(latest) => latest,
         Err(error) => {
             ledger.last_error = Some(format!(
@@ -2418,6 +3643,11 @@ fn record_worker(
         || latest.manifest.automation_registry_revision != report.automation_registry_revision
         || latest.manifest.automation_registry_digest_sha256
             != report.automation_registry_digest_sha256
+        || latest.manifest.project_registry_id != report.project_registry_id
+        || latest.manifest.project_registry_revision != report.project_registry_revision
+        || latest.manifest.project_registry_digest != report.project_registry_digest
+        || latest.manifest.source_policy_revision != report.source_policy_revision
+        || latest.manifest.source_policy_digest_sha256 != report.source_policy_digest_sha256
     {
         ledger.last_error = Some(format!(
             "reconciliation worker report does not match exact current-basis catalog readback; exact evidence: {}",
@@ -2775,6 +4005,7 @@ fn storage_error(context: &'static str) -> impl Fn(std::io::Error) -> WorkVcsErr
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use workvcs_core::automation::AUTOMATION_CATALOG_FORMAT_VERSION;
 
     fn write_test_rollout(path: &Path, text: &str) {
         let thread = "01900000-0000-7000-8000-000000000001";
@@ -2836,6 +4067,179 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
         (automation_root, registration, rollout_root, source)
+    }
+
+    struct RegistryDerivedAutomationFixture {
+        automation_root: PathBuf,
+        registry_path: PathBuf,
+        rollout_root: PathBuf,
+        project_ref_id: ProjectRefId,
+    }
+
+    fn write_registry_derived_test_rollout(path: &Path, cwd: &Path, text: &str) {
+        let thread = "01900000-0000-7000-8000-000000000011";
+        let user = "01900000-0000-7000-8000-000000000012";
+        let assistant = "01900000-0000-7000-8000-000000000013";
+        let lines = [
+            serde_json::json!({
+                "type":"session_meta",
+                "timestamp":"2026-01-01T00:00:00Z",
+                "payload":{"id":thread,"cwd":cwd}
+            }),
+            serde_json::json!({
+                "type":"response_item",
+                "timestamp":"2026-01-01T00:00:01Z",
+                "payload":{"type":"message","role":"user","id":user,"content":[{"type":"input_text","text":text}]}
+            }),
+            serde_json::json!({
+                "type":"response_item",
+                "timestamp":"2026-01-01T00:00:02Z",
+                "payload":{"type":"message","role":"assistant","id":assistant,"content":[{"type":"output_text","text":"assistant text must be excluded"}]}
+            }),
+        ];
+        let bytes = lines
+            .into_iter()
+            .map(|line| serde_json::to_string(&line).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(path, format!("{bytes}\n")).unwrap();
+    }
+
+    fn registry_derived_automation_fixture(
+        temporary: &TempDir,
+    ) -> RegistryDerivedAutomationFixture {
+        let fixture_root = temporary.path().canonicalize().unwrap();
+        let automation_root = fixture_root.join("automation");
+        let project_root = fixture_root.join("project");
+        let rollout_root = fixture_root.join("rollouts");
+        let store_path = fixture_root.join("project.sqlite");
+        let registry_path = fixture_root.join("project-bindings.json");
+        fs::create_dir(&automation_root).unwrap();
+        fs::create_dir(&project_root).unwrap();
+        fs::create_dir(&rollout_root).unwrap();
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&automation_root, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::set_permissions(&rollout_root, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let mut engine = Engine::init(
+            &store_path,
+            StoreInitOptions::new("registry-derived-automation").unwrap(),
+        )
+        .unwrap();
+        let store_id = engine.store_info().unwrap().store_id;
+        let workspace = engine
+            .create_workspace(WorkspaceInitOptions::new("registry-derived-automation").unwrap())
+            .unwrap();
+        engine
+            .create_record(
+                RecordCreateOptions::finding(
+                    workspace.initial_branch_id,
+                    workspace.genesis_commit_id,
+                    "registry derived canonical evidence",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let project_root = project_root.canonicalize().unwrap();
+        let store_path = store_path.canonicalize().unwrap();
+        let project_ref_id = ProjectRefId::new_v7();
+        let registry_id = workvcs_core::RegistryId::new_v7();
+        let registry_value = serde_json::json!({
+            "version": 2,
+            "registry_id": registry_id,
+            "revision": 1,
+            "projects": [{
+                "project_ref_id": project_ref_id,
+                "maturity": "provisional",
+                "display_name": null,
+                "created_at": "2026-01-01T00:00:00Z",
+                "created_by": "cwd_first_write"
+            }],
+            "locators": [{
+                "locator_id": workvcs_core::ProjectLocatorId::new_v7(),
+                "project_ref_id": project_ref_id,
+                "role": "identity",
+                "authority": "cwd",
+                "provider": "filesystem",
+                "namespace": format!("registry:{registry_id}"),
+                "kind": "canonical_directory",
+                "normalized_value": project_root,
+                "assurance": "verified_derived",
+                "source_adapter": "workvcs-filesystem-v1",
+                "evidence_digest": ControlPlaneDigest::raw(b"registry-derived-automation"),
+                "observed_at": "2026-01-01T00:00:00Z",
+                "state": "active"
+            }],
+            "bindings": [{
+                "project_ref_id": project_ref_id,
+                "store_path": store_path,
+                "store_id": store_id,
+                "workspace_id": workspace.workspace_id,
+                "branch_id": workspace.initial_branch_id,
+                "bound_at": "2026-01-01T00:00:00Z",
+                "binding_source": "first_write"
+            }],
+            "links": [],
+            "observations": [],
+            "migration": null
+        });
+        let registry =
+            ProjectRegistryV2::from_json_bytes(&serde_json::to_vec(&registry_value).unwrap())
+                .unwrap();
+        fs::write(&registry_path, registry.stored_json_bytes().unwrap()).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let effective = effective_registry_config(Some(registry_path.clone())).unwrap();
+        let activation_path = routing_activation_path(&effective, &registry_path);
+        fs::create_dir_all(activation_path.parent().unwrap()).unwrap();
+        let activation = RoutingActivationCandidate::for_registry(&registry).unwrap();
+        fs::write(&activation_path, activation.stored_json_bytes().unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            fs::set_permissions(
+                activation_path.parent().unwrap(),
+                fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+            fs::set_permissions(&activation_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        write_registry_derived_test_rollout(
+            &rollout_root.join("thread.jsonl"),
+            &project_root,
+            "registry derived historical evidence",
+        );
+        RegistryDerivedAutomationFixture {
+            automation_root,
+            registry_path,
+            rollout_root,
+            project_ref_id,
+        }
+    }
+
+    fn install_registry_derived_source_policy(
+        fixture: &RegistryDerivedAutomationFixture,
+        excluded_project_refs: Vec<ProjectRefId>,
+    ) {
+        let proposal = AutomationSourcePolicyProposal {
+            source_id: "rollouts".to_owned(),
+            rollout_root: fixture.rollout_root.clone(),
+            role_policy: AutomationRolePolicy::UserOnly,
+            excluded_project_refs,
+        };
+        let preview =
+            preview_automation_source_policy(&fixture.automation_root, proposal.clone()).unwrap();
+        apply_automation_source_policy(
+            &fixture.automation_root,
+            preview.policy_revision,
+            &preview.policy_digest_sha256,
+            proposal,
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]
@@ -3004,6 +4408,118 @@ mod tests {
     }
 
     #[test]
+    fn registry_derived_reconcile_uses_project_membership_and_user_only_policy() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let first = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(first.status, "completed", "{first:#?}");
+        assert!(first.complete);
+        assert_eq!(first.membership_mode, "registry_derived");
+        assert_eq!(first.registrations_considered, 1);
+        assert_eq!(first.canonical_generations_ready, 1);
+        assert_eq!(first.rollout_archives_ready, 1);
+        assert_eq!(first.rollout_archives_failed, 0);
+        assert!(first.project_registry_id.is_some());
+        assert!(first.project_registry_revision.is_some());
+        assert!(first.project_registry_digest.is_some());
+        assert!(first.source_policy_revision.is_some());
+        assert!(first.source_policy_digest_sha256.is_some());
+
+        let catalog = read_automation_catalog(&first.catalog_path).unwrap();
+        assert_eq!(catalog.format_version, AUTOMATION_CATALOG_FORMAT_VERSION);
+        assert_eq!(catalog.project_registry_id, first.project_registry_id);
+        assert_eq!(
+            catalog.project_registry_revision,
+            first.project_registry_revision
+        );
+        assert_eq!(
+            catalog.project_registry_digest,
+            first.project_registry_digest
+        );
+        assert_eq!(catalog.source_policy_revision, first.source_policy_revision);
+        assert_eq!(
+            catalog.source_policy_digest_sha256,
+            first.source_policy_digest_sha256
+        );
+        let archive = catalog
+            .sources
+            .iter()
+            .find(|source| {
+                source.lane == AutomationLane::HistoricalReference
+                    && source.artifact_kind == AutomationArtifactKind::SourceArchive
+                    && source.status == AutomationSourceStatus::Ready
+            })
+            .unwrap();
+        assert_eq!(archive.project_ref_id, fixture.project_ref_id);
+        assert!(
+            archive.artifact_path.starts_with(
+                fixture
+                    .automation_root
+                    .join("history")
+                    .join("registry-derived")
+            )
+        );
+
+        let user_query = query_catalog(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &first.catalog_path,
+            "registry derived historical evidence",
+            None,
+        )
+        .unwrap();
+        assert_eq!(user_query.status, "completed");
+        assert!(user_query.complete);
+        assert!(user_query.matched_items >= 1);
+        let assistant_query = query_catalog(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &first.catalog_path,
+            "assistant text must be excluded",
+            None,
+        )
+        .unwrap();
+        assert_eq!(assistant_query.matched_items, 0);
+
+        let second =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(second.status, "completed");
+        assert_eq!(second.rollout_files_unchanged, 1);
+        assert_eq!(second.rollout_archives_ready, 1);
+    }
+
+    #[test]
+    fn registry_derived_reconcile_quarantines_excluded_project_sources() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, vec![fixture.project_ref_id]);
+
+        let report =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(report.status, "partial_failure", "{report:#?}");
+        assert!(!report.complete);
+        assert_eq!(report.canonical_generations_ready, 1);
+        assert_eq!(report.rollout_archives_ready, 0);
+        assert_eq!(report.rollout_archives_failed, 1);
+        let catalog = read_automation_catalog(&report.catalog_path).unwrap();
+        assert!(catalog.sources.iter().all(|source| {
+            source.lane != AutomationLane::HistoricalReference
+                || source.status != AutomationSourceStatus::Ready
+        }));
+        assert!(catalog.sources.iter().any(|source| {
+            source.lane == AutomationLane::HistoricalReference
+                && source.status == AutomationSourceStatus::Failed
+                && source
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("excluded ProjectRef"))
+        }));
+        assert!(!fixture.automation_root.join("history").exists());
+    }
+
+    #[test]
     fn canonical_failure_does_not_skip_history_and_missing_root_retains_archive() {
         let temporary = TempDir::new().unwrap();
         let (root, registration, rollout_root, source) = automation_fixture(&temporary);
@@ -3076,7 +4592,7 @@ mod tests {
         assert_eq!(report.canonical_generations_ready, 0);
         assert!(report.canonical_generations_failed >= 1);
 
-        let query = query_catalog(&root, &report.catalog_path, "unavailable", None).unwrap();
+        let query = query_catalog(&root, None, &report.catalog_path, "unavailable", None).unwrap();
         assert_eq!(query.status, "failed");
         assert!(!query.complete);
         assert_eq!(query.sources_succeeded, 0);
@@ -3095,7 +4611,7 @@ mod tests {
         assert!(!catalog.complete);
         assert!(catalog.sources.is_empty());
 
-        let query = query_catalog(root, &report.catalog_path, "no sources", None).unwrap();
+        let query = query_catalog(root, None, &report.catalog_path, "no sources", None).unwrap();
         assert_eq!(query.status, "failed");
         assert!(!query.complete);
         assert_eq!(query.sources_requested, 0);
@@ -3160,7 +4676,8 @@ mod tests {
         );
 
         let user_query = "retained historical evidence";
-        let catalog_user = query_catalog(&root, &report.catalog_path, user_query, None).unwrap();
+        let catalog_user =
+            query_catalog(&root, None, &report.catalog_path, user_query, None).unwrap();
         let explicit_user = Engine::query_source_archive(
             SourceArchiveQueryOptions::new(identity, &history.artifact_path, user_query).unwrap(),
         )
@@ -3194,7 +4711,8 @@ mod tests {
                     && item.federated_score == 1.0 / (60.0 + (index + 1) as f64))
         );
 
-        let catalog_assistant = query_catalog(&root, &report.catalog_path, "answer", None).unwrap();
+        let catalog_assistant =
+            query_catalog(&root, None, &report.catalog_path, "answer", None).unwrap();
         let explicit_assistant = Engine::query_source_archive(
             SourceArchiveQueryOptions::new(identity, &history.artifact_path, "answer").unwrap(),
         )
@@ -3317,7 +4835,7 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        let latest = latest_catalog_for_current_basis(&root).unwrap();
+        let latest = latest_catalog_for_current_basis(&root, None).unwrap();
         assert_eq!(latest.catalog_path, published.catalog_path);
         assert_eq!(latest.catalog_manifest_sha256, published.manifest_sha256);
         assert!(!latest.manifest.complete);
@@ -3500,8 +5018,14 @@ mod tests {
         let report = ReconcileReport {
             status: "failed".to_owned(),
             complete: false,
+            membership_mode: "legacy_registration".to_owned(),
             automation_registry_revision: registry.revision,
             automation_registry_digest_sha256: registry.digest_sha256,
+            project_registry_id: None,
+            project_registry_revision: None,
+            project_registry_digest: None,
+            source_policy_revision: None,
+            source_policy_digest_sha256: None,
             registrations_considered: 1,
             registrations_ready: 0,
             registrations_quarantined: 1,

@@ -2119,7 +2119,21 @@ pub(crate) fn task_at(
     commit_id: CommitId,
     task_entity_id: EntityId,
 ) -> Result<TaskSnapshot> {
-    let replayed = state_at(connection, commit_id)?;
+    task_at_with_cache(
+        connection,
+        commit_id,
+        task_entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+pub(crate) fn task_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    task_entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<TaskSnapshot> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let Some(task_entity_version_id) =
         replayed
             .state

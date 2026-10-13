@@ -247,14 +247,17 @@ pub(crate) use bundle::{
 pub(crate) use checkpoint::{
     checkpoint, checkpoints, create_checkpoint, latest_usable_checkpoint, validate_checkpoint,
 };
-pub(crate) use containment::{create_primary_containment, primary_containment_relations_at};
+pub(crate) use containment::{
+    create_primary_containment, primary_containment_relations_at,
+    primary_containment_relations_at_with_cache,
+};
 pub(crate) use currentness::current_scope_at;
 pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;
 pub(crate) use evidence::{create_evidence, evidence, evidences};
 pub(crate) use external::{external_object_ref, external_object_refs, record_external_object_ref};
 pub(crate) use genesis::{create_workspace, load_workspace_info, workspaces};
-pub(crate) use goal::{create_goal, goal_at, goals_at, transition_goal};
+pub(crate) use goal::{create_goal, goal_at, goals_at, goals_at_with_cache, transition_goal};
 pub(crate) use integrity::{validate_integrity, validate_integrity_with_cache};
 pub(crate) use knowledge::{
     create_knowledge, knowledge_at, knowledge_version_state, knowledge_version_state_digest,
@@ -270,7 +273,7 @@ pub(crate) use knowledge_exposure::{
 pub(crate) use knowledge_space::{create_knowledge_space, knowledge_space, knowledge_spaces};
 pub(crate) use lineage::{record_store_lineage, store_lineage, store_lineages};
 pub(crate) use migration::{record_store_migration, store_migration, store_migrations};
-pub(crate) use plan::{create_plan, plan_at, plans_at, transition_plan};
+pub(crate) use plan::{create_plan, plan_at, plans_at, plans_at_with_cache, transition_plan};
 pub(crate) use projection::{
     branch_projection, mark_branch_projection_not_materialized, refresh_branch_projection,
 };
@@ -291,7 +294,9 @@ pub(crate) use record::{
     restore_knowledge_relation, restore_record_knowledge_relation, restore_record_relation,
     supersede_decision_record, transition_record,
 };
-pub(crate) use reference::{create_structural_reference, structural_references_at};
+pub(crate) use reference::{
+    create_structural_reference, structural_references_at, structural_references_at_with_cache,
+};
 pub(crate) use replay::{ReplayCache, state_at, state_at_with_cache};
 pub(crate) use resource::{
     associate_workspace_resource, bind_resource, create_resource, record_resource_observation,
@@ -307,9 +312,10 @@ pub(crate) use task::{
     record_verification_applicability, refresh_verification_applicability,
     reject_reserved_semantic_entity_transition, revise_acceptance_criterion,
     revise_verification_requirement, task_at, task_scheduling_relations_at, tasks_at,
-    transition_task, verification_applicability_cache, verification_applicability_caches,
-    verification_at, verification_evidence_relations_at, verification_relations_at,
-    verification_requirement_at, verification_requirements_at, verifications_at,
+    tasks_at_with_cache, transition_task, verification_applicability_cache,
+    verification_applicability_caches, verification_at, verification_evidence_relations_at,
+    verification_relations_at, verification_requirement_at, verification_requirements_at,
+    verifications_at,
 };
 pub(crate) use task_disposition_audit::plan_task_disposition_audit;
 pub(crate) use why::explain_why;

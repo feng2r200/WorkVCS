@@ -1,6 +1,6 @@
 # ADR-0529: Single-user Local Automation Runtime
 
-Status: Accepted; implementation and local delivery authorized
+Status: Superseded in part by ADR-0531; legacy registration mode remains accepted
 Date: 2026-10-13
 Accepted by: The user's integrated WorkVCS post-V1 and Token-efficiency
 authorization after independent review. The execution contract is persisted in
@@ -14,6 +14,13 @@ local use dependent on repeated manual commands. A useful automatic layer must
 reduce deterministic coordination work without becoming another canonical
 state engine, hiding failures, or making local background execution an
 installation side effect.
+
+## Later supersession
+
+ADR-0531 supersedes the per-ProjectRef registration requirement for the new
+global-policy mode. This ADR continues to govern the legacy explicit-
+registration format, daemon safety boundaries, watcher semantics, worker
+lifecycle and the prohibition on canonical writes or automatic activation.
 
 ## Decision
 

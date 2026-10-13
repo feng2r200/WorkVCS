@@ -1,8 +1,8 @@
 use super::entity::canonical_json_string;
-use super::goal::{GOAL_ENTITY_KIND, goal_at};
-use super::plan::{PLAN_ENTITY_KIND, plan_at};
-use super::state_at;
-use super::task::{TASK_ENTITY_KIND, task_at};
+use super::goal::{GOAL_ENTITY_KIND, goal_at_with_cache};
+use super::plan::{PLAN_ENTITY_KIND, plan_at_with_cache};
+use super::task::{TASK_ENTITY_KIND, task_at_with_cache};
+use super::{ReplayCache, state_at, state_at_with_cache};
 use crate::canonical::{
     CanonicalValue, ImportDigestDomain, WorkState, relation_version_digest,
     validate_import_fixed_point, work_state_mapping_digest,
@@ -308,12 +308,21 @@ pub(crate) fn primary_containment_relations_at(
     connection: &StoreConnection,
     commit_id: CommitId,
 ) -> Result<Vec<PrimaryContainmentSnapshot>> {
-    let replayed = state_at(connection, commit_id)?;
-    let mut relations = load_primary_containment_relations(
+    primary_containment_relations_at_with_cache(connection, commit_id, &mut ReplayCache::default())
+}
+
+pub(crate) fn primary_containment_relations_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<PrimaryContainmentSnapshot>> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
+    let mut relations = load_primary_containment_relations_with_cache(
         connection,
         &replayed.state,
         replayed.workspace_id,
         commit_id,
+        replay_cache,
     )?;
 
     relations.sort_by(|left, right| {
@@ -362,14 +371,31 @@ fn load_primary_containment_relations(
     workspace_id: WorkspaceId,
     commit_id: CommitId,
 ) -> Result<Vec<PrimaryContainmentSnapshot>> {
+    load_primary_containment_relations_with_cache(
+        connection,
+        state,
+        workspace_id,
+        commit_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+fn load_primary_containment_relations_with_cache(
+    connection: &StoreConnection,
+    state: &WorkState,
+    workspace_id: WorkspaceId,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<PrimaryContainmentSnapshot>> {
     let mut relations = Vec::new();
     for (relation_id, relation_version_id) in state.relations() {
-        let Some(relation) = load_primary_containment_relation_version(
+        let Some(relation) = load_primary_containment_relation_version_with_cache(
             connection,
             workspace_id,
             commit_id,
             *relation_id,
             *relation_version_id,
+            replay_cache,
         )?
         else {
             continue;
@@ -379,12 +405,13 @@ fn load_primary_containment_relations(
     Ok(relations)
 }
 
-fn load_primary_containment_relation_version(
+fn load_primary_containment_relation_version_with_cache(
     connection: &StoreConnection,
     workspace_id: WorkspaceId,
     commit_id: CommitId,
     relation_id: RelationId,
     relation_version_id: RelationVersionId,
+    replay_cache: &mut ReplayCache,
 ) -> Result<Option<PrimaryContainmentSnapshot>> {
     let row = connection
         .inner()
@@ -492,8 +519,14 @@ fn load_primary_containment_relation_version(
 
     let parent_entity_id = decode_entity_id("relation.source_object_id", parent_entity_id)?;
     let child_entity_id = decode_entity_id("relation.target_object_id", child_entity_id)?;
-    let parent = load_containment_endpoint(connection, commit_id, parent_entity_id)?;
-    let child = load_containment_endpoint(connection, commit_id, child_entity_id)?;
+    let parent = load_containment_endpoint_with_cache(
+        connection,
+        commit_id,
+        parent_entity_id,
+        replay_cache,
+    )?;
+    let child =
+        load_containment_endpoint_with_cache(connection, commit_id, child_entity_id, replay_cache)?;
     if parent.workspace_id != workspace_id || child.workspace_id != workspace_id {
         return Err(WorkVcsError::RelationInvalid(format!(
             "primary containment relation {relation_id} endpoints must belong to workspace {workspace_id}"
@@ -519,6 +552,20 @@ fn load_containment_endpoint(
     commit_id: CommitId,
     entity_id: EntityId,
 ) -> Result<ContainmentEndpoint> {
+    load_containment_endpoint_with_cache(
+        connection,
+        commit_id,
+        entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+fn load_containment_endpoint_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<ContainmentEndpoint> {
     let Some((workspace_id, entity_kind)) = load_current_entity_kind(connection, entity_id)? else {
         return Err(WorkVcsError::RelationInvalid(format!(
             "primary containment endpoint entity {entity_id} does not exist"
@@ -531,19 +578,34 @@ fn load_containment_endpoint(
     };
 
     match kind {
-        PrimaryContainmentEndpointKind::Goal => goal_at(connection, commit_id, entity_id)
+        PrimaryContainmentEndpointKind::Goal => goal_at_with_cache(
+            connection,
+            commit_id,
+            entity_id,
+            replay_cache,
+        )
             .map(|snapshot| ContainmentEndpoint {
                 workspace_id: snapshot.workspace_id,
                 kind,
             })
             .map_err(relation_invalid_from),
-        PrimaryContainmentEndpointKind::Plan => plan_at(connection, commit_id, entity_id)
+        PrimaryContainmentEndpointKind::Plan => plan_at_with_cache(
+            connection,
+            commit_id,
+            entity_id,
+            replay_cache,
+        )
             .map(|snapshot| ContainmentEndpoint {
                 workspace_id: snapshot.workspace_id,
                 kind,
             })
             .map_err(relation_invalid_from),
-        PrimaryContainmentEndpointKind::Task => task_at(connection, commit_id, entity_id)
+        PrimaryContainmentEndpointKind::Task => task_at_with_cache(
+            connection,
+            commit_id,
+            entity_id,
+            replay_cache,
+        )
             .map(|snapshot| ContainmentEndpoint {
                 workspace_id: snapshot.workspace_id,
                 kind,

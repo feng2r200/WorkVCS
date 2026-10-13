@@ -367,14 +367,16 @@ generation. It adds no automatic import, global Knowledge Space, cross-Store
 mutation, Qdrant Server, watcher or resident service.
 
 ADR-0529 and ADR-0530 supersede only that final delivery exclusion for an
-optional post-V1 local layer. They add explicit registration, a
-disabled-by-default single-user coordinator, dirty-only watcher signals,
-startup/manual/overflow/periodic reconciliation through short-lived workers,
-automatic immutable history archives, and immutable lane-separated global
-derived catalog rounds. They do not alter V1 canonical Store semantics and add
-no LaunchAgent, automatic activation, semantic transcript extraction, mutable
-global Knowledge Space, cross-Store write, registry repair or automatic
-cleanup.
+optional post-V1 local layer. ADR-0531 further replaces per-ProjectRef
+enrollment in its global mode with a read-only snapshot of every valid active
+ProjectRef in the selected registry plus a separate, explicit global source
+policy. The layer remains a disabled-by-default single-user coordinator with
+dirty-only watcher signals, startup/manual/overflow/periodic reconciliation
+through short-lived workers, automatic immutable history archives, and
+immutable lane-separated global derived catalog rounds. It does not alter V1
+canonical Store semantics and adds no LaunchAgent, automatic activation,
+semantic transcript extraction, mutable global Knowledge Space, cross-Store
+write, registry repair or automatic cleanup.
 
 The first lexical contract was explicitly approved on 2026-10-12, and the
 semantic and remaining retrieval capabilities were accepted and authorized on
@@ -386,8 +388,9 @@ evidenced delivery states.
 ## Explicitly deferred beyond V1
 
 - automatic extraction of Findings and Decisions from transcripts; automatic
-  discovery is permitted only for explicitly registered roots and produces
-  non-authoritative immutable reference archives under ADR-0530;
+  discovery is permitted only for roots explicitly allowed by the separate
+  global source policy and produces non-authoritative immutable reference
+  archives under ADR-0530/0531;
 - LLM-generated semantic records without explicit Agent confirmation;
 - LLM-based semantic merge or natural-language conflict detection;
 - automatic knowledge distillation;

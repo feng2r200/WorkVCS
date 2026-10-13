@@ -1,6 +1,7 @@
 use super::{
-    GoalStatus, PlanStatus, TaskStatus, goals_at, plans_at, primary_containment_relations_at,
-    state_at, structural_references_at, tasks_at,
+    GoalStatus, PlanStatus, ReplayCache, TaskStatus, goals_at_with_cache, plans_at_with_cache,
+    primary_containment_relations_at_with_cache, state_at_with_cache,
+    structural_references_at_with_cache, tasks_at_with_cache,
 };
 use crate::error::Result;
 use crate::identity::{CommitId, EntityId, RelationId, RelationVersionId, WorkspaceId};
@@ -172,13 +173,15 @@ pub(crate) fn current_scope_at_with_overrides(
     commit_id: CommitId,
     overrides: &CurrentScopeOverrides,
 ) -> Result<CurrentScopeProjection> {
-    let goals = goals_at(connection, commit_id)?;
-    let plans = plans_at(connection, commit_id)?;
-    let tasks = tasks_at(connection, commit_id)?;
-    let containment = primary_containment_relations_at(connection, commit_id)?;
-    let references = structural_references_at(connection, commit_id)?;
+    let mut replay_cache = ReplayCache::default();
+    let goals = goals_at_with_cache(connection, commit_id, &mut replay_cache)?;
+    let plans = plans_at_with_cache(connection, commit_id, &mut replay_cache)?;
+    let tasks = tasks_at_with_cache(connection, commit_id, &mut replay_cache)?;
+    let containment =
+        primary_containment_relations_at_with_cache(connection, commit_id, &mut replay_cache)?;
+    let references = structural_references_at_with_cache(connection, commit_id, &mut replay_cache)?;
 
-    let workspace_id = state_at(connection, commit_id)?.workspace_id;
+    let workspace_id = state_at_with_cache(connection, commit_id, &mut replay_cache)?.workspace_id;
 
     let mut nodes = BTreeMap::new();
     for goal in goals {

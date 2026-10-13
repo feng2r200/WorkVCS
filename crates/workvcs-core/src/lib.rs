@@ -11,12 +11,17 @@ pub mod search;
 pub mod store;
 
 pub use automation::{
-    AutomationArtifactKind, AutomationCatalogManifest, AutomationCatalogPublication,
-    AutomationCatalogSource, AutomationLane, AutomationRegistration, AutomationRegistrationPreview,
-    AutomationRegistrationProposal, AutomationRegistrySnapshot, AutomationRolePolicy,
-    AutomationSourceStatus, apply_automation_registration, automation_registry_path,
-    preview_automation_registration, publish_automation_catalog, read_automation_catalog,
-    read_automation_registry, revoke_automation_registration, sha256_file,
+    AUTOMATION_SOURCE_POLICY_FORMAT_VERSION, AutomationArtifactKind, AutomationCatalogManifest,
+    AutomationCatalogPublication, AutomationCatalogSource, AutomationLane, AutomationRegistration,
+    AutomationRegistrationPreview, AutomationRegistrationProposal, AutomationRegistrySnapshot,
+    AutomationRolePolicy, AutomationSourcePolicyEntry, AutomationSourcePolicyPreview,
+    AutomationSourcePolicyProposal, AutomationSourcePolicySnapshot, AutomationSourceStatus,
+    RegistryDerivedCatalogBasis, apply_automation_registration, apply_automation_source_policy,
+    automation_registry_path, automation_source_policy_path, preview_automation_registration,
+    preview_automation_source_policy, publish_automation_catalog,
+    publish_registry_derived_automation_catalog, read_automation_catalog, read_automation_registry,
+    read_automation_source_policy, revoke_automation_registration, revoke_automation_source_policy,
+    sha256_file,
 };
 pub use canonical::{
     CanonicalValue, WorkState, canonical_bytes, content_object_digest, entity_version_digest,

@@ -141,9 +141,14 @@ There is no resident model process or background builder in this delivery.
 ## Optional Local Automation Runtime
 
 The post-V1 runtime is one per-user coordinator, disabled unless the user
-starts it explicitly. Registration preview is read-only and apply uses the
-exact automation-registry revision and digest. Its owner-private, versioned
-Unix socket accepts bounded local control messages only from the same user.
+starts it explicitly. In legacy mode, registration preview is read-only and
+apply uses the exact automation-registry revision and digest. In the current
+global-policy mode, a selected registry-v2 read yields the complete valid
+ProjectRef member snapshot while a separate owner-private source policy grants
+exact rollout-root permission. The two bases are captured independently in
+every round; neither can bootstrap a ProjectRef or infer arbitrary filesystem
+permission. Its owner-private, versioned Unix socket accepts bounded local
+control messages only from the same user.
 The daemon owns no canonical Store, model or index handle. Startup, manual,
 watcher-overflow and periodic reconciliation spawn short-lived workers that use
 the same foreground operation and publication contracts.
@@ -245,12 +250,16 @@ that proof per source. Source-archive results instead carry their immutable
 rollout provenance and fixed non-authoritative labels; they are never presented
 as native canonical readback.
 
-Automatic reconciliation remembers the last successful archive reference per
-rollout source. It revalidates that immutable artifact for unchanged input and
-keeps it in the historical-reference lane after source deletion or a failed
-replacement import. The same catalog round also carries an explicit failed
-source observation, so preserved historical retrieval and current source health
-remain separate and the aggregate result stays incomplete.
+Automatic reconciliation scans each policy-approved shared rollout root once,
+verifies session metadata against the selected registry member snapshot before
+importing a body, and remembers the last successful archive reference per
+attributed source. It revalidates that immutable artifact for unchanged input
+and keeps it in the historical-reference lane after source deletion or a failed
+replacement import. Conflicting, unbound, excluded or drifted attribution is a
+quarantine observation, not a fallback to another ProjectRef. The same catalog
+round also carries explicit failed or quarantined source observations, so
+preserved historical retrieval and current source health remain separate and
+the aggregate result stays incomplete.
 
 The result exposes source/temporal scope, original status and provenance, native
 readback result, complete canonical statement and all matching source ranges.
@@ -292,9 +301,10 @@ derived catalogs and foreground-compatible incremental work. Current exact
 reads, deterministic context resolution, lifecycle, runnable state and
 authorization retain their existing contracts.
 
-This scope includes only explicitly registered automatic transcript discovery
-into the historical-reference lane and the disabled-by-default local runtime
-defined by ADR-0529/0530. It still excludes canonical transcript extraction,
+This scope includes only explicitly policy-authorized automatic transcript
+discovery into the historical-reference lane and the disabled-by-default local
+runtime defined by ADR-0529/0530 as amended by ADR-0531. It still excludes
+canonical transcript extraction,
 semantic merge, a global canonical Knowledge Space, replication, cross-Store
 mutation, automatic Agent execution, service auto-installation and automatic
 cleanup.

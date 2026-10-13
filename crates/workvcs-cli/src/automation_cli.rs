@@ -2023,12 +2023,14 @@ fn start_watcher(
     let callback_health = Arc::clone(&health);
     let callback_sender = sender.clone();
     let mut watcher = notify::recommended_watcher(
-        move |event: std::result::Result<notify::Event, notify::Error>| {
-            signal_watcher_event(
-                &callback_sender,
-                &callback_health,
-                event.map(|_| ()).map_err(|error| error.to_string()),
-            );
+        move |event: std::result::Result<notify::Event, notify::Error>| match event {
+            Ok(event) if watcher_event_requires_reconcile(&event) => {
+                signal_watcher_event(&callback_sender, &callback_health, Ok(()));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                signal_watcher_event(&callback_sender, &callback_health, Err(error.to_string()))
+            }
         },
     )
     .map_err(|error| WorkVcsError::StorageFailure(format!("cannot create watcher: {error}")))?;
@@ -2061,6 +2063,16 @@ fn start_watcher(
         }
     }
     Ok((receiver, Some(watcher), health))
+}
+
+#[cfg(unix)]
+fn watcher_event_requires_reconcile(event: &notify::Event) -> bool {
+    // Access modes describe how a handle was opened, not whether source state
+    // changed. Linux may therefore emit close-write while a read-only
+    // reconciliation closes a database handle opened with write capability.
+    // Actual source mutations still arrive as create, modify, or remove, while
+    // Any/Other and explicit rescan flags remain fail-safe dirty signals.
+    event.need_rescan() || !matches!(event.kind, notify::EventKind::Access(_))
 }
 
 #[cfg(unix)]
@@ -3310,6 +3322,35 @@ mod tests {
         assert_eq!(latest.catalog_manifest_sha256, published.manifest_sha256);
         assert!(!latest.manifest.complete);
         assert!(latest.manifest.sources.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watcher_ignores_read_access_but_preserves_mutations_and_rescan_signals() {
+        use notify::event::{
+            AccessKind, AccessMode, CreateKind, DataChange, Flag, ModifyKind, RemoveKind,
+        };
+        use notify::{Event, EventKind};
+
+        let read_open = Event::new(EventKind::Access(AccessKind::Open(AccessMode::Read)));
+        let read_close = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)));
+        let writable_close = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)));
+        let created = Event::new(EventKind::Create(CreateKind::File));
+        let modified = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Any)));
+        let removed = Event::new(EventKind::Remove(RemoveKind::File));
+        let unspecified = Event::new(EventKind::Any);
+        let other = Event::new(EventKind::Other);
+        let rescan = Event::new(EventKind::Access(AccessKind::Other)).set_flag(Flag::Rescan);
+
+        assert!(!watcher_event_requires_reconcile(&read_open));
+        assert!(!watcher_event_requires_reconcile(&read_close));
+        assert!(!watcher_event_requires_reconcile(&writable_close));
+        assert!(watcher_event_requires_reconcile(&created));
+        assert!(watcher_event_requires_reconcile(&modified));
+        assert!(watcher_event_requires_reconcile(&removed));
+        assert!(watcher_event_requires_reconcile(&unspecified));
+        assert!(watcher_event_requires_reconcile(&other));
+        assert!(watcher_event_requires_reconcile(&rescan));
     }
 
     #[cfg(unix)]

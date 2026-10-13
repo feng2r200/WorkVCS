@@ -54,6 +54,9 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
 
 ### Changed
 
+- The daemon watcher now ignores read-only filesystem access notifications
+  while retaining mutation, rescan, and backend-error signals, preventing
+  Linux read-feedback reconciliation loops without hiding incomplete results.
 - The bundled Agent Skill now supports an explicit higher-priority
   required-participation policy: WorkVCS is selected at task start and
   reconciled before closeout while Plan admission and all mutation authority

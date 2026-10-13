@@ -427,6 +427,9 @@ struct HistoricalOwnerCacheEntry {
 
 type HistoricalOwnerCache = BTreeMap<PathBuf, HistoricalOwnerCacheEntry>;
 
+type SourceArchiveImporter<'a> =
+    dyn FnMut(SourceArchiveImportOptions) -> Result<SourceArchiveImportResult> + 'a;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceFingerprint {
@@ -1497,6 +1500,15 @@ fn reconcile_registry_derived_once(
     root: &Path,
     project_registry: Option<&Path>,
 ) -> Result<ReconcileReport> {
+    let mut importer = Engine::import_source_archive;
+    reconcile_registry_derived_once_with_importer(root, project_registry, &mut importer)
+}
+
+fn reconcile_registry_derived_once_with_importer(
+    root: &Path,
+    project_registry: Option<&Path>,
+    importer: &mut SourceArchiveImporter<'_>,
+) -> Result<ReconcileReport> {
     let _reconciliation_lock = ReconciliationLock::acquire(root)?;
     let membership = registry_derived_membership(project_registry)?;
     let source_policy = read_automation_source_policy(root)?;
@@ -1618,6 +1630,7 @@ fn reconcile_registry_derived_once(
             &mut rollout_files_deleted,
             &mut rollout_archives_ready,
             &mut rollout_archives_failed,
+            importer,
         )?;
     }
     validate_historical_owner_cache(&historical_owner_cache, &membership)?;
@@ -1703,6 +1716,7 @@ fn run_registry_derived_historical_reconciliation(
     rollout_files_deleted: &mut usize,
     rollout_archives_ready: &mut usize,
     rollout_archives_failed: &mut usize,
+    importer: &mut SourceArchiveImporter<'_>,
 ) -> Result<()> {
     let archive_root = root
         .join("history")
@@ -1878,28 +1892,49 @@ fn run_registry_derived_historical_reconciliation(
                 source_policy.role_policy,
                 AutomationRolePolicy::UserAndAssistant
             ));
-            match Engine::import_source_archive(options) {
+            match importer(options) {
                 Ok(result) => {
                     let reference = archive_reference(result.archive_path, &result.manifest)?;
                     if !archive_reference_matches_source(&reference, &file, &fingerprint) {
-                        return Err(WorkVcsError::IntegrityInvalid(
-                            "registry-derived source changed during archive import".to_owned(),
+                        let error = source_changed_during_archive_import_error(
+                            &file,
+                            &fingerprint,
+                            &reference,
+                            result.outcome,
+                            entry.archive.is_some(),
+                        );
+                        retain_global_archive(
+                            &member,
+                            &entry,
+                            catalog_sources,
+                            rollout_archives_ready,
+                            rollout_archives_failed,
+                        );
+                        *rollout_archives_failed += 1;
+                        catalog_sources.push(failed_global_catalog_source(
+                            &member,
+                            AutomationLane::HistoricalReference,
+                            AutomationArtifactKind::SourceArchive,
+                            file,
+                            &error.code().to_string(),
+                            &error.to_string(),
                         ));
+                    } else {
+                        entry.archive = Some(reference.clone());
+                        *rollout_archives_ready += 1;
+                        catalog_sources.push(AutomationCatalogSource {
+                            registration_id: member.catalog_member_id(),
+                            project_ref_id: member.project_ref_id,
+                            lane: AutomationLane::HistoricalReference,
+                            artifact_kind: AutomationArtifactKind::SourceArchive,
+                            artifact_path: reference.artifact_path,
+                            artifact_manifest_sha256: reference.artifact_manifest_sha256,
+                            source_anchor: reference.source_anchor,
+                            status: AutomationSourceStatus::Ready,
+                            error_code: None,
+                            error: None,
+                        });
                     }
-                    entry.archive = Some(reference.clone());
-                    *rollout_archives_ready += 1;
-                    catalog_sources.push(AutomationCatalogSource {
-                        registration_id: member.catalog_member_id(),
-                        project_ref_id: member.project_ref_id,
-                        lane: AutomationLane::HistoricalReference,
-                        artifact_kind: AutomationArtifactKind::SourceArchive,
-                        artifact_path: reference.artifact_path,
-                        artifact_manifest_sha256: reference.artifact_manifest_sha256,
-                        source_anchor: reference.source_anchor,
-                        status: AutomationSourceStatus::Ready,
-                        error_code: None,
-                        error: None,
-                    });
                 }
                 Err(error) => {
                     retain_global_archive(
@@ -2706,6 +2741,34 @@ fn archive_reference_matches_source(
     reference.source_path == source
         && reference.source_bytes == fingerprint.bytes
         && reference.source_sha256 == fingerprint.sha256
+}
+
+fn source_changed_during_archive_import_error(
+    source: &Path,
+    pre_fingerprint: &SourceFingerprint,
+    imported: &SourceArchiveReference,
+    outcome: workvcs_core::SourceArchiveImportOutcome,
+    prior_archive_present: bool,
+) -> WorkVcsError {
+    let outcome = match outcome {
+        workvcs_core::SourceArchiveImportOutcome::Imported => "imported",
+        workvcs_core::SourceArchiveImportOutcome::Reused => "reused",
+    };
+    let prior_archive = if prior_archive_present {
+        "present"
+    } else {
+        "absent"
+    };
+    WorkVcsError::IntegrityInvalid(format!(
+        "source_changed_during_archive_import: path={} pre_bytes={} pre_sha256={} import_bytes={} import_sha256={} outcome={} prior_archive={}",
+        source.display(),
+        pre_fingerprint.bytes,
+        pre_fingerprint.sha256,
+        imported.source_bytes,
+        imported.source_sha256,
+        outcome,
+        prior_archive,
+    ))
 }
 
 fn failed_catalog_source(
@@ -5878,6 +5941,8 @@ mod tests {
         registry_path: PathBuf,
         rollout_root: PathBuf,
         project_ref_id: ProjectRefId,
+        project_ref_ids: Vec<ProjectRefId>,
+        project_roots: Vec<PathBuf>,
     }
 
     fn write_registry_derived_test_rollout(path: &Path, cwd: &Path, text: &str) {
@@ -5909,17 +5974,38 @@ mod tests {
         fs::write(path, format!("{bytes}\n")).unwrap();
     }
 
+    fn append_registry_derived_test_message(path: &Path, message_id: &str, text: &str) {
+        let line = serde_json::json!({
+            "type":"response_item",
+            "timestamp":"2026-01-01T00:00:03Z",
+            "payload":{
+                "type":"message",
+                "role":"user",
+                "id":message_id,
+                "content":[{"type":"input_text","text":text}]
+            }
+        });
+        let mut file = OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+        file.sync_all().unwrap();
+    }
+
     fn registry_derived_automation_fixture(
         temporary: &TempDir,
     ) -> RegistryDerivedAutomationFixture {
+        registry_derived_automation_fixture_with_project_count(temporary, 1)
+    }
+
+    fn registry_derived_automation_fixture_with_project_count(
+        temporary: &TempDir,
+        project_count: usize,
+    ) -> RegistryDerivedAutomationFixture {
+        assert!(project_count > 0);
         let fixture_root = temporary.path().canonicalize().unwrap();
         let automation_root = fixture_root.join("automation");
-        let project_root = fixture_root.join("project");
         let rollout_root = fixture_root.join("rollouts");
-        let store_path = fixture_root.join("project.sqlite");
         let registry_path = fixture_root.join("project-bindings.json");
         fs::create_dir(&automation_root).unwrap();
-        fs::create_dir(&project_root).unwrap();
         fs::create_dir(&rollout_root).unwrap();
         #[cfg(unix)]
         {
@@ -5927,42 +6013,53 @@ mod tests {
             fs::set_permissions(&rollout_root, fs::Permissions::from_mode(0o700)).unwrap();
         }
 
-        let mut engine = Engine::init(
-            &store_path,
-            StoreInitOptions::new("registry-derived-automation").unwrap(),
-        )
-        .unwrap();
-        let store_id = engine.store_info().unwrap().store_id;
-        let workspace = engine
-            .create_workspace(WorkspaceInitOptions::new("registry-derived-automation").unwrap())
-            .unwrap();
-        engine
-            .create_record(
-                RecordCreateOptions::finding(
-                    workspace.initial_branch_id,
-                    workspace.genesis_commit_id,
-                    "registry derived canonical evidence",
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-        let project_root = project_root.canonicalize().unwrap();
-        let store_path = store_path.canonicalize().unwrap();
-        let project_ref_id = ProjectRefId::new_v7();
         let registry_id = workvcs_core::RegistryId::new_v7();
-        let registry_value = serde_json::json!({
-            "version": 2,
-            "registry_id": registry_id,
-            "revision": 1,
-            "projects": [{
+        let mut projects = Vec::new();
+        let mut locators = Vec::new();
+        let mut bindings = Vec::new();
+        let mut project_ref_ids = Vec::new();
+        let mut project_roots = Vec::new();
+        for index in 0..project_count {
+            let project_root = fixture_root.join(if index == 0 {
+                "project".to_owned()
+            } else {
+                format!("project-{index}")
+            });
+            let store_path = fixture_root.join(if index == 0 {
+                "project.sqlite".to_owned()
+            } else {
+                format!("project-{index}.sqlite")
+            });
+            fs::create_dir(&project_root).unwrap();
+            let label = format!("registry-derived-automation-{index}");
+            let mut engine =
+                Engine::init(&store_path, StoreInitOptions::new(&label).unwrap()).unwrap();
+            let store_id = engine.store_info().unwrap().store_id;
+            let workspace = engine
+                .create_workspace(WorkspaceInitOptions::new(&label).unwrap())
+                .unwrap();
+            engine
+                .create_record(
+                    RecordCreateOptions::finding(
+                        workspace.initial_branch_id,
+                        workspace.genesis_commit_id,
+                        format!("registry derived canonical evidence {index}"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+
+            let project_root = project_root.canonicalize().unwrap();
+            let store_path = store_path.canonicalize().unwrap();
+            let project_ref_id = ProjectRefId::new_v7();
+            projects.push(serde_json::json!({
                 "project_ref_id": project_ref_id,
                 "maturity": "provisional",
                 "display_name": null,
                 "created_at": "2026-01-01T00:00:00Z",
                 "created_by": "cwd_first_write"
-            }],
-            "locators": [{
+            }));
+            locators.push(serde_json::json!({
                 "locator_id": workvcs_core::ProjectLocatorId::new_v7(),
                 "project_ref_id": project_ref_id,
                 "role": "identity",
@@ -5976,8 +6073,8 @@ mod tests {
                 "evidence_digest": ControlPlaneDigest::raw(b"registry-derived-automation"),
                 "observed_at": "2026-01-01T00:00:00Z",
                 "state": "active"
-            }],
-            "bindings": [{
+            }));
+            bindings.push(serde_json::json!({
                 "project_ref_id": project_ref_id,
                 "store_path": store_path,
                 "store_id": store_id,
@@ -5985,7 +6082,20 @@ mod tests {
                 "branch_id": workspace.initial_branch_id,
                 "bound_at": "2026-01-01T00:00:00Z",
                 "binding_source": "first_write"
-            }],
+            }));
+            project_ref_ids.push(project_ref_id);
+            project_roots.push(project_root);
+        }
+        projects.sort_by_key(|value| value["project_ref_id"].as_str().unwrap().to_owned());
+        locators.sort_by_key(|value| value["locator_id"].as_str().unwrap().to_owned());
+        bindings.sort_by_key(|value| value["project_ref_id"].as_str().unwrap().to_owned());
+        let registry_value = serde_json::json!({
+            "version": 2,
+            "registry_id": registry_id,
+            "revision": 1,
+            "projects": projects,
+            "locators": locators,
+            "bindings": bindings,
             "links": [],
             "observations": [],
             "migration": null
@@ -6014,14 +6124,16 @@ mod tests {
 
         write_registry_derived_test_rollout(
             &rollout_root.join("thread.jsonl"),
-            &project_root,
+            &project_roots[0],
             "registry derived historical evidence",
         );
         RegistryDerivedAutomationFixture {
             automation_root,
             registry_path,
             rollout_root,
-            project_ref_id,
+            project_ref_id: project_ref_ids[0],
+            project_ref_ids,
+            project_roots,
         }
     }
 
@@ -6781,6 +6893,375 @@ mod tests {
         assert_eq!(second.status, "completed");
         assert_eq!(second.rollout_files_unchanged, 1);
         assert_eq!(second.rollout_archives_ready, 1);
+    }
+
+    #[test]
+    fn registry_derived_import_drift_with_prior_is_local_and_converges() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let raced_source = fixture.rollout_root.join("thread.jsonl");
+        let stable_source = fixture.rollout_root.join("z-stable.jsonl");
+        write_registry_derived_test_rollout(
+            &stable_source,
+            &fixture.project_roots[0],
+            "stable source remains available",
+        );
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let seeded =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(seeded.status, "completed");
+        assert_eq!(seeded.canonical_generations_ready, 1);
+        let seeded_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        let raced_key = raced_source.to_str().unwrap();
+        let stable_key = stable_source.to_str().unwrap();
+        let prior_raced_archive = seeded_inventory.files[raced_key].archive.clone().unwrap();
+        let prior_stable_archive = seeded_inventory.files[stable_key].archive.clone().unwrap();
+
+        append_registry_derived_test_message(
+            &raced_source,
+            "01900000-0000-7000-8000-000000000014",
+            "visible before the coordinator fingerprint",
+        );
+        let pre_fingerprint = fingerprint_source(&raced_source).unwrap();
+        let mut importer_calls = 0;
+        let mut imported_after_drift = None;
+        let raced = {
+            let mut importer = |options| {
+                importer_calls += 1;
+                assert_eq!(
+                    importer_calls, 1,
+                    "stable source must reuse its prior archive"
+                );
+                append_registry_derived_test_message(
+                    &raced_source,
+                    "01900000-0000-7000-8000-000000000015",
+                    "appended after fingerprint and before Engine import",
+                );
+                let result = Engine::import_source_archive(options)?;
+                imported_after_drift = Some(result.clone());
+                Ok(result)
+            };
+            reconcile_registry_derived_once_with_importer(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &mut importer,
+            )
+            .unwrap()
+        };
+
+        let imported_after_drift = imported_after_drift.unwrap();
+        let imported_reference = archive_reference(
+            imported_after_drift.archive_path.clone(),
+            &imported_after_drift.manifest,
+        )
+        .unwrap();
+        assert!(!archive_reference_matches_source(
+            &imported_reference,
+            &raced_source,
+            &pre_fingerprint
+        ));
+        assert_eq!(raced.status, "partial_failure");
+        assert!(!raced.complete);
+        assert_eq!(raced.canonical_generations_ready, 1);
+        assert_eq!(raced.rollout_archives_ready, 2);
+        assert_eq!(raced.rollout_archives_failed, 1);
+        let raced_catalog = read_automation_catalog(&raced.catalog_path).unwrap();
+        assert!(raced_catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Ready
+                && source.artifact_path == prior_raced_archive.artifact_path
+        }));
+        assert!(raced_catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Ready
+                && source.artifact_path == prior_stable_archive.artifact_path
+        }));
+        let failure = raced_catalog
+            .sources
+            .iter()
+            .find(|source| {
+                source.status == AutomationSourceStatus::Failed
+                    && source.artifact_path == raced_source
+            })
+            .unwrap();
+        assert_eq!(failure.error_code.as_deref(), Some("integrity_invalid"));
+        let error = failure.error.as_deref().unwrap();
+        assert!(error.contains("source_changed_during_archive_import"));
+        assert!(error.contains(&format!("path={}", raced_source.display())));
+        assert!(error.contains(&format!("pre_bytes={}", pre_fingerprint.bytes)));
+        assert!(error.contains(&format!("pre_sha256={}", pre_fingerprint.sha256)));
+        assert!(error.contains(&format!("import_bytes={}", imported_reference.source_bytes)));
+        assert!(error.contains(&format!(
+            "import_sha256={}",
+            imported_reference.source_sha256
+        )));
+        assert!(error.contains("outcome=imported"));
+        assert!(error.contains("prior_archive=present"));
+        assert!(raced_catalog.sources.iter().all(|source| {
+            source.status != AutomationSourceStatus::Ready
+                || source.artifact_path != imported_after_drift.archive_path
+        }));
+        let raced_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert_eq!(raced_inventory.files.len(), 2);
+        assert_eq!(
+            raced_inventory.files[raced_key].fingerprint,
+            pre_fingerprint
+        );
+        assert_eq!(
+            raced_inventory.files[raced_key].archive.as_ref(),
+            Some(&prior_raced_archive)
+        );
+        assert_eq!(
+            raced_inventory.files[stable_key].archive.as_ref(),
+            Some(&prior_stable_archive)
+        );
+
+        let converged =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(converged.status, "completed", "{converged:#?}");
+        assert!(converged.complete);
+        assert_eq!(converged.canonical_generations_ready, 1);
+        assert_eq!(converged.rollout_archives_failed, 0);
+        let converged_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert_eq!(
+            converged_inventory.files[raced_key]
+                .archive
+                .as_ref()
+                .unwrap()
+                .artifact_path,
+            imported_after_drift.archive_path
+        );
+    }
+
+    #[test]
+    fn registry_derived_import_drift_without_prior_keeps_later_source_available() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let raced_source = fixture.rollout_root.join("thread.jsonl");
+        let stable_source = fixture.rollout_root.join("z-stable.jsonl");
+        write_registry_derived_test_rollout(
+            &stable_source,
+            &fixture.project_roots[0],
+            "later source imports despite earlier drift",
+        );
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let pre_fingerprint = fingerprint_source(&raced_source).unwrap();
+
+        let mut importer_calls = 0;
+        let mut imported_after_drift = None;
+        let raced = {
+            let mut importer = |options| {
+                importer_calls += 1;
+                if importer_calls == 1 {
+                    append_registry_derived_test_message(
+                        &raced_source,
+                        "01900000-0000-7000-8000-000000000016",
+                        "first import changes only after fingerprint",
+                    );
+                }
+                let result = Engine::import_source_archive(options)?;
+                if importer_calls == 1 {
+                    imported_after_drift = Some(result.clone());
+                }
+                Ok(result)
+            };
+            reconcile_registry_derived_once_with_importer(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &mut importer,
+            )
+            .unwrap()
+        };
+
+        assert_eq!(importer_calls, 2, "later source must still be imported");
+        let imported_after_drift = imported_after_drift.unwrap();
+        let imported_reference = archive_reference(
+            imported_after_drift.archive_path.clone(),
+            &imported_after_drift.manifest,
+        )
+        .unwrap();
+        assert!(!archive_reference_matches_source(
+            &imported_reference,
+            &raced_source,
+            &pre_fingerprint
+        ));
+        assert_eq!(raced.status, "partial_failure");
+        assert!(!raced.complete);
+        assert_eq!(raced.canonical_generations_ready, 1);
+        assert_eq!(raced.rollout_archives_ready, 1);
+        assert_eq!(raced.rollout_archives_failed, 1);
+        let raced_catalog = read_automation_catalog(&raced.catalog_path).unwrap();
+        assert!(raced_catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Failed
+                && source.artifact_path == raced_source
+                && source
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("prior_archive=absent"))
+        }));
+        assert!(raced_catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Ready
+                && source
+                    .source_anchor
+                    .contains(stable_source.to_str().unwrap())
+        }));
+        assert!(raced_catalog.sources.iter().all(|source| {
+            source.status != AutomationSourceStatus::Ready
+                || source.artifact_path != imported_after_drift.archive_path
+        }));
+        let raced_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert_eq!(raced_inventory.files.len(), 2);
+        assert_eq!(
+            raced_inventory.files[raced_source.to_str().unwrap()].fingerprint,
+            pre_fingerprint
+        );
+        assert!(
+            raced_inventory.files[raced_source.to_str().unwrap()]
+                .archive
+                .is_none()
+        );
+        assert!(
+            raced_inventory.files[stable_source.to_str().unwrap()]
+                .archive
+                .is_some()
+        );
+
+        let converged =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(converged.status, "completed", "{converged:#?}");
+        assert_eq!(converged.canonical_generations_ready, 1);
+        assert_eq!(converged.rollout_archives_ready, 2);
+        assert_eq!(converged.rollout_archives_failed, 0);
+    }
+
+    #[test]
+    fn registry_derived_import_owner_drift_is_not_adopted_by_prior_owner() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture_with_project_count(&temporary, 2);
+        let raced_source = fixture.rollout_root.join("thread.jsonl");
+        let stable_source = fixture.rollout_root.join("z-stable.jsonl");
+        write_registry_derived_test_rollout(
+            &stable_source,
+            &fixture.project_roots[0],
+            "later source remains with the first owner",
+        );
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let seeded =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(seeded.status, "completed", "{seeded:#?}");
+        assert_eq!(seeded.canonical_generations_ready, 2);
+        let seeded_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        let raced_key = raced_source.to_str().unwrap();
+        let prior_entry = seeded_inventory.files[raced_key].clone();
+        assert_eq!(
+            prior_entry.member.project_ref_id,
+            fixture.project_ref_ids[0]
+        );
+
+        append_registry_derived_test_message(
+            &raced_source,
+            "01900000-0000-7000-8000-000000000017",
+            "pre-fingerprint update still belongs to the first owner",
+        );
+        let pre_fingerprint = fingerprint_source(&raced_source).unwrap();
+        let mut importer_calls = 0;
+        let mut imported_after_rewrite = None;
+        let second_root = fixture.project_roots[1].clone();
+        let raced = {
+            let mut importer = |options| {
+                importer_calls += 1;
+                assert_eq!(
+                    importer_calls, 1,
+                    "stable source must reuse its prior archive"
+                );
+                write_registry_derived_test_rollout(
+                    &raced_source,
+                    &second_root,
+                    "rewritten source belongs to the second owner",
+                );
+                let result = Engine::import_source_archive(options)?;
+                imported_after_rewrite = Some(result.clone());
+                Ok(result)
+            };
+            reconcile_registry_derived_once_with_importer(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &mut importer,
+            )
+            .unwrap()
+        };
+
+        let imported_after_rewrite = imported_after_rewrite.unwrap();
+        assert_eq!(raced.status, "partial_failure");
+        assert_eq!(raced.canonical_generations_ready, 2);
+        assert_eq!(raced.rollout_archives_ready, 2);
+        assert_eq!(raced.rollout_archives_failed, 1);
+        let raced_catalog = read_automation_catalog(&raced.catalog_path).unwrap();
+        assert!(raced_catalog.sources.iter().all(|source| {
+            source.status != AutomationSourceStatus::Ready
+                || source.artifact_path != imported_after_rewrite.archive_path
+        }));
+        assert!(raced_catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Failed
+                && source.project_ref_id == fixture.project_ref_ids[0]
+                && source.artifact_path == raced_source
+        }));
+        let raced_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert_eq!(
+            raced_inventory.files[raced_key].fingerprint,
+            pre_fingerprint
+        );
+        assert_eq!(
+            raced_inventory.files[raced_key].member.project_ref_id,
+            fixture.project_ref_ids[0]
+        );
+        assert_eq!(
+            raced_inventory.files[raced_key].archive,
+            prior_entry.archive
+        );
+
+        let converged =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(converged.status, "completed", "{converged:#?}");
+        assert!(converged.complete);
+        assert_eq!(converged.canonical_generations_ready, 2);
+        assert_eq!(converged.rollout_archives_ready, 2);
+        assert_eq!(converged.rollout_archives_failed, 0);
+        let converged_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert_eq!(
+            converged_inventory.files[raced_key].member.project_ref_id,
+            fixture.project_ref_ids[1]
+        );
+        let converged_archive = converged_inventory.files[raced_key]
+            .archive
+            .as_ref()
+            .unwrap();
+        let imported_reference = archive_reference(
+            imported_after_rewrite.archive_path.clone(),
+            &imported_after_rewrite.manifest,
+        )
+        .unwrap();
+        assert_ne!(
+            converged_archive.artifact_path, imported_after_rewrite.archive_path,
+            "the old-owner derived artifact must not be adopted by the new owner"
+        );
+        assert_eq!(
+            converged_archive.source_sha256,
+            imported_reference.source_sha256
+        );
+        assert_eq!(
+            converged_archive.source_bytes,
+            imported_reference.source_bytes
+        );
+        let converged_catalog = read_automation_catalog(&converged.catalog_path).unwrap();
+        assert!(converged_catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Ready
+                && source.project_ref_id == fixture.project_ref_ids[1]
+                && source.artifact_path == converged_archive.artifact_path
+        }));
+        assert!(converged_catalog.sources.iter().all(|source| {
+            source.status != AutomationSourceStatus::Ready
+                || source.artifact_path != imported_after_rewrite.archive_path
+        }));
     }
 
     #[test]

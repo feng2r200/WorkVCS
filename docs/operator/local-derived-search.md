@@ -303,6 +303,17 @@ deletion classification for that root, but successful roots still detect their
 own deletions. A canonical routing, Store-open or generation failure does not
 skip this historical reconciliation lane.
 
+The importer's validated snapshot must also exactly match the coordinator's
+earlier path/byte-count/SHA-256 observation. A normal append can occur between
+those observations even when the importer's own snapshot is stable. A mismatch
+does not authorize adopting the newer snapshot under the earlier owner. It is
+a failure of that historical source: retain only a readback-validated archive
+for the same member when available, expose the source failure, and continue
+other sources and canonical publication. With no prior archive, only the
+failure is exposed. The next ordinary dirty or periodic round re-resolves the
+stable source; no extra retry or deadline is introduced. Failure diagnostics
+include the path and compared byte counts/hashes, not message content.
+
 The foreground coordinator is optional:
 
 ```sh

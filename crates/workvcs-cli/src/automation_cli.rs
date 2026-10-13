@@ -30,12 +30,14 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 const AUTOMATION_PROTOCOL_VERSION: u32 = 1;
 const MAX_DAEMON_FRAME_BYTES: usize = 16 * 1024;
 const MAX_WORKER_STREAM_BYTES: usize = 64 * 1024;
 const RECONCILE_QUERY: &str = "automation reconciliation";
+#[cfg(unix)]
+const DAEMON_PROTOCOL_IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[cfg(unix)]
 static DAEMON_TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
@@ -364,7 +366,37 @@ struct RegistryDerivedMembership {
     registry_digest: String,
     routing_activation_path: PathBuf,
     members: Vec<RegistryDerivedMember>,
+    #[serde(skip)]
+    historical_owner_index: BTreeMap<HistoricalOwnerKey, RegistryDerivedMember>,
+    #[serde(skip)]
+    historical_owner_boundaries: Vec<PathBuf>,
 }
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct HistoricalOwnerKey {
+    identity_kind: String,
+    identity: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoricalOwnerFailure {
+    code: String,
+    error: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoricalOwnerObservation {
+    identity: HistoricalOwnerKey,
+    metadata_sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoricalOwnerCacheEntry {
+    observation: HistoricalOwnerObservation,
+    owner: std::result::Result<RegistryDerivedMember, HistoricalOwnerFailure>,
+}
+
+type HistoricalOwnerCache = BTreeMap<PathBuf, HistoricalOwnerCacheEntry>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -584,6 +616,7 @@ struct WorkerEvidence {
 #[cfg(unix)]
 struct ActiveWorker {
     child: Option<Child>,
+    process_group_id: libc::pid_t,
     stdout_reader: Option<std::thread::JoinHandle<std::io::Result<CapturedStream>>>,
     stderr_reader: Option<std::thread::JoinHandle<std::io::Result<CapturedStream>>>,
     trigger: String,
@@ -596,8 +629,13 @@ struct ActiveWorker {
 impl Drop for ActiveWorker {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            if child.try_wait().ok().flatten().is_none() {
-                let _ = child.kill();
+            match worker_has_exited_without_reaping(&child) {
+                Ok(true) => {
+                    let _ = terminate_remaining_worker_process_group(&child, self.process_group_id);
+                }
+                Ok(false) | Err(_) => {
+                    let _ = terminate_worker_process_group(&child, self.process_group_id);
+                }
             }
             let _ = child.wait();
         }
@@ -986,7 +1024,50 @@ fn registry_derived_membership(
             workspace_id: binding.workspace_id(),
             branch_id: binding.branch_id(),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let members_by_project = members
+        .iter()
+        .map(|member| (member.project_ref_id, member.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut historical_owner_index = BTreeMap::new();
+    let mut historical_owner_boundaries = Vec::new();
+    for locator in registry.locators().iter().filter(|locator| {
+        locator.role() == LocatorRole::Identity && locator.state() == LocatorState::Active
+    }) {
+        let identity_kind = match locator.authority() {
+            LocatorAuthority::SemanticProject => continue,
+            LocatorAuthority::Repository => "git-common-dir",
+            LocatorAuthority::Cwd => "cwd",
+        };
+        let Some(member) = members_by_project.get(&locator.project_ref_id()).cloned() else {
+            continue;
+        };
+        let key = HistoricalOwnerKey {
+            identity_kind: identity_kind.to_owned(),
+            identity: locator.normalized_value().to_owned(),
+        };
+        let identity_path = PathBuf::from(locator.normalized_value());
+        let boundaries = if locator.authority() == LocatorAuthority::Repository {
+            historical_repository_boundaries(&identity_path)
+        } else {
+            vec![identity_path]
+        };
+        for boundary in boundaries {
+            historical_owner_boundaries.extend(
+                historical_cwd_aliases_without_io(&boundary).unwrap_or_else(|_| vec![boundary]),
+            );
+        }
+        if let Some(previous) = historical_owner_index.insert(key.clone(), member.clone())
+            && previous != member
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "active historical owner locator {}:{} maps to multiple registry members",
+                key.identity_kind, key.identity
+            )));
+        }
+    }
+    historical_owner_boundaries.sort();
+    historical_owner_boundaries.dedup();
     Ok(RegistryDerivedMembership {
         registry_path,
         registry_id: registry.registry_id().to_string(),
@@ -994,7 +1075,60 @@ fn registry_derived_membership(
         registry_digest: digest.to_string(),
         routing_activation_path: activation.path,
         members,
+        historical_owner_index,
+        historical_owner_boundaries,
     })
+}
+
+fn historical_repository_boundaries(common_dir: &Path) -> Vec<PathBuf> {
+    let mut boundaries = Vec::new();
+    if common_dir.file_name().and_then(|value| value.to_str()) == Some(".git")
+        && let Some(parent) = common_dir.parent()
+        && parent.parent().is_some()
+    {
+        boundaries.push(parent.to_path_buf());
+    }
+    let worktrees = common_dir.join("worktrees");
+    let Ok(entries) = fs::read_dir(&worktrees) else {
+        return boundaries;
+    };
+    for entry in entries.flatten() {
+        let admin = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&admin) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let Ok(bytes) =
+            read_historical_git_metadata(&admin.join("gitdir"), "Git worktree backlink")
+        else {
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        let target = Path::new(text.trim_end_matches(['\r', '\n']));
+        let target = if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            admin.join(target)
+        };
+        let Ok(target) = normalize_historical_cwd_without_io(&target) else {
+            continue;
+        };
+        if target.file_name().and_then(|value| value.to_str()) != Some(".git") {
+            continue;
+        }
+        if let Some(root) = target.parent()
+            && root.parent().is_some()
+        {
+            boundaries.push(root.to_path_buf());
+        }
+    }
+    boundaries.sort();
+    boundaries.dedup();
+    boundaries
 }
 
 fn registration_proposal(
@@ -1437,11 +1571,13 @@ fn reconcile_registry_derived_once(
 
     let previous_inventory = read_global_source_inventory(root)?;
     let mut current_inventory = BTreeMap::new();
+    let mut historical_owner_cache = HistoricalOwnerCache::new();
     for source in active_sources {
         run_registry_derived_historical_reconciliation(
             root,
             source,
             &membership,
+            &mut historical_owner_cache,
             &previous_inventory,
             &mut current_inventory,
             &mut catalog_sources,
@@ -1454,6 +1590,14 @@ fn reconcile_registry_derived_once(
             &mut rollout_archives_ready,
             &mut rollout_archives_failed,
         )?;
+    }
+    validate_historical_owner_cache(&historical_owner_cache)?;
+    let current_membership = registry_derived_membership(Some(&membership.registry_path))?;
+    if current_membership != membership {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "ProjectRef registry membership or routing activation changed during registry-derived reconciliation"
+                .to_owned(),
+        ));
     }
     write_global_source_inventory(root, current_inventory)?;
 
@@ -1518,6 +1662,7 @@ fn run_registry_derived_historical_reconciliation(
     root: &Path,
     source_policy: &AutomationSourcePolicyEntry,
     membership: &RegistryDerivedMembership,
+    historical_owner_cache: &mut HistoricalOwnerCache,
     previous_inventory: &GlobalSourceInventory,
     current_inventory: &mut BTreeMap<String, GlobalSourceInventoryEntry>,
     catalog_sources: &mut Vec<AutomationCatalogSource>,
@@ -1609,56 +1754,58 @@ fn run_registry_derived_historical_reconciliation(
                 continue;
             }
         };
-        let member = match resolve_registry_derived_source_member(&file, membership) {
-            Ok(member) if !source_policy_excludes_member(source_policy, &member) => member,
-            Ok(member) => {
-                let error = WorkVcsError::ControlPlaneInvalid(format!(
-                    "rollout source {} resolves to excluded ProjectRef {}",
-                    file.display(),
-                    member.project_ref_id
-                ));
-                if let Some(entry) = previous {
-                    current_inventory.insert(path_key.clone(), entry.clone());
-                    catalog_sources.push(failed_global_catalog_source(
-                        &entry.member,
-                        AutomationLane::HistoricalReference,
-                        AutomationArtifactKind::SourceArchive,
-                        file,
-                        &error.code().to_string(),
-                        &error.to_string(),
+        let member =
+            match resolve_registry_derived_source_member(&file, membership, historical_owner_cache)
+            {
+                Ok(member) if !source_policy_excludes_member(source_policy, &member) => member,
+                Ok(member) => {
+                    let error = WorkVcsError::ControlPlaneInvalid(format!(
+                        "rollout source {} resolves to excluded ProjectRef {}",
+                        file.display(),
+                        member.project_ref_id
                     ));
-                } else {
-                    catalog_sources.push(failed_unattributed_catalog_source(
-                        file,
-                        &error.code().to_string(),
-                        &error.to_string(),
-                    )?);
+                    if let Some(entry) = previous {
+                        current_inventory.insert(path_key.clone(), entry.clone());
+                        catalog_sources.push(failed_global_catalog_source(
+                            &entry.member,
+                            AutomationLane::HistoricalReference,
+                            AutomationArtifactKind::SourceArchive,
+                            file,
+                            &error.code().to_string(),
+                            &error.to_string(),
+                        ));
+                    } else {
+                        catalog_sources.push(failed_unattributed_catalog_source(
+                            file,
+                            &error.code().to_string(),
+                            &error.to_string(),
+                        )?);
+                    }
+                    *rollout_archives_failed += 1;
+                    continue;
                 }
-                *rollout_archives_failed += 1;
-                continue;
-            }
-            Err(error) => {
-                if let Some(entry) = previous {
-                    current_inventory.insert(path_key.clone(), entry.clone());
-                    catalog_sources.push(failed_global_catalog_source(
-                        &entry.member,
-                        AutomationLane::HistoricalReference,
-                        AutomationArtifactKind::SourceArchive,
-                        file,
-                        &error.code().to_string(),
-                        &error.to_string(),
-                    ));
-                } else {
-                    catalog_sources.push(failed_unattributed_catalog_source(
-                        file,
-                        &error.code().to_string(),
-                        &error.to_string(),
-                    )?);
+                Err(error) => {
+                    if let Some(entry) = previous {
+                        current_inventory.insert(path_key.clone(), entry.clone());
+                        catalog_sources.push(failed_global_catalog_source(
+                            &entry.member,
+                            AutomationLane::HistoricalReference,
+                            AutomationArtifactKind::SourceArchive,
+                            file,
+                            &error.code,
+                            &error.error,
+                        ));
+                    } else {
+                        catalog_sources.push(failed_unattributed_catalog_source(
+                            file,
+                            &error.code,
+                            &error.error,
+                        )?);
+                    }
+                    *rollout_archives_failed += 1;
+                    continue;
                 }
-                *rollout_archives_failed += 1;
-                continue;
-            }
-        };
+            };
         let change = classify_source_change(
             &file,
             previous.map(|entry| &entry.fingerprint),
@@ -2706,48 +2853,422 @@ fn rollout_cwd_from_session_meta(source: &Path) -> Result<PathBuf> {
 fn resolve_registry_derived_source_member(
     source: &Path,
     membership: &RegistryDerivedMembership,
-) -> Result<RegistryDerivedMember> {
-    let cwd = rollout_cwd_from_session_meta(source)?;
-    let discovery = discover_project_readonly_with_locator(
-        cwd,
-        Some(membership.registry_path.clone()),
-        None,
-        None,
-        None,
-    )?;
-    if discovery.registry_path != membership.registry_path
-        || discovery.registry_revision != Some(membership.registry_revision)
-        || discovery.registry_digest.to_string() != membership.registry_digest
-    {
-        return Err(WorkVcsError::ControlPlaneInvalid(
-            "ProjectRef registry changed while resolving rollout source attribution".to_owned(),
-        ));
-    }
-    let project_ref_id = discovery.project_ref_id.ok_or_else(|| {
-        WorkVcsError::ControlPlaneInvalid(
-            "rollout source resolution did not yield a ProjectRef".to_owned(),
+    cache: &mut HistoricalOwnerCache,
+) -> std::result::Result<RegistryDerivedMember, HistoricalOwnerFailure> {
+    let failure = |error: WorkVcsError, context: String| HistoricalOwnerFailure {
+        code: error.code().to_string(),
+        error: format!("{context}: {error}"),
+    };
+    let cwd = rollout_cwd_from_session_meta(source).map_err(|error| {
+        failure(
+            error,
+            format!(
+                "cannot recover historical owner for rollout source {}",
+                source.display()
+            ),
         )
     })?;
-    let member = membership
-        .members
-        .iter()
-        .find(|member| member.project_ref_id == project_ref_id)
+    let lexical_cwds = historical_cwd_aliases_without_io(&cwd).map_err(|error| {
+        failure(
+            error,
+            format!(
+                "cannot normalize historical rollout cwd {} without filesystem access",
+                cwd.display()
+            ),
+        )
+    })?;
+    let probe_cwd = select_historical_probe_path(
+        &membership.historical_owner_boundaries,
+        &lexical_cwds,
+    )
+    .map_err(|error| {
+            failure(
+                error,
+                format!(
+                    "cannot safely enter historical rollout cwd {} from an active local identity boundary",
+                    cwd.display()
+                ),
+            )
+        })?;
+    let Some(probe_cwd) = probe_cwd else {
+        let error = WorkVcsError::ProjectOwnerUnbound {
+            registry_path: membership.registry_path.display().to_string(),
+            resolution_rank: "verified-local-boundary".to_owned(),
+            unmapped_locators: 1,
+            resolution_diagnostics: 0,
+        };
+        return Err(failure(
+            error,
+            format!(
+                "historical rollout cwd {} is outside every active local identity boundary in registry revision {}",
+                cwd.display(),
+                membership.registry_revision
+            ),
+        ));
+    };
+    let observation = observe_historical_owner(&probe_cwd).map_err(|error| {
+        failure(
+            error,
+            format!(
+                "cannot inspect historical rollout cwd {} without an external Git process",
+                cwd.display()
+            ),
+        )
+    })?;
+    if let Some(cached) = cache.get(&probe_cwd) {
+        if cached.observation != observation {
+            return Err(failure(
+                WorkVcsError::ControlPlaneInvalid(format!(
+                    "historical rollout cwd {} changed identity metadata during reconciliation from {}:{}@{} to {}:{}@{}",
+                    probe_cwd.display(),
+                    cached.observation.identity.identity_kind,
+                    cached.observation.identity.identity,
+                    cached.observation.metadata_sha256,
+                    observation.identity.identity_kind,
+                    observation.identity.identity,
+                    observation.metadata_sha256
+                )),
+                format!(
+                    "cannot reuse historical owner attribution for rollout source {}",
+                    source.display()
+                ),
+            ));
+        }
+        return cached.owner.clone();
+    }
+    let key = &observation.identity;
+    let resolved = membership
+        .historical_owner_index
+        .get(key)
         .cloned()
         .ok_or_else(|| {
+            let error = WorkVcsError::ProjectOwnerUnbound {
+                registry_path: membership.registry_path.display().to_string(),
+                resolution_rank: if key.identity_kind == "git-common-dir" {
+                    "repository"
+                } else {
+                    "cwd"
+                }
+                .to_owned(),
+                unmapped_locators: 1,
+                resolution_diagnostics: 0,
+            };
+            failure(
+                error,
+                format!(
+                    "historical rollout cwd {} has no exact active {} owner locator for {} in registry revision {}",
+                    cwd.display(),
+                    key.identity_kind,
+                    key.identity,
+                    membership.registry_revision
+                ),
+            )
+        });
+    cache.insert(
+        probe_cwd,
+        HistoricalOwnerCacheEntry {
+            observation,
+            owner: resolved.clone(),
+        },
+    );
+    resolved
+}
+
+fn validate_historical_owner_cache(cache: &HistoricalOwnerCache) -> Result<()> {
+    for (cwd, cached) in cache {
+        let current = observe_historical_owner(cwd).map_err(|error| {
             WorkVcsError::ControlPlaneInvalid(format!(
-                "rollout source ProjectRef {project_ref_id} is not in the selected registry membership"
+                "historical rollout cwd {} could not be revalidated after reconciliation: {error}",
+                cwd.display()
             ))
         })?;
-    if Path::new(&discovery.binding.store_path) != member.store_path
-        || discovery.binding.store_id != member.store_id
-        || discovery.binding.workspace_id != member.workspace_id
-        || discovery.binding.branch_id != member.branch_id
-    {
-        return Err(WorkVcsError::ControlPlaneInvalid(
-            "rollout source ProjectRef binding changed while resolving attribution".to_owned(),
-        ));
+        if current != cached.observation {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "historical rollout cwd {} changed identity metadata during reconciliation from {}:{}@{} to {}:{}@{}",
+                cwd.display(),
+                cached.observation.identity.identity_kind,
+                cached.observation.identity.identity,
+                cached.observation.metadata_sha256,
+                current.identity.identity_kind,
+                current.identity.identity,
+                current.metadata_sha256
+            )));
+        }
     }
-    Ok(member)
+    Ok(())
+}
+
+fn normalize_historical_cwd_without_io(cwd: &Path) -> Result<PathBuf> {
+    if !cwd.is_absolute() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "historical rollout cwd {} is not absolute",
+            cwd.display()
+        )));
+    }
+    let mut normalized = PathBuf::new();
+    for component in cwd.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(value) => normalized.push(value),
+            std::path::Component::ParentDir => {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "historical rollout cwd {} contains a parent-directory component",
+                    cwd.display()
+                )));
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn verify_historical_probe_path(boundary: &Path, candidate: &Path) -> Result<PathBuf> {
+    let relative = candidate.strip_prefix(boundary).map_err(|_| {
+        WorkVcsError::ControlPlaneInvalid(format!(
+            "historical cwd {} is outside active identity boundary {}",
+            candidate.display(),
+            boundary.display()
+        ))
+    })?;
+    verify_absolute_directory_path_without_symlinks(
+        boundary,
+        "active historical identity boundary",
+    )?;
+    let mut cursor = boundary.to_path_buf();
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "historical cwd {} has a non-normal component below active boundary {}",
+                candidate.display(),
+                boundary.display()
+            )));
+        }
+        cursor.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&cursor).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot inspect historical cwd component {}: {error}",
+                cursor.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "historical cwd component {} is a symlink that could escape its active identity boundary",
+                cursor.display()
+            )));
+        }
+        if !metadata.is_dir() {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "historical cwd component {} is not a directory",
+                cursor.display()
+            )));
+        }
+    }
+    Ok(candidate.to_path_buf())
+}
+
+fn select_historical_probe_path(
+    boundaries: &[PathBuf],
+    candidates: &[PathBuf],
+) -> Result<Option<PathBuf>> {
+    let mut matches = boundaries
+        .iter()
+        .flat_map(|boundary| {
+            candidates.iter().filter_map(move |candidate| {
+                candidate
+                    .starts_with(boundary)
+                    .then_some((boundary, candidate))
+            })
+        })
+        .collect::<Vec<_>>();
+    let Some(maximum_depth) = matches
+        .iter()
+        .map(|(boundary, _)| boundary.components().count())
+        .max()
+    else {
+        return Ok(None);
+    };
+    matches.retain(|(boundary, _)| boundary.components().count() == maximum_depth);
+    let mut last_error = None;
+    for (boundary, candidate) in matches {
+        match verify_historical_probe_path(boundary, candidate) {
+            Ok(path) => return Ok(Some(path)),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.expect("a matching historical boundary has a validation result"))
+}
+
+fn verify_absolute_directory_path_without_symlinks(path: &Path, label: &str) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(WorkVcsError::ControlPlaneInvalid(format!(
+            "{label} {} is not absolute",
+            path.display()
+        )));
+    }
+    let mut cursor = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => cursor.push(prefix.as_os_str()),
+            std::path::Component::RootDir => {
+                cursor.push(component.as_os_str());
+                continue;
+            }
+            std::path::Component::Normal(value) => cursor.push(value),
+            std::path::Component::CurDir | std::path::Component::ParentDir => {
+                return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                    "{label} {} contains a non-normal component",
+                    path.display()
+                )));
+            }
+        }
+        let metadata = fs::symlink_metadata(&cursor).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot inspect {label} component {}: {error}",
+                cursor.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} component {} is a symlink",
+                cursor.display()
+            )));
+        }
+        if !metadata.is_dir() {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} component {} is not a directory",
+                cursor.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn historical_cwd_aliases_without_io(cwd: &Path) -> Result<Vec<PathBuf>> {
+    let normalized = normalize_historical_cwd_without_io(cwd)?;
+    let mut aliases = vec![normalized.clone()];
+    #[cfg(target_os = "macos")]
+    for public_root in ["/var", "/tmp", "/etc"] {
+        if normalized.starts_with(public_root) {
+            let relative = normalized.strip_prefix("/").expect("absolute path");
+            aliases.push(Path::new("/private").join(relative));
+            break;
+        }
+        let private_root = Path::new("/private").join(
+            Path::new(public_root)
+                .strip_prefix("/")
+                .expect("public root is absolute"),
+        );
+        if normalized.starts_with(&private_root) {
+            let relative = normalized
+                .strip_prefix("/private")
+                .expect("private path prefix");
+            aliases.push(Path::new("/").join(relative));
+            break;
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    Ok(aliases)
+}
+
+fn read_historical_git_metadata(path: &Path, label: &str) -> Result<Vec<u8>> {
+    const MAX_METADATA_BYTES: u64 = 16 * 1024;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect {label} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "{label} {} must be a regular file, not a symlink or special file",
+            path.display()
+        )));
+    }
+    if metadata.len() > MAX_METADATA_BYTES {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "{label} {} exceeds the {MAX_METADATA_BYTES} byte safety bound",
+            path.display()
+        )));
+    }
+    fs::read(path).map_err(storage_error("read historical Git identity metadata"))
+}
+
+fn hash_historical_metadata(digest: &mut Sha256, label: &str, bytes: &[u8]) {
+    digest.update((label.len() as u64).to_le_bytes());
+    digest.update(label.as_bytes());
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+}
+
+fn observe_historical_owner(cwd: &Path) -> Result<HistoricalOwnerObservation> {
+    verify_absolute_directory_path_without_symlinks(cwd, "historical rollout cwd")?;
+    let identity = resolve_project_identity_without_git_subprocess(cwd)?;
+    let key = HistoricalOwnerKey {
+        identity_kind: identity.kind,
+        identity: identity.identity,
+    };
+    let mut digest = Sha256::new();
+    hash_historical_metadata(&mut digest, "identity-kind", key.identity_kind.as_bytes());
+    hash_historical_metadata(&mut digest, "identity", key.identity.as_bytes());
+    hash_historical_metadata(&mut digest, "root", identity.root.as_bytes());
+    if key.identity_kind == "git-common-dir" {
+        let marker = PathBuf::from(&identity.root).join(".git");
+        let marker_metadata = fs::symlink_metadata(&marker)
+            .map_err(storage_error("inspect historical Git metadata marker"))?;
+        if marker_metadata.is_dir() {
+            hash_historical_metadata(&mut digest, "marker-kind", b"directory");
+            let head = read_historical_git_metadata(&marker.join("HEAD"), "Git HEAD")?;
+            hash_historical_metadata(&mut digest, "head", &head);
+        } else if marker_metadata.is_file() && !marker_metadata.file_type().is_symlink() {
+            hash_historical_metadata(&mut digest, "marker-kind", b"worktree-pointer");
+            let pointer = read_historical_git_metadata(&marker, "Git worktree pointer")?;
+            hash_historical_metadata(&mut digest, "worktree-pointer", &pointer);
+            let pointer_text = std::str::from_utf8(&pointer).map_err(|error| {
+                WorkVcsError::IntegrityInvalid(format!(
+                    "Git worktree pointer {} is not UTF-8: {error}",
+                    marker.display()
+                ))
+            })?;
+            let target = pointer_text
+                .trim_end_matches(['\r', '\n'])
+                .strip_prefix("gitdir: ")
+                .ok_or_else(|| {
+                    WorkVcsError::IntegrityInvalid(format!(
+                        "Git worktree pointer {} has an invalid format",
+                        marker.display()
+                    ))
+                })?;
+            let target = Path::new(target);
+            let target = if target.is_absolute() {
+                target.to_path_buf()
+            } else {
+                marker
+                    .parent()
+                    .expect("Git marker has a parent")
+                    .join(target)
+            };
+            let admin = canonical_existing_path("Git worktree metadata directory", &target)?;
+            for (label, name) in [
+                ("commondir", "commondir"),
+                ("gitdir", "gitdir"),
+                ("head", "HEAD"),
+            ] {
+                let bytes = read_historical_git_metadata(&admin.join(name), label)?;
+                hash_historical_metadata(&mut digest, label, &bytes);
+            }
+        } else {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "Git metadata marker {} changed to an unsafe type",
+                marker.display()
+            )));
+        }
+    }
+    Ok(HistoricalOwnerObservation {
+        identity: key,
+        metadata_sha256: hex::encode(digest.finalize()),
+    })
 }
 
 fn source_policy_excludes_member(
@@ -3369,22 +3890,6 @@ fn run_daemon(
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    if let Err(error) = stream.set_read_timeout(Some(Duration::from_secs(2))) {
-                        record_protocol_rejection(
-                            &mut ledger,
-                            &runtime,
-                            format!("cannot bound daemon client read: {error}"),
-                        )?;
-                        continue;
-                    }
-                    if let Err(error) = stream.set_write_timeout(Some(Duration::from_secs(2))) {
-                        record_protocol_rejection(
-                            &mut ledger,
-                            &runtime,
-                            format!("cannot bound daemon client write: {error}"),
-                        )?;
-                        continue;
-                    }
                     if let Err(error) = verify_peer_uid(&stream) {
                         let message = error.to_string();
                         let response = DaemonResponse {
@@ -3394,7 +3899,12 @@ fn run_daemon(
                             message: message.clone(),
                             worker_exit_code: ledger.last_worker_exit_code,
                         };
-                        let response_error = write_daemon_response(&mut stream, &response).err();
+                        let response_error = write_daemon_response(
+                            &mut stream,
+                            &response,
+                            Instant::now() + DAEMON_PROTOCOL_IO_TIMEOUT,
+                        )
+                        .err();
                         record_protocol_rejection(
                             &mut ledger,
                             &runtime,
@@ -3402,7 +3912,10 @@ fn run_daemon(
                         )?;
                         continue;
                     }
-                    let request = match read_daemon_request(&mut stream) {
+                    let request = match read_daemon_request(
+                        &mut stream,
+                        Instant::now() + DAEMON_PROTOCOL_IO_TIMEOUT,
+                    ) {
                         Ok(request) => request,
                         Err(error) => {
                             let message = error.to_string();
@@ -3413,8 +3926,12 @@ fn run_daemon(
                                 message: message.clone(),
                                 worker_exit_code: ledger.last_worker_exit_code,
                             };
-                            let response_error =
-                                write_daemon_response(&mut stream, &response).err();
+                            let response_error = write_daemon_response(
+                                &mut stream,
+                                &response,
+                                Instant::now() + DAEMON_PROTOCOL_IO_TIMEOUT,
+                            )
+                            .err();
                             record_protocol_rejection(
                                 &mut ledger,
                                 &runtime,
@@ -3480,7 +3997,11 @@ fn run_daemon(
                             )?;
                         }
                     }
-                    if let Err(error) = write_daemon_response(&mut stream, &response) {
+                    if let Err(error) = write_daemon_response(
+                        &mut stream,
+                        &response,
+                        Instant::now() + DAEMON_PROTOCOL_IO_TIMEOUT,
+                    ) {
                         record_protocol_rejection(
                             &mut ledger,
                             &runtime,
@@ -3853,12 +4374,25 @@ fn start_reconcile_worker(
     if let Some(registry) = registry {
         command.arg("--registry").arg(registry);
     }
+    command.process_group(0);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(storage_error("spawn reconciliation worker"))?;
+    let process_group_id = libc::pid_t::try_from(child.id()).map_err(|error| {
+        WorkVcsError::StorageFailure(format!(
+            "reconciliation worker PID cannot identify its process group: {error}"
+        ))
+    })?;
+    if process_group_id <= 0 {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(WorkVcsError::StorageFailure(
+            "reconciliation worker process group must be positive".to_owned(),
+        ));
+    }
     let stdout = child.stdout.take().ok_or_else(|| {
         WorkVcsError::StorageFailure("reconciliation worker stdout is not captured".to_owned())
     })?;
@@ -3867,6 +4401,7 @@ fn start_reconcile_worker(
     })?;
     Ok(ActiveWorker {
         child: Some(child),
+        process_group_id,
         stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
         stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
         trigger: trigger.to_owned(),
@@ -3889,13 +4424,20 @@ fn poll_active_worker_before_terminate(
     let Some(worker) = active.as_mut() else {
         return Ok(None);
     };
-    if let Some(status) = worker
-        .child
-        .as_mut()
-        .expect("active worker child is present")
-        .try_wait()
-        .map_err(storage_error("wait for reconciliation worker"))?
-    {
+    if worker_has_exited_without_reaping(
+        worker
+            .child
+            .as_ref()
+            .expect("active worker child is present"),
+    )? {
+        let child = worker
+            .child
+            .as_mut()
+            .expect("active worker child is present");
+        terminate_remaining_worker_process_group(child, worker.process_group_id)?;
+        let status = child
+            .wait()
+            .map_err(storage_error("reap completed reconciliation worker"))?;
         let worker = active.take().expect("active worker is present");
         return finish_active_worker(worker, status, false, false).map(Some);
     }
@@ -3909,6 +4451,7 @@ fn poll_active_worker_before_terminate(
                 .child
                 .as_mut()
                 .expect("active worker child is present"),
+            worker.process_group_id,
             "timed-out reconciliation worker",
         )?;
         let worker = active.take().expect("active worker is present");
@@ -3934,14 +4477,21 @@ fn cancel_active_worker_before_terminate(
         .child
         .as_mut()
         .expect("active worker child is present");
-    let (status, cancelled) = match child.try_wait().map_err(storage_error(
-        "inspect reconciliation worker before shutdown",
-    ))? {
-        Some(status) => (status, false),
-        None => {
-            before_terminate();
-            terminate_and_reap(child, "reconciliation worker during shutdown")?
-        }
+    let (status, cancelled) = if worker_has_exited_without_reaping(child)? {
+        terminate_remaining_worker_process_group(child, worker.process_group_id)?;
+        (
+            child
+                .wait()
+                .map_err(storage_error("reap completed reconciliation worker"))?,
+            false,
+        )
+    } else {
+        before_terminate();
+        terminate_and_reap(
+            child,
+            worker.process_group_id,
+            "reconciliation worker during shutdown",
+        )?
     };
     let worker = active.take().expect("active worker is present");
     finish_active_worker(worker, status, false, cancelled).map(Some)
@@ -3950,23 +4500,101 @@ fn cancel_active_worker_before_terminate(
 #[cfg(unix)]
 fn terminate_and_reap(
     child: &mut Child,
+    process_group_id: libc::pid_t,
     operation: &'static str,
 ) -> Result<(std::process::ExitStatus, bool)> {
-    match child.kill() {
-        Ok(()) => {}
-        Err(error)
-            if error.raw_os_error() == Some(libc::ESRCH)
-                || error.kind() == std::io::ErrorKind::InvalidInput => {}
-        Err(error) => {
-            return Err(WorkVcsError::StorageFailure(format!(
-                "cannot terminate {operation}: {error}"
-            )));
+    if let Err(error) = terminate_worker_process_group(child, process_group_id) {
+        if let Some(status) = child.try_wait().map_err(|wait_error| {
+            WorkVcsError::StorageFailure(format!(
+                "cannot inspect {operation} after process-group termination failed with {error}: {wait_error}"
+            ))
+        })? {
+            return Ok((status, false));
         }
+        return Err(WorkVcsError::StorageFailure(format!(
+            "cannot terminate {operation}: {error}"
+        )));
     }
     let status = child.wait().map_err(|error| {
         WorkVcsError::StorageFailure(format!("cannot reap {operation}: {error}"))
     })?;
     Ok((status, status.signal() == Some(libc::SIGKILL)))
+}
+
+#[cfg(unix)]
+fn worker_has_exited_without_reaping(child: &Child) -> Result<bool> {
+    let child_id = libc::id_t::try_from(child.id()).map_err(|error| {
+        WorkVcsError::StorageFailure(format!(
+            "reconciliation worker PID cannot be observed without reaping: {error}"
+        ))
+    })?;
+    loop {
+        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child_id,
+                information.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            let information = unsafe { information.assume_init() };
+            return Ok(unsafe { information.si_pid() } != 0);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(WorkVcsError::StorageFailure(format!(
+            "cannot inspect reconciliation worker without reaping: {error}"
+        )));
+    }
+}
+
+#[cfg(unix)]
+fn terminate_worker_process_group(
+    child: &Child,
+    process_group_id: libc::pid_t,
+) -> std::io::Result<()> {
+    let child_pid = libc::pid_t::try_from(child.id()).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("worker PID cannot identify its process group: {error}"),
+        )
+    })?;
+    if process_group_id <= 0 || process_group_id != child_pid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("worker process group {process_group_id} does not match child PID {child_pid}"),
+        ));
+    }
+    let result = unsafe { libc::kill(-process_group_id, libc::SIGKILL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn terminate_remaining_worker_process_group(
+    child: &Child,
+    process_group_id: libc::pid_t,
+) -> Result<()> {
+    match terminate_worker_process_group(child, process_group_id) {
+        Ok(()) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        // Darwin reports EPERM when the observed, unreaped group leader is the
+        // only remaining process (a zombie cannot receive SIGKILL). This path
+        // is used only after waitid(WNOWAIT) proved that our own leader exited;
+        // active timeout/cancellation still treats EPERM as a hard failure.
+        #[cfg(target_os = "macos")]
+        Err(error) if error.raw_os_error() == Some(libc::EPERM) => Ok(()),
+        Err(error) => Err(WorkVcsError::StorageFailure(format!(
+            "cannot terminate remaining reconciliation worker process group: {error}"
+        ))),
+    }
 }
 
 #[cfg(unix)]
@@ -4041,8 +4669,13 @@ fn wait_for_worker(child: &mut Child, timeout: Duration) -> Result<WorkerOutcome
             break status;
         }
         if started.elapsed() >= timeout {
+            let process_group_id = libc::pid_t::try_from(child.id()).map_err(|error| {
+                WorkVcsError::StorageFailure(format!(
+                    "test worker PID cannot identify its process group: {error}"
+                ))
+            })?;
             let (status, terminated) =
-                terminate_and_reap(child, "timed-out reconciliation worker")?;
+                terminate_and_reap(child, process_group_id, "timed-out reconciliation worker")?;
             timed_out = terminated;
             break status;
         }
@@ -4418,6 +5051,7 @@ fn rejection_message(message: String, response_error: Option<WorkVcsError>) -> S
 
 #[cfg(unix)]
 fn daemon_request(root: &Path, action: &str) -> Result<String> {
+    let protocol_deadline = Instant::now() + DAEMON_PROTOCOL_IO_TIMEOUT;
     let socket = root.join("runtime").join("v1.sock");
     let metadata = fs::symlink_metadata(&socket).map_err(storage_error("inspect daemon socket"))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_socket() {
@@ -4438,13 +5072,16 @@ fn daemon_request(root: &Path, action: &str) -> Result<String> {
     };
     let mut bytes = serde_json::to_vec(&request).map_err(serialization_error)?;
     bytes.push(b'\n');
-    stream
-        .write_all(&bytes)
-        .map_err(storage_error("write daemon request"))?;
+    write_all_before_deadline(&mut stream, &bytes, protocol_deadline, "daemon request")?;
+    daemon_protocol_time_remaining(protocol_deadline, "daemon request")?;
     stream
         .shutdown(std::net::Shutdown::Write)
         .map_err(storage_error("finish daemon request"))?;
-    let response = read_bounded_json::<DaemonResponse>(&mut stream, "daemon response")?;
+    let response = read_bounded_json_before_deadline::<DaemonResponse>(
+        &mut stream,
+        "daemon response",
+        protocol_deadline,
+    )?;
     render_json(&response)
 }
 
@@ -4509,8 +5146,9 @@ fn peer_uid(_stream: &UnixStream) -> Result<libc::uid_t> {
 }
 
 #[cfg(unix)]
-fn read_daemon_request(stream: &mut UnixStream) -> Result<DaemonRequest> {
-    let request = read_bounded_json::<DaemonRequest>(stream, "daemon request")?;
+fn read_daemon_request(stream: &mut UnixStream, deadline: Instant) -> Result<DaemonRequest> {
+    let request =
+        read_bounded_json_before_deadline::<DaemonRequest>(stream, "daemon request", deadline)?;
     if request.version != AUTOMATION_PROTOCOL_VERSION {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "daemon protocol version {} does not match {}",
@@ -4520,6 +5158,7 @@ fn read_daemon_request(stream: &mut UnixStream) -> Result<DaemonRequest> {
     Ok(request)
 }
 
+#[cfg(test)]
 fn read_bounded_json<T: for<'de> Deserialize<'de>>(
     reader: &mut impl Read,
     label: &str,
@@ -4529,18 +5168,125 @@ fn read_bounded_json<T: for<'de> Deserialize<'de>>(
         .take((MAX_DAEMON_FRAME_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(storage_error("read daemon frame"))?;
+    decode_bounded_json(&bytes, label)
+}
+
+fn decode_bounded_json<T: for<'de> Deserialize<'de>>(bytes: &[u8], label: &str) -> Result<T> {
     if bytes.len() > MAX_DAEMON_FRAME_BYTES {
         return Err(WorkVcsError::ControlPlaneInvalid(format!(
             "{label} exceeds the bounded frame size"
         )));
     }
-    serde_json::from_slice(&bytes).map_err(|error| {
+    serde_json::from_slice(bytes).map_err(|error| {
         WorkVcsError::ControlPlaneInvalid(format!("{label} is malformed JSON: {error}"))
     })
 }
 
 #[cfg(unix)]
-fn write_daemon_response(stream: &mut UnixStream, response: &DaemonResponse) -> Result<()> {
+fn daemon_protocol_time_remaining(deadline: Instant, label: &str) -> Result<Duration> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            WorkVcsError::StorageFailure(format!(
+                "{label} exceeded the {:?} daemon protocol deadline",
+                DAEMON_PROTOCOL_IO_TIMEOUT
+            ))
+        })?;
+    Ok(remaining)
+}
+
+#[cfg(unix)]
+fn read_bounded_json_before_deadline<T: for<'de> Deserialize<'de>>(
+    stream: &mut UnixStream,
+    label: &str,
+    deadline: Instant,
+) -> Result<T> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let remaining = daemon_protocol_time_remaining(deadline, label)?;
+        stream.set_read_timeout(Some(remaining)).map_err(|error| {
+            WorkVcsError::StorageFailure(format!(
+                "cannot bound {label} frame read to remaining deadline {remaining:?}: {error}"
+            ))
+        })?;
+        let available = (MAX_DAEMON_FRAME_BYTES + 1).saturating_sub(bytes.len());
+        if available == 0 {
+            return decode_bounded_json(&bytes, label);
+        }
+        let chunk_len = available.min(buffer.len());
+        let read = match stream.read(&mut buffer[..chunk_len]) {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(WorkVcsError::StorageFailure(format!(
+                    "{label} exceeded the {:?} daemon protocol deadline",
+                    DAEMON_PROTOCOL_IO_TIMEOUT
+                )));
+            }
+            Err(error) => return Err(storage_error("read daemon frame")(error)),
+        };
+        if read == 0 {
+            return decode_bounded_json(&bytes, label);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if bytes.len() > MAX_DAEMON_FRAME_BYTES || bytes.contains(&b'\n') {
+            return decode_bounded_json(&bytes, label);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_all_before_deadline(
+    stream: &mut UnixStream,
+    mut bytes: &[u8],
+    deadline: Instant,
+    label: &str,
+) -> Result<()> {
+    while !bytes.is_empty() {
+        let remaining = daemon_protocol_time_remaining(deadline, label)?;
+        stream.set_write_timeout(Some(remaining)).map_err(|error| {
+            WorkVcsError::StorageFailure(format!(
+                "cannot bound {label} frame write to remaining deadline {remaining:?}: {error}"
+            ))
+        })?;
+        match stream.write(bytes) {
+            Ok(0) => {
+                return Err(WorkVcsError::StorageFailure(format!(
+                    "cannot write {label}: socket made no progress"
+                )));
+            }
+            Ok(written) => bytes = &bytes[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(WorkVcsError::StorageFailure(format!(
+                    "{label} exceeded the {:?} daemon protocol deadline",
+                    DAEMON_PROTOCOL_IO_TIMEOUT
+                )));
+            }
+            Err(error) => return Err(storage_error("write daemon frame")(error)),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_daemon_response(
+    stream: &mut UnixStream,
+    response: &DaemonResponse,
+    deadline: Instant,
+) -> Result<()> {
     let mut bytes = serde_json::to_vec(response).map_err(serialization_error)?;
     bytes.push(b'\n');
     if bytes.len() > MAX_DAEMON_FRAME_BYTES {
@@ -4548,9 +5294,7 @@ fn write_daemon_response(stream: &mut UnixStream, response: &DaemonResponse) -> 
             "daemon response exceeds the bounded frame size".to_owned(),
         ));
     }
-    stream
-        .write_all(&bytes)
-        .map_err(storage_error("write daemon response"))
+    write_all_before_deadline(stream, &bytes, deadline, "daemon response")
 }
 
 #[cfg(unix)]
@@ -4974,6 +5718,23 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn wait_for_test_pid(path: &Path) -> libc::pid_t {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Ok(contents) = fs::read_to_string(path)
+                && let Ok(pid) = contents.trim().parse::<libc::pid_t>()
+            {
+                return pid;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "test process PID file {} did not become readable and parseable within the bound",
+            path.display()
+        );
+    }
+
+    #[cfg(unix)]
     fn publish_failed_reconcile_report(root: &Path) -> ReconcileReport {
         let registry = read_automation_registry(root).unwrap();
         let source = AutomationCatalogSource {
@@ -5028,6 +5789,203 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn native_historical_identity_is_nested_and_linked_worktree_strict() {
+        let temporary = TempDir::new().unwrap();
+        let temporary_root = temporary.path().canonicalize().unwrap();
+
+        let repository = temporary_root.join("repository");
+        let nested = repository.join("src/nested");
+        fs::create_dir_all(repository.join(".git")).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        let identity = resolve_project_identity_without_git_subprocess(&nested).unwrap();
+        assert_eq!(identity.kind, "git-common-dir");
+        assert_eq!(
+            identity.root,
+            fs::canonicalize(&repository).unwrap().display().to_string()
+        );
+        assert_eq!(
+            identity.identity,
+            fs::canonicalize(repository.join(".git"))
+                .unwrap()
+                .display()
+                .to_string()
+        );
+
+        let common_repository = temporary_root.join("common-repository");
+        let common_dir = common_repository.join(".git");
+        let worktree = temporary_root.join("linked-worktree");
+        let worktree_nested = worktree.join("nested");
+        let worktree_admin = common_dir.join("worktrees/linked");
+        fs::create_dir_all(&worktree_admin).unwrap();
+        fs::create_dir_all(&worktree_nested).unwrap();
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", worktree_admin.display()),
+        )
+        .unwrap();
+        fs::write(worktree_admin.join("commondir"), "../..\n").unwrap();
+        fs::write(
+            worktree_admin.join("gitdir"),
+            format!("{}\n", worktree.join(".git").display()),
+        )
+        .unwrap();
+        fs::write(worktree_admin.join("HEAD"), b"ref: refs/heads/linked\n").unwrap();
+        let identity = resolve_project_identity_without_git_subprocess(&worktree_nested).unwrap();
+        assert_eq!(identity.kind, "git-common-dir");
+        assert_eq!(
+            identity.identity,
+            fs::canonicalize(&common_dir).unwrap().display().to_string()
+        );
+        assert_eq!(
+            identity.root,
+            fs::canonicalize(&worktree).unwrap().display().to_string()
+        );
+        let observed = observe_historical_owner(&worktree_nested).unwrap();
+        fs::write(
+            worktree_admin.join("HEAD"),
+            b"ref: refs/heads/linked-changed\n",
+        )
+        .unwrap();
+        let changed = observe_historical_owner(&worktree_nested).unwrap();
+        assert_eq!(changed.identity, observed.identity);
+        assert_ne!(changed.metadata_sha256, observed.metadata_sha256);
+        let linked_aliases = historical_cwd_aliases_without_io(&worktree_nested).unwrap();
+        assert!(
+            historical_repository_boundaries(&common_dir)
+                .iter()
+                .any(|boundary| linked_aliases
+                    .iter()
+                    .any(|candidate| candidate.starts_with(boundary)))
+        );
+        let unrelated = temporary_root.join("unrelated-backlink-target");
+        let unverified_admin = common_dir.join("worktrees/unverified");
+        fs::create_dir(&unverified_admin).unwrap();
+        fs::write(
+            unverified_admin.join("gitdir"),
+            format!("{}\n", unrelated.join(".git").display()),
+        )
+        .unwrap();
+        assert!(
+            historical_repository_boundaries(&common_dir)
+                .iter()
+                .any(|boundary| boundary == &unrelated)
+        );
+
+        let backlink_outside = temporary_root.join("backlink-outside");
+        let backlink_worktree = backlink_outside.join("worktree");
+        fs::create_dir_all(&backlink_worktree).unwrap();
+        let backlink_link = temporary_root.join("backlink-link");
+        std::os::unix::fs::symlink(&backlink_outside, &backlink_link).unwrap();
+        let unsafe_root = backlink_link.join("worktree");
+        let unsafe_admin = common_dir.join("worktrees/unsafe-link");
+        fs::create_dir(&unsafe_admin).unwrap();
+        fs::write(
+            unsafe_admin.join("gitdir"),
+            format!("{}\n", unsafe_root.join(".git").display()),
+        )
+        .unwrap();
+        let boundaries = historical_repository_boundaries(&common_dir);
+        let error = select_historical_probe_path(&boundaries, &[unsafe_root]).unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+        assert!(error.to_string().contains("is a symlink"));
+
+        let symlinked = temporary_root.join("symlinked-marker");
+        fs::create_dir(&symlinked).unwrap();
+        std::os::unix::fs::symlink(&common_dir, symlinked.join(".git")).unwrap();
+        let error = resolve_project_identity_without_git_subprocess(&symlinked).unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+
+        let separate = temporary_root.join("separate-git-dir");
+        let separate_metadata = temporary_root.join("separate-metadata");
+        fs::create_dir(&separate).unwrap();
+        fs::create_dir(&separate_metadata).unwrap();
+        fs::write(
+            separate.join(".git"),
+            format!("gitdir: {}\n", separate_metadata.display()),
+        )
+        .unwrap();
+        let error = resolve_project_identity_without_git_subprocess(&separate).unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+        assert!(error.to_string().contains("no common-dir pointer"));
+        assert!(historical_repository_boundaries(&separate_metadata).is_empty());
+    }
+
+    #[test]
+    fn historical_owner_cache_revalidates_local_identity_before_reuse_and_publication() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let membership = registry_derived_membership(Some(&fixture.registry_path)).unwrap();
+        let source = fixture.rollout_root.join("thread.jsonl");
+        let cwd = rollout_cwd_from_session_meta(&source).unwrap();
+        let mut cache = HistoricalOwnerCache::new();
+
+        let member =
+            resolve_registry_derived_source_member(&source, &membership, &mut cache).unwrap();
+        assert_eq!(member.project_ref_id, fixture.project_ref_id);
+
+        #[cfg(unix)]
+        {
+            let moved_cwd = cwd.with_extension("moved-before-symlink-revalidation");
+            let replacement = temporary.path().join("replacement-outside-active-boundary");
+            fs::create_dir(&replacement).unwrap();
+            fs::rename(&cwd, &moved_cwd).unwrap();
+            std::os::unix::fs::symlink(&replacement, &cwd).unwrap();
+            let error = validate_historical_owner_cache(&cache).unwrap_err();
+            assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("historical rollout cwd component")
+            );
+            assert!(error.to_string().contains("is a symlink"));
+            fs::remove_file(&cwd).unwrap();
+            fs::rename(&moved_cwd, &cwd).unwrap();
+
+            let outside = temporary.path().join("outside-active-boundary");
+            fs::create_dir(&outside).unwrap();
+            let escaped = cwd.join("escaped");
+            std::os::unix::fs::symlink(&outside, &escaped).unwrap();
+            let escaped_source = fixture.rollout_root.join("escaped.jsonl");
+            write_registry_derived_test_rollout(
+                &escaped_source,
+                &escaped,
+                "symlink escape must be rejected before canonicalization",
+            );
+            let error =
+                resolve_registry_derived_source_member(&escaped_source, &membership, &mut cache)
+                    .unwrap_err();
+            assert_eq!(error.code, "integrity_invalid");
+            assert!(error.error.contains("symlink that could escape"));
+        }
+
+        fs::create_dir(cwd.join(".git")).unwrap();
+        fs::write(cwd.join(".git/HEAD"), b"ref: refs/heads/main\n").unwrap();
+        let error =
+            resolve_registry_derived_source_member(&source, &membership, &mut cache).unwrap_err();
+        assert_eq!(error.code, "control_plane_invalid");
+        assert!(
+            error
+                .error
+                .contains("changed identity metadata during reconciliation")
+        );
+
+        let error = validate_historical_owner_cache(&cache).unwrap_err();
+        assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("changed identity metadata during reconciliation")
+        );
+
+        let first = observe_historical_owner(&cwd).unwrap();
+        fs::write(cwd.join(".git/HEAD"), b"ref: refs/heads/changed\n").unwrap();
+        let changed = observe_historical_owner(&cwd).unwrap();
+        assert_eq!(changed.identity, first.identity);
+        assert_ne!(changed.metadata_sha256, first.metadata_sha256);
+    }
+
     #[test]
     fn bounded_protocol_rejects_wrong_version_and_oversized_frame() {
         let request = DaemonRequest {
@@ -5041,6 +5999,93 @@ mod tests {
         let error =
             read_bounded_json::<DaemonRequest>(&mut oversized.as_slice(), "request").unwrap_err();
         assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_client_times_out_when_listener_accepts_but_never_responds() {
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().join("automation");
+        let runtime = root.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = runtime.join("v1.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            release_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+        });
+
+        let started = Instant::now();
+        let error = daemon_request(&root, "status").unwrap_err();
+        let elapsed = started.elapsed();
+        release_sender.send(()).unwrap();
+        server.join().unwrap();
+        assert_eq!(error.code().to_string(), "storage_failure");
+        assert!(elapsed >= Duration::from_millis(1_500));
+        assert!(elapsed < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_protocol_deadline_rejects_slow_drip_frames() {
+        fn assert_absolute_deadline(elapsed: Duration, error: &WorkVcsError) {
+            assert_eq!(error.code().to_string(), "storage_failure");
+            assert!(error.to_string().contains("protocol deadline"));
+            assert!(elapsed >= Duration::from_millis(1_500));
+            assert!(elapsed < Duration::from_secs(3));
+        }
+
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().join("automation");
+        let runtime = root.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = runtime.join("v1.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+        let response_server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            stream.read_to_end(&mut request).unwrap();
+            for byte in b"{\"version\":1" {
+                if stream.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let started = Instant::now();
+        let error = daemon_request(&root, "status").unwrap_err();
+        let elapsed = started.elapsed();
+        response_server.join().unwrap();
+        assert_absolute_deadline(elapsed, &error);
+
+        let (mut daemon_stream, mut slow_client) = UnixStream::pair().unwrap();
+        let request_client = std::thread::spawn(move || {
+            for byte in b"{\"version\":1" {
+                if slow_client.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let started = Instant::now();
+        let error = read_daemon_request(
+            &mut daemon_stream,
+            Instant::now() + DAEMON_PROTOCOL_IO_TIMEOUT,
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        drop(daemon_stream);
+        request_client.join().unwrap();
+        assert_absolute_deadline(elapsed, &error);
     }
 
     #[test]
@@ -5694,6 +6739,7 @@ mod tests {
         let mut sleeping = ProcessCommand::new("/bin/sh")
             .arg("-c")
             .arg("sleep 2")
+            .process_group(0)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -5755,14 +6801,17 @@ mod tests {
             let mut child = ProcessCommand::new("/bin/sh")
                 .arg("-c")
                 .arg("sleep 10")
+                .process_group(0)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
             let stdout = child.stdout.take().unwrap();
             let stderr = child.stderr.take().unwrap();
+            let process_group_id = libc::pid_t::try_from(child.id()).unwrap();
             ActiveWorker {
                 child: Some(child),
+                process_group_id,
                 stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
                 stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
                 trigger: trigger.to_owned(),
@@ -5783,6 +6832,7 @@ mod tests {
                 .arg("read ready; printf '%s' \"$PAYLOAD\"; exit \"$EXIT_CODE\"")
                 .env("PAYLOAD", stdout_payload)
                 .env("EXIT_CODE", exit_code.to_string())
+                .process_group(0)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -5791,9 +6841,11 @@ mod tests {
             let stdin = child.stdin.take().unwrap();
             let stdout = child.stdout.take().unwrap();
             let stderr = child.stderr.take().unwrap();
+            let process_group_id = libc::pid_t::try_from(child.id()).unwrap();
             (
                 ActiveWorker {
                     child: Some(child),
+                    process_group_id,
                     stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
                     stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
                     trigger: trigger.to_owned(),
@@ -5923,6 +6975,118 @@ mod tests {
         assert_eq!(response.status, "in_progress");
         let mut active = active;
         cancel_active_worker(&mut active).unwrap().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_worker_cancellation_terminates_and_reaps_its_process_group() {
+        fn assert_process_absent(pid: libc::pid_t) {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if unsafe { libc::kill(pid, 0) } == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("process {pid} remained after worker process-group cancellation");
+        }
+
+        let temporary = TempDir::new().unwrap();
+        let descendant_pid_path = temporary.path().join("descendant.pid");
+        let mut child = ProcessCommand::new("/bin/sh")
+            .arg("-c")
+            .arg("/bin/sleep 30 & echo $! > \"$DESCENDANT_PID_PATH\"; wait")
+            .env("DESCENDANT_PID_PATH", &descendant_pid_path)
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let child_pid = libc::pid_t::try_from(child.id()).unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let mut active = Some(ActiveWorker {
+            child: Some(child),
+            process_group_id: child_pid,
+            stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
+            stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
+            trigger: "process-group-cancel".to_owned(),
+            started: Instant::now(),
+            started_at_us: epoch_micros(),
+            timeout_seconds: None,
+        });
+        let descendant_pid = wait_for_test_pid(&descendant_pid_path);
+
+        let completed = cancel_active_worker(&mut active).unwrap().unwrap();
+        assert!(completed.outcome.cancelled);
+        assert_eq!(completed.outcome.exit_code, None);
+        assert_process_absent(child_pid);
+        assert_process_absent(descendant_pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_worker_cleans_pipe_holding_descendants_without_changing_leader_status() {
+        fn assert_process_absent(pid: libc::pid_t) {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if unsafe { libc::kill(pid, 0) } == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            panic!("descendant process {pid} remained after worker leader completion");
+        }
+
+        for exit_code in [0, 7] {
+            let temporary = TempDir::new().unwrap();
+            let descendant_pid_path = temporary.path().join("descendant.pid");
+            let mut child = ProcessCommand::new("/bin/sh")
+                .arg("-c")
+                .arg(
+                    "/bin/sleep 30 & echo $! > \"$DESCENDANT_PID_PATH\"; printf 'leader-finished'; exit \"$EXIT_CODE\"",
+                )
+                .env("DESCENDANT_PID_PATH", &descendant_pid_path)
+                .env("EXIT_CODE", exit_code.to_string())
+                .process_group(0)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let process_group_id = libc::pid_t::try_from(child.id()).unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let mut active = Some(ActiveWorker {
+                child: Some(child),
+                process_group_id,
+                stdout_reader: Some(std::thread::spawn(move || capture_worker_stream(stdout))),
+                stderr_reader: Some(std::thread::spawn(move || capture_worker_stream(stderr))),
+                trigger: format!("leader-exit-{exit_code}"),
+                started: Instant::now(),
+                started_at_us: epoch_micros(),
+                timeout_seconds: None,
+            });
+            let descendant_pid = wait_for_test_pid(&descendant_pid_path);
+
+            let started = Instant::now();
+            let completed = loop {
+                if let Some(completed) = poll_active_worker(&mut active).unwrap() {
+                    break completed;
+                }
+                assert!(started.elapsed() < Duration::from_secs(3));
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert!(started.elapsed() < Duration::from_secs(3));
+            assert_eq!(completed.outcome.exit_code, Some(exit_code));
+            assert!(!completed.outcome.timed_out);
+            assert!(!completed.outcome.cancelled);
+            assert_eq!(completed.outcome.stdout.bytes, b"leader-finished");
+            assert_process_absent(descendant_pid);
+        }
     }
 
     #[cfg(unix)]

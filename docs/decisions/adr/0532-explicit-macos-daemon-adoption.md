@@ -36,12 +36,20 @@ Process health, worker outcome, catalog completeness and startup adoption each
 have their own observation. Historical quarantines remain visible and do not
 become successful observations merely because the process is running.
 
+Start acceptance binds the launchctl process PID to the IPC ledger PID as well
+as the exact plist, executable and full argument vector. Enabled-state output
+is normalised across macOS representations; unknown state cannot establish
+auto-start. Protocol I/O has its own finite response boundary, independent of
+the duration or amount of reconciliation work.
+
 The first real global reconciliation on the adoption machine took 306 seconds,
 exceeding the earlier fixed 300-second worker cutoff. Workers therefore have
 no implicit wall-clock cutoff. An operator may explicitly select a deadline
 with `--worker-timeout-seconds`; zero means none. The coordinator polls one
 asynchronous worker, serves status during startup and long scans, coalesces
 pending triggers, and cancels and reaps an active worker on an explicit stop.
+Each worker has a dedicated process group so cancellation also terminates its
+descendant probes before stream cleanup.
 Accepted/queued requests are distinct from validated completion. These rules
 supersede ADR-0529's fixed worker-runtime boundary while preserving its socket,
 stream-evidence and immutable-publication contracts.

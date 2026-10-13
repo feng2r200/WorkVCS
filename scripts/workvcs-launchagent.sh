@@ -160,6 +160,14 @@ assert_loaded_job_matches() {
         loaded_job_matches "$snapshot" || die "loaded label has a different plist, executable or arguments; preserve it"
     fi
 }
+ipc_matches_launchd_pid() {
+    local launchd_pid ipc_pid
+    launchd_pid="$(printf '%s\n' "$1" | awk '/^[[:space:]]*pid = / {print $3; exit}')"
+    [[ "$launchd_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    ipc_pid="$( { printf '%s\n' "$2" | /usr/bin/plutil -extract message raw -o - -- - \
+        | /usr/bin/plutil -extract pid raw -o - -- -; } 2>/dev/null)" || return 1
+    [[ "$ipc_pid" == "$launchd_pid" ]]
+}
 print_status() {
     local installed=false loaded=false running=false matches=false disabled=unknown state="" launch_status="" autostart=false
     [[ -f "$plist" ]] && installed=true
@@ -170,7 +178,11 @@ print_status() {
         [[ "$state" == running && "$matches" == true ]] && running=true
     fi
     disabled="$(/bin/launchctl print-disabled "gui/$(id -u)" | awk -v key="\"$label\"" '$1 == key {print $3; exit}')"
-    [[ -n "$disabled" ]] || disabled=false
+    case "$disabled" in
+        enabled|false|"") disabled=false ;;
+        disabled|true) disabled=true ;;
+        *) disabled=unknown ;;
+    esac
     local login_directory=false
     if [[ -d "$agent_dir" && -d "$HOME/Library/LaunchAgents" ]] && \
        [[ "$(cd "$agent_dir" && pwd -P)" == "$(cd "$HOME/Library/LaunchAgents" && pwd -P)" ]]; then
@@ -221,17 +233,20 @@ case "$action" in
         fi
         /bin/launchctl kickstart "$domain"
         started=false
-        for ((attempt=0; attempt<50; attempt++)); do
+        start_deadline=$((SECONDS + 5))
+        while (( SECONDS < start_deadline )); do
             snapshot="$(/bin/launchctl print "$domain" 2>/dev/null)" || snapshot=""
             if loaded_job_matches "$snapshot" && \
-               [[ "$(printf '%s\n' "$snapshot" | awk '/^[[:space:]]*state = / {print $3; exit}')" == running ]]; then
+               [[ "$(printf '%s\n' "$snapshot" | awk '/^[[:space:]]*state = / {print $3; exit}')" == running ]] && \
+               response="$("$binary" automation daemon status --registry "$registry" --root "$root" 2>/dev/null)" && \
+               ipc_matches_launchd_pid "$snapshot" "$response"; then
                 started=true
                 break
             fi
             sleep 0.1
         done
         print_status
-        [[ "$started" == true ]] || die "launchd did not show the exact job running; inspect the reported state and stderr log"
+        [[ "$started" == true ]] || die "launchd and daemon IPC did not confirm the same exact running job; inspect the reported state and stderr log"
         ;;
     stop|disable)
         [[ -f "$plist" ]] || die "managed plist is unavailable"

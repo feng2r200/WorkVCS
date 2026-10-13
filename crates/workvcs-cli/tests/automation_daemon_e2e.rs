@@ -663,6 +663,19 @@ fn registry_derived_daemon_reloads_global_watch_targets_without_output_feedback(
     );
     let before_membership = u64_field(&new_root, "updated_at_us");
     write_json_atomically(&fixture.registry, &fixture.full_registry);
+    let transitional = daemon_command(&binary, &fixture.root, "reconcile");
+    assert_success(
+        &transitional,
+        "queue reconciliation while routing activation is stale",
+    );
+    let transitional_failure = wait_for_status(&binary, &fixture.root, |ledger| {
+        ledger["last_worker_status"] == "failed"
+            && ledger["worker_active"] == false
+            && u64_field(ledger, "updated_at_us") > before_membership
+    });
+    assert_eq!(transitional_failure["last_worker_exit_code"], 1);
+    assert_eq!(transitional_failure["last_worker_stdout_bytes"], 0);
+    assert!(u64_field(&transitional_failure, "last_worker_stderr_bytes") > 0);
     activate_routing(&binary, &fixture.registry, Some(prior_activation_digest));
     let membership_reloaded =
         wait_for_report(&binary, &fixture.root, before_membership, |report| {
@@ -704,6 +717,81 @@ fn registry_derived_daemon_reloads_global_watch_targets_without_output_feedback(
     );
 
     daemon.stop();
+}
+
+#[test]
+fn registry_derived_historical_owner_avoids_git_and_quarantines_unbound_cwd() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_workvcs"));
+    let fixture = RegistryDerivedFixture::new(&binary);
+    let unbound_cwd = fixture.root.join("unbound-historical-cwd");
+    fs::create_dir(&unbound_cwd).expect("unbound historical cwd");
+    write_project_rollout(
+        &fixture.rollout_b.join("unbound-owner.jsonl"),
+        &unbound_cwd,
+        "unbound historical owner evidence",
+    );
+    apply_source_policy(
+        &binary,
+        &fixture.root,
+        &fixture.registry,
+        "source-b",
+        &fixture.rollout_b,
+    );
+
+    let fake_bin = fixture.root.join("fake-bin");
+    fs::create_dir(&fake_bin).expect("fake executable directory");
+    let git_marker = fixture.root.join("unexpected-git-invocation");
+    let fake_git = fake_bin.join("git");
+    fs::write(
+        &fake_git,
+        format!(
+            "#!/bin/sh\nprintf invoked > '{}'\nexec /bin/sleep 30\n",
+            git_marker.display()
+        ),
+    )
+    .expect("write fake Git");
+    fs::set_permissions(&fake_git, fs::Permissions::from_mode(0o700)).expect("protect fake Git");
+
+    let started = Instant::now();
+    let output = Command::new(&binary)
+        .args(args![
+            "automation",
+            "reconcile",
+            "--once",
+            "--root",
+            path_text(&fixture.root),
+            "--registry",
+            path_text(&fixture.registry),
+            "--format",
+            "json",
+        ])
+        .env("PATH", &fake_bin)
+        .output()
+        .expect("run registry-derived reconciliation without Git");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_success(&output, "reconcile registry-derived historical owners");
+    assert!(!git_marker.exists());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("reconcile report JSON");
+    assert_eq!(report["membership_mode"], "registry_derived");
+    assert!(u64_field(&report, "rollout_archives_ready") >= 1);
+    assert!(u64_field(&report, "rollout_archives_failed") >= 1);
+    assert_eq!(report["complete"], false);
+
+    let catalog = read_catalog(&report);
+    let unbound_source = fs::canonicalize(fixture.rollout_b.join("unbound-owner.jsonl"))
+        .expect("canonical unbound historical source");
+    assert!(
+        catalog["sources"]
+            .as_array()
+            .expect("catalog sources")
+            .iter()
+            .any(|source| {
+                source["status"] == "failed"
+                    && source["error_code"] == "project_owner_unbound"
+                    && source["artifact_path"] == path_text(&unbound_source)
+            }),
+        "catalog did not retain the unbound historical source failure: {catalog:#}"
+    );
 }
 
 #[test]
@@ -1131,18 +1219,28 @@ fn wait_for_report(
 ) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = None;
+    let mut last_report_error = None;
     while Instant::now() < deadline {
         let ledger = daemon_status(binary, root);
-        if ledger["worker_active"] == false && u64_field(&ledger, "updated_at_us") > after_us {
-            let report = last_worker_report(root);
-            if predicate(&report) {
-                return ledger;
+        if ledger["worker_active"] == false
+            && ledger["last_worker_exit_code"] == 0
+            && ledger["last_worker_cancelled"] == false
+            && ledger["last_worker_timed_out"] == false
+            && u64_field(&ledger, "last_worker_stdout_bytes") > 0
+            && u64_field(&ledger, "updated_at_us") > after_us
+        {
+            match try_last_worker_report(root) {
+                Ok(report) if predicate(&report) => return ledger,
+                Ok(_) => {}
+                Err(error) => last_report_error = Some(error),
             }
         }
         last = Some(ledger);
         thread::sleep(Duration::from_millis(100));
     }
-    panic!("daemon report predicate timed out; last ledger: {last:?}");
+    panic!(
+        "daemon report predicate timed out; last ledger: {last:?}; last report error: {last_report_error:?}"
+    );
 }
 
 fn wait_for_status(binary: &Path, root: &Path, predicate: impl Fn(&Value) -> bool) -> Value {
@@ -1166,11 +1264,20 @@ fn wait_for_status(binary: &Path, root: &Path, predicate: impl Fn(&Value) -> boo
 }
 
 fn last_worker_report(root: &Path) -> Value {
-    serde_json::from_slice(
-        &fs::read(root.join("runtime/worker-evidence/last-worker.stdout.log"))
-            .expect("read worker stdout evidence"),
-    )
-    .expect("worker report JSON")
+    try_last_worker_report(root).expect("worker report JSON")
+}
+
+fn try_last_worker_report(root: &Path) -> Result<Value, String> {
+    let path = root.join("runtime/worker-evidence/last-worker.stdout.log");
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("read worker stdout evidence {}: {error}", path.display()))?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "parse worker report JSON {} ({} bytes): {error}",
+            path.display(),
+            bytes.len()
+        )
+    })
 }
 
 fn u64_field(value: &Value, field: &str) -> u64 {

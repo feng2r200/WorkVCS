@@ -246,6 +246,13 @@ ownership remains explicitly quarantined. The daemon observes registry,
 routing, policy, member Store families and allowed rollout roots, and refreshes
 watch targets after complete rounds.
 
+Background historical attribution does not launch Git for every rollout's
+claimed working directory. It matches readable native cwd/Git metadata against
+the selected registry's active identity locators and exact member targets.
+Unbound, unavailable or unsupported contexts remain explicit source failures;
+the coordinator does not request broader filesystem permission or guess an
+owner from a path prefix. Ordinary foreground project discovery is unchanged.
+
 Run one finite reconciliation before considering a resident coordinator:
 
 ```sh
@@ -308,6 +315,10 @@ does not load the job. Explicit start enables and loads it, with RunAtLoad and
 KeepAlive for login startup and process recovery. Inspect the script's status
 for OS installation and running state; the coordinator's
 `launch_agent_installed: null` means it does not own that observation.
+Start also requires the IPC ledger PID to match the exact launchd job PID,
+so an unrelated foreground instance cannot be mistaken for successful startup.
+The OS's `enabled`/`disabled` and boolean disabled-state representations are
+normalised; an unknown disabled state never establishes enabled auto-start.
 
 To disable background execution while retaining recoverable configuration:
 
@@ -335,7 +346,11 @@ a complete scan. The default has no wall-clock cutoff. Set
 wanted (`0` means no deadline); expiry terminates and reports that worker as
 failed. A stop request cancels and reaps the active worker. Manual, watcher and
 periodic triggers arriving during a scan coalesce into one later complete
-round; a manual request returning `accepted` is queued work, not completed
+round. Cancellation also terminates the worker's dedicated process group so
+descendant probes cannot survive the requested shutdown. Client and server
+protocol I/O are bounded independently of worker runtime; a nonresponsive
+socket cannot make a startup-readiness probe wait indefinitely. A manual
+request returning `accepted` is queued work, not completed
 reconciliation. Its bounded stdout and stderr are retained under
 `runtime/worker-evidence/` with exact byte counts, full-stream hashes and
 explicit truncation state. The daemon accepts success or partial success only

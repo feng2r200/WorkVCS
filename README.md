@@ -18,7 +18,7 @@ conversation. WorkVCS covers the missing layer between them: the evolving
 review, and restore work.
 
 > **Project status:** the repository contains a locally validated bounded V1
-> implementation. The current source package version is `1.4.2`, and no public
+> implementation. The current source package version is `1.4.3`, and no public
 > release has been made. The source is licensed under Apache-2.0; selecting a
 > release version, publishing artifacts, and making release commitments remain
 > separate decisions.

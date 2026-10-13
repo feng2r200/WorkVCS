@@ -31609,6 +31609,254 @@ fn resolve_project_identity(cwd: &Path) -> Result<ProjectIdentity> {
     })
 }
 
+fn resolve_project_identity_without_git_subprocess(cwd: &Path) -> Result<ProjectIdentity> {
+    const MAX_GIT_METADATA_BYTES: u64 = 4 * 1024;
+
+    fn read_git_metadata_line(path: &Path, label: &'static str, max_bytes: u64) -> Result<String> {
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot inspect {label} {}: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} {} must be a regular file, not a symlink or special file",
+                path.display()
+            )));
+        }
+        if metadata.len() > max_bytes {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} {} exceeds the {max_bytes} byte safety bound",
+                path.display()
+            )));
+        }
+        let bytes = fs::read(path).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!("cannot read {label} {}: {error}", path.display()))
+        })?;
+        let text = std::str::from_utf8(&bytes).map_err(|error| {
+            WorkVcsError::IntegrityInvalid(format!(
+                "{label} {} is not UTF-8: {error}",
+                path.display()
+            ))
+        })?;
+        let mut lines = text.lines().filter(|line| !line.is_empty());
+        let line = lines.next().ok_or_else(|| {
+            WorkVcsError::IntegrityInvalid(format!("{label} {} is empty", path.display()))
+        })?;
+        if lines.next().is_some() {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} {} contains multiple non-empty lines",
+                path.display()
+            )));
+        }
+        Ok(line.to_owned())
+    }
+
+    fn canonical_git_directory(label: &'static str, path: &Path) -> Result<PathBuf> {
+        let canonical = canonical_existing_path(label, path)?;
+        let metadata = fs::metadata(&canonical).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!(
+                "cannot inspect {label} {}: {error}",
+                canonical.display()
+            ))
+        })?;
+        if !metadata.is_dir() {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "{label} {} is not a directory",
+                canonical.display()
+            )));
+        }
+        Ok(canonical)
+    }
+
+    let canonical_cwd = canonical_existing_path("project cwd", cwd)?;
+    let cwd_metadata = fs::metadata(&canonical_cwd).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!(
+            "cannot inspect project cwd {}: {error}",
+            canonical_cwd.display()
+        ))
+    })?;
+    if !cwd_metadata.is_dir() {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "project cwd {} is not a directory",
+            canonical_cwd.display()
+        )));
+    }
+
+    let mut cursor = canonical_cwd.as_path();
+    loop {
+        let marker = cursor.join(".git");
+        match fs::symlink_metadata(&marker) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(WorkVcsError::IntegrityInvalid(format!(
+                        "Git metadata marker {} is a symlink",
+                        marker.display()
+                    )));
+                }
+                let (git_dir, linked_worktree) = if metadata.is_dir() {
+                    (
+                        canonical_git_directory("Git metadata directory", &marker)?,
+                        false,
+                    )
+                } else if metadata.is_file() {
+                    let line = read_git_metadata_line(
+                        &marker,
+                        "Git worktree metadata pointer",
+                        MAX_GIT_METADATA_BYTES,
+                    )?;
+                    let value = line.strip_prefix("gitdir: ").ok_or_else(|| {
+                        WorkVcsError::IntegrityInvalid(format!(
+                            "Git worktree metadata pointer {} has an invalid format",
+                            marker.display()
+                        ))
+                    })?;
+                    if value.is_empty() {
+                        return Err(WorkVcsError::IntegrityInvalid(format!(
+                            "Git worktree metadata pointer {} has an empty target",
+                            marker.display()
+                        )));
+                    }
+                    let target = Path::new(value);
+                    let target = if target.is_absolute() {
+                        target.to_path_buf()
+                    } else {
+                        cursor.join(target)
+                    };
+                    (
+                        canonical_git_directory("Git worktree metadata directory", &target)?,
+                        true,
+                    )
+                } else {
+                    return Err(WorkVcsError::IntegrityInvalid(format!(
+                        "Git metadata marker {} is not a directory or regular file",
+                        marker.display()
+                    )));
+                };
+
+                let common_dir_marker = git_dir.join("commondir");
+                let common_dir = match fs::symlink_metadata(&common_dir_marker) {
+                    Ok(_) => {
+                        if !linked_worktree {
+                            return Err(WorkVcsError::IntegrityInvalid(format!(
+                                "non-standard Git metadata directory {} contains a common-dir pointer without a worktree pointer",
+                                git_dir.display()
+                            )));
+                        }
+                        let value = read_git_metadata_line(
+                            &common_dir_marker,
+                            "Git common-dir pointer",
+                            MAX_GIT_METADATA_BYTES,
+                        )?;
+                        let target = Path::new(&value);
+                        let target = if target.is_absolute() {
+                            target.to_path_buf()
+                        } else {
+                            git_dir.join(target)
+                        };
+                        canonical_git_directory("Git common-dir", &target)?
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        if linked_worktree {
+                            return Err(WorkVcsError::IntegrityInvalid(format!(
+                                "Git worktree metadata directory {} has no common-dir pointer",
+                                git_dir.display()
+                            )));
+                        }
+                        git_dir.clone()
+                    }
+                    Err(error) => {
+                        return Err(WorkVcsError::QueryInvalid(format!(
+                            "cannot inspect Git common-dir pointer {}: {error}",
+                            common_dir_marker.display()
+                        )));
+                    }
+                };
+                if linked_worktree {
+                    let worktrees_root = common_dir.join("worktrees");
+                    let relative = git_dir.strip_prefix(&worktrees_root).map_err(|_| {
+                        WorkVcsError::IntegrityInvalid(format!(
+                            "Git worktree metadata directory {} is outside the common-dir worktrees boundary {}",
+                            git_dir.display(),
+                            worktrees_root.display()
+                        ))
+                    })?;
+                    if relative.components().count() != 1 {
+                        return Err(WorkVcsError::IntegrityInvalid(format!(
+                            "Git worktree metadata directory {} is not one direct child of {}",
+                            git_dir.display(),
+                            worktrees_root.display()
+                        )));
+                    }
+                    let backlink = git_dir.join("gitdir");
+                    let value = read_git_metadata_line(
+                        &backlink,
+                        "Git worktree backlink",
+                        MAX_GIT_METADATA_BYTES,
+                    )?;
+                    let target = Path::new(&value);
+                    let target = if target.is_absolute() {
+                        target.to_path_buf()
+                    } else {
+                        git_dir.join(target)
+                    };
+                    let expected_marker =
+                        canonical_existing_path("Git worktree metadata pointer", &marker)?;
+                    let actual_marker =
+                        canonical_existing_path("Git worktree backlink target", &target)?;
+                    if actual_marker != expected_marker {
+                        return Err(WorkVcsError::IntegrityInvalid(format!(
+                            "Git worktree backlink {} does not reference its exact metadata pointer {}",
+                            backlink.display(),
+                            marker.display()
+                        )));
+                    }
+                }
+                let common_repo_root = common_dir.parent().ok_or_else(|| {
+                    WorkVcsError::IntegrityInvalid(format!(
+                        "Git common-dir {} has no repository parent",
+                        common_dir.display()
+                    ))
+                })?;
+                let common_repo_root =
+                    canonical_existing_path("Git common repository root", common_repo_root)?;
+                let worktree_root = cursor.to_path_buf();
+                let mut boundary_roots = vec![worktree_root.clone(), common_repo_root];
+                boundary_roots.sort();
+                boundary_roots.dedup();
+                return Ok(ProjectIdentity {
+                    kind: "git-common-dir".to_owned(),
+                    identity: common_dir.display().to_string(),
+                    root: worktree_root.display().to_string(),
+                    boundary_roots,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(WorkVcsError::QueryInvalid(format!(
+                    "cannot inspect Git metadata marker {}: {error}",
+                    marker.display()
+                )));
+            }
+        }
+        let Some(parent) = cursor.parent() else {
+            break;
+        };
+        if parent == cursor {
+            break;
+        }
+        cursor = parent;
+    }
+
+    Ok(ProjectIdentity {
+        kind: "cwd".to_owned(),
+        identity: canonical_cwd.display().to_string(),
+        root: canonical_cwd.display().to_string(),
+        boundary_roots: vec![canonical_cwd],
+    })
+}
+
 fn git_output_line(repo: &Path, args: &[&str], label: &str) -> std::result::Result<String, String> {
     let output = ProcessCommand::new("git")
         .env("GIT_OPTIONAL_LOCKS", "0")

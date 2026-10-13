@@ -78,6 +78,38 @@ fn invalid_or_conflicting_actions_fail_before_side_effects() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn ipc_readiness_requires_the_launchd_pid_and_rejects_invalid_responses() {
+    let source = fs::read_to_string(script()).unwrap();
+    let body = source
+        .split_once("ipc_matches_launchd_pid() {\n")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let command = format!(
+        "set -euo pipefail\nipc_matches_launchd_pid() {{\n{body}\n}}\nipc_matches_launchd_pid \"$1\" \"$2\""
+    );
+    let matching = r#"{"message":"{\"pid\":36110,\"worker_active\":true}"}"#;
+    for (snapshot, response, expected) in [
+        ("\tstate = running\n\tpid = 36110\n", matching, true),
+        ("\tstate = running\n\tpid = 36111\n", matching, false),
+        ("\tstate = running\n", matching, false),
+        ("\tpid = 0\n", r#"{"message":"{\"pid\":0}"}"#, false),
+        ("\tpid = 36110\n", "not-json", false),
+        ("\tpid = 36110\n", r#"{"message":"not-json"}"#, false),
+        ("\tpid = 36110\n", r#"{"message":"{}"}"#, false),
+    ] {
+        let result = Command::new("bash")
+            .args(["-c", &command, "--", snapshot, response])
+            .output()
+            .unwrap();
+        assert_eq!(result.status.success(), expected, "{snapshot:?} {response}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn install_is_idempotent_and_preserves_conflicting_or_symlinked_plists() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
@@ -128,6 +160,10 @@ fn install_is_idempotent_and_preserves_conflicting_or_symlinked_plists() {
     assert!(status.status.success());
     let status = String::from_utf8(status.stdout).unwrap();
     assert!(status.contains("launch_agent_installed=true"));
+    assert!(
+        status.contains("launch_agent_disabled=false")
+            || status.contains("launch_agent_disabled=true")
+    );
     assert!(status.contains("autostart_configured=false"));
     assert!(status.contains("autostart_enabled=false"));
     fs::set_permissions(&plist, fs::Permissions::from_mode(0o666)).unwrap();

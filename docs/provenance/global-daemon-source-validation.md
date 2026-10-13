@@ -1,7 +1,7 @@
 # Global Daemon Source Validation
 
-Observed: 2026-10-13
-Scope: WorkVCS 1.4.2 source acceptance under ADR-0532.
+Observed: 2026-10-14
+Scope: WorkVCS 1.4.3 source acceptance under ADR-0532.
 Execution Plan: `01a135cc-272b-75f4-b93a-477d966a84bd`.
 
 ## Recovered remaining work
@@ -47,14 +47,19 @@ also returned successfully; final installed validation is a separate check.
   unsafe file/directory permissions, preserves identical installation and
   confirms the actual loaded job before reporting running or startup state.
 
-The complete workspace suite passed 1,086 tests across 179 targets. After the
-signal/cancellation corrections, all 22 automation-module tests and six daemon
-E2E tests passed, including slow active-worker response, queued manual work,
-SIGTERM/SIGINT cleanup/restart, registry/policy/member changes and no feedback.
-All three current installer tests passed, covering zero-write XML rendering,
-invalid input, idempotency, unrelated/symlinked plists and permission drift.
+The final frozen source passed 1,096 workspace tests across 179 targets using
+Rust/Cargo 1.98.1 in an isolated build directory. All 28 automation-module tests,
+seven daemon E2E tests and four installer tests passed, including slow active
+worker response, queued manual work, SIGTERM/SIGINT cleanup/restart,
+registry/policy/member changes, no feedback, PID-bound IPC readiness and
+installation permission drift.
 Formatting, full-workspace/all-target/all-feature Clippy, schema, CLI smoke and
 the unchanged 98-row ProjectRef acceptance matrix passed.
+
+The raw full-suite log is immutable WorkVCS Evidence
+`01a1363b-931e-760d-a541-a5ff5c8af84b`; the independent source-review evidence is
+`01a13637-0c5f-75dc-8602-f88d51d8b4ec`. Earlier mixed-source/shared-target runs
+failed and are retained separately, not counted as successful evidence.
 
 ## Independent challenge
 
@@ -64,6 +69,25 @@ mutable configuration/directory acceptance and missing running confirmation;
 all were corrected and rechecked. Runtime review exposed missing signal
 cleanup and process-exit races; both were corrected, with independent focused
 unit and real slow-worker E2E verification. No blocking/high finding remained.
+
+Actual 1.4.2 LaunchAgent adoption additionally falsified foreground-only
+validation: an unnecessary Git subprocess at an unknown historical Documents
+cwd waited for TCC permission. Automation now matches native cwd/Git metadata
+to active registry identities, rejects unknown contexts before probing them,
+verifies standard external worktree backlinks and rejects symlink escapes.
+Cached local identity is revalidated before publication; ordinary foreground
+project discovery is unchanged. No system privacy grant or historical owner
+repair was made.
+
+Independent review then closed early-leader-exit pipe retention, Darwin
+zombie-only group EPERM, cache-time symlink replacement and slow-drip protocol
+waiting. A worker's PID remains reserved until its remaining group is cleaned;
+actual exit status is preserved. Client/server frames have absolute monotonic
+deadlines, separate from the unbounded-by-default reconciliation duration.
+Independent slow-drip validation failed in 2.008 seconds, while a valid newline
+frame returned in 0.009 seconds without waiting for peer EOF. The CI oracle also
+now preserves the explicit stale-routing failure instead of parsing its empty
+stdout as a successful report.
 
 This source-stage snapshot does not itself prove live startup, login/restart
 adoption, main push, CI or installed-build parity. Those exact observations and

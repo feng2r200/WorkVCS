@@ -245,11 +245,20 @@ pub use search::semantic::{
     SemanticResourceObservations, SemanticSearchItem,
 };
 pub use search::source_archive::{
+    SourceArchiveAliasFingerprint, SourceArchiveAttributedSessionMeta,
+    SourceArchiveAutomaticAttribution, SourceArchiveAutomationRoot, SourceArchiveContainerIdentity,
     SourceArchiveDocument, SourceArchiveFileManifest, SourceArchiveFileObservation,
     SourceArchiveFileState, SourceArchiveFormat, SourceArchiveImportOptions,
     SourceArchiveImportOutcome, SourceArchiveImportResult, SourceArchiveInspectOptions,
-    SourceArchiveInspectResult, SourceArchiveManifest, SourceArchiveQueryOptions,
-    SourceArchiveQueryResult, SourceArchiveSearchItem,
+    SourceArchiveInspectResult, SourceArchiveLiveSourceFence, SourceArchiveManifest,
+    SourceArchiveMessageIdentity, SourceArchiveMessageOrigin, SourceArchiveNativeMetadataBasis,
+    SourceArchiveNativeMetadataComponent, SourceArchiveNativeOwner,
+    SourceArchiveObservedSessionMeta, SourceArchiveOwnerResolutionEvidence,
+    SourceArchiveOwnerResolutionScheme, SourceArchivePolicyBasis, SourceArchiveQueryOptions,
+    SourceArchiveQueryResult, SourceArchiveRegistryBasis, SourceArchiveRegistryRoute,
+    SourceArchiveRegistryVerifiedImportRequest, SourceArchiveRegistryVerifiedImportResult,
+    SourceArchiveRegistryVerifiedOwnerResolution, SourceArchiveRolePolicy, SourceArchiveSearchItem,
+    SourceArchiveSnapshot, SourceArchiveSnapshotSessionMeta,
 };
 pub use search::{
     SearchDerivedStatus, SearchIndexManifest, SearchItem, SearchQueryOptions, SearchQueryResult,

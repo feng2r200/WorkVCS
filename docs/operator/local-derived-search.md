@@ -266,6 +266,43 @@ reuse and publication, so replacement or retargeting cannot retain stale
 ownership. This metadata check is not a claim that all filesystem operations
 are permission-free; real background adoption must be verified separately.
 
+ADR-0533 permits different raw CWD spellings in one rollout only when **every**
+observed metadata context independently passes those checks and resolves to the
+same ProjectRef/Store/Workspace/Branch. A conflicting, missing or unbound
+context remains quarantined; selecting just the first or last header is not an
+ownership proof. The confirmed recovery batch is 24 missing-native-ID sources
+and 8 same-owner StockLens alias sources. Deleted worktrees, semantic-project
+mirror routing and other unbound sources are not admitted by this repair.
+
+New registry-verified automatic archive provenance distinguishes preserved
+native message IDs from explicit `derived_occurrence_v1` identities for
+messages without a native ID. Legacy explicit caller-mapped source imports
+retain the v1/native-ID contract. Derived
+occurrences bind the exact snapshot digest, physical line, role and text digest;
+`turn_id` is lineage metadata, not a message uniqueness key. All observed
+headers are preserved and ambiguous original thread origin is unknown rather
+than guessed from ordering. Existing v1 archives remain immutable and strictly
+readable. Every version retains historical-reference-only/unknown-currentness/
+no-action-authority labels and the selected role policy.
+Attribution hashes validate internal consistency under the owner-private local
+publisher boundary; they are not a signature proving source-producer identity
+or protecting against the same owner rewriting every artifact and digest.
+Internally contradictory identity, alias/hash or expansion evidence is still
+rejected. Verified import resolves all snapshot metadata inside core, using
+the selected configuration route's exact activation marker, live registry,
+policy and native owner observations. Explicit `--registry` selection remains
+valid; the configured-home marker and registry-only sidecar marker cannot
+substitute for one another. A caller-supplied activation path or self-consistent
+offline owner receipt is not an issuance credential. Import binds the exact
+selected policy root, and readback
+also rejects source paths outside it or sharing only a string prefix.
+Source-path capture must remain within its exact authorized root
+through a no-follow descriptor walk; the separate CWD alias permission does not
+permit following a source-file or intermediate-directory symlink.
+Policy and archive-member reads likewise use bounded, no-follow, nonblocking
+descriptors; unsafe files fail inspection rather than blocking on a FIFO or
+reopening an unchecked replacement.
+
 Run one finite reconciliation before considering a resident coordinator:
 
 ```sh
@@ -303,16 +340,28 @@ deletion classification for that root, but successful roots still detect their
 own deletions. A canonical routing, Store-open or generation failure does not
 skip this historical reconciliation lane.
 
-The importer's validated snapshot must also exactly match the coordinator's
-earlier path/byte-count/SHA-256 observation. A normal append can occur between
-those observations even when the importer's own snapshot is stable. A mismatch
-does not authorize adopting the newer snapshot under the earlier owner. It is
+In registry-derived reconciliation, path/byte-count/SHA-256, all metadata,
+verified owner and body extraction now share one captured immutable snapshot.
+Metadata are not separately re-read to choose an owner for another body's
+snapshot. The validated snapshot must still satisfy source and owner drift
+guards. A normal append or replacement does not authorize adopting a newer
+snapshot under an earlier owner. A detected mismatch is
 a failure of that historical source: retain only a readback-validated archive
 for the same member when available, expose the source failure, and continue
 other sources and canonical publication. With no prior archive, only the
 failure is exposed. The next ordinary dirty or periodic round re-resolves the
 stable source; no extra retry or deadline is introduced. Failure diagnostics
-include the path and compared byte counts/hashes, not message content.
+include the path, snapshot byte count/hash and failure reason, not message
+content. Immediate reuse/post-import checks and the final fence use the same
+no-follow, nonblocking descriptor path, including raced FIFOs. Final fences
+retain only identity/digest metadata rather than the entire batch's bodies and
+parsed trees, and revalidation streams bytes without reparsing JSON.
+Every live source is checked again before inventory/catalog publication,
+including a source that changes while a later file is processed. That late
+change is a source-local failure: a new archive is not adopted as Ready, while
+a same-member prior validated archive may remain available as historical
+reference alongside the failure. Other valid sources continue in the partial
+round.
 
 The foreground coordinator is optional:
 
@@ -364,7 +413,11 @@ The watcher only marks dirty through a capacity-one signal; status separately
 reports observed events, coalescing, backend errors and the last watcher error.
 A setup or overflow error triggers a full scan and does not masquerade as a
 healthy event stream. The coordinator owns no Store handle, model, or Qdrant
-shard. Workers run asynchronously so status and stop remain responsive during
+shard. If membership discovery fails, the existing valid observation targets
+remain installed and the failure stays visible. A later valid discovery
+updates those targets, including newly admitted Stores; registry/activation
+checks still reject an invalid worker round.
+Workers run asynchronously so status and stop remain responsive during
 a complete scan. The default has no wall-clock cutoff. Set
 `daemon run --worker-timeout-seconds N` only when an explicit worker deadline is
 wanted (`0` means no deadline); expiry terminates and reports that worker as

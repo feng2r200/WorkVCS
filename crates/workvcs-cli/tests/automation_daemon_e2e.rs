@@ -8,7 +8,7 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 const PROJECT_REF_ID: &str = "01900000-0000-7000-8000-000000000011";
@@ -663,24 +663,55 @@ fn registry_derived_daemon_reloads_global_watch_targets_without_output_feedback(
     );
     let before_membership = u64_field(&new_root, "updated_at_us");
     write_json_atomically(&fixture.registry, &fixture.full_registry);
-    let transitional = daemon_command(&binary, &fixture.root, "reconcile");
-    assert_success(
-        &transitional,
-        "queue reconciliation while routing activation is stale",
-    );
     let transitional_failure = wait_for_status(&binary, &fixture.root, |ledger| {
         ledger["last_worker_status"] == "failed"
+            && ledger["last_trigger"] == "watcher_dirty_or_overflow"
             && ledger["worker_active"] == false
+            && ledger["pending_reconcile"] == false
             && u64_field(ledger, "updated_at_us") > before_membership
     });
     assert_eq!(transitional_failure["last_worker_exit_code"], 1);
     assert_eq!(transitional_failure["last_worker_stdout_bytes"], 0);
     assert!(u64_field(&transitional_failure, "last_worker_stderr_bytes") > 0);
+    assert_eq!(transitional_failure["pending_reconcile"], false);
+    let failed_watcher_events = u64_field(&transitional_failure, "watcher_events");
+    let failed_worker_generation = u64_field(&transitional_failure, "updated_at_us");
+    let failed_trigger = transitional_failure["last_trigger"]
+        .as_str()
+        .expect("failed worker trigger")
+        .to_owned();
+    thread::sleep(Duration::from_millis(500));
+    let quiescent_failure = daemon_status(&binary, &fixture.root);
+    assert_eq!(quiescent_failure["worker_active"], false);
+    assert_eq!(quiescent_failure["pending_reconcile"], false);
+    assert_eq!(
+        u64_field(&quiescent_failure, "watcher_events"),
+        failed_watcher_events,
+        "stale activation failure must quiesce before publication"
+    );
+    assert_eq!(
+        u64_field(&quiescent_failure, "updated_at_us"),
+        failed_worker_generation,
+        "stale activation failure generation must remain stable before publication"
+    );
+    let watcher_events_before_activation = u64_field(&quiescent_failure, "watcher_events");
     activate_routing(&binary, &fixture.registry, Some(prior_activation_digest));
-    let membership_reloaded =
-        wait_for_report(&binary, &fixture.root, before_membership, |report| {
-            report["registrations_considered"] == 2
-        });
+    let activation_published_at_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("activation publication time after Unix epoch")
+        .as_micros();
+    let membership_reloaded = wait_for_report_after_activation(
+        &binary,
+        &fixture.root,
+        before_membership,
+        ActivationRecoveryEvidence {
+            activation_published_at_us,
+            watcher_events_before_activation,
+            failed_worker_generation,
+            failed_trigger,
+        },
+        |report| report["registrations_considered"] == 2,
+    );
     let membership_events = u64_field(&membership_reloaded, "watcher_events");
 
     record_finding(
@@ -1285,10 +1316,19 @@ fn wait_for_reconciliation(binary: &Path, root: &Path, after_us: u64) -> Value {
     })
 }
 
-fn wait_for_report(
+#[derive(Debug)]
+struct ActivationRecoveryEvidence {
+    activation_published_at_us: u128,
+    watcher_events_before_activation: u64,
+    failed_worker_generation: u64,
+    failed_trigger: String,
+}
+
+fn wait_for_report_after_activation(
     binary: &Path,
     root: &Path,
     after_us: u64,
+    evidence: ActivationRecoveryEvidence,
     predicate: impl Fn(&Value) -> bool,
 ) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1300,8 +1340,11 @@ fn wait_for_report(
             && ledger["last_worker_exit_code"] == 0
             && ledger["last_worker_cancelled"] == false
             && ledger["last_worker_timed_out"] == false
+            && ledger["last_trigger"] == "watcher_dirty_or_overflow"
             && u64_field(&ledger, "last_worker_stdout_bytes") > 0
             && u64_field(&ledger, "updated_at_us") > after_us
+            && u64_field(&ledger, "updated_at_us") > evidence.failed_worker_generation
+            && u64_field(&ledger, "watcher_events") > evidence.watcher_events_before_activation
         {
             match try_last_worker_report(root) {
                 Ok(report) if predicate(&report) => return ledger,
@@ -1312,8 +1355,21 @@ fn wait_for_report(
         last = Some(ledger);
         thread::sleep(Duration::from_millis(100));
     }
+    let watcher_events_after_activation = last
+        .as_ref()
+        .map(|ledger| u64_field(ledger, "watcher_events"));
+    let last_trigger = last
+        .as_ref()
+        .and_then(|ledger| ledger["last_trigger"].as_str());
+    let last_worker_generation = last
+        .as_ref()
+        .map(|ledger| u64_field(ledger, "updated_at_us"));
     panic!(
-        "daemon report predicate timed out; last ledger: {last:?}; last report error: {last_report_error:?}"
+        "daemon activation recovery timed out; activation_published_at_us={}; watcher_events_before_activation={}; watcher_events_after_activation={watcher_events_after_activation:?}; failed_trigger={}; failed_worker_generation={}; last_trigger={last_trigger:?}; last_worker_generation={last_worker_generation:?}; last ledger: {last:?}; last report error: {last_report_error:?}",
+        evidence.activation_published_at_us,
+        evidence.watcher_events_before_activation,
+        evidence.failed_trigger,
+        evidence.failed_worker_generation,
     );
 }
 

@@ -16,7 +16,10 @@ use workvcs_core::{
     AutomationArtifactKind, AutomationCatalogManifest, AutomationCatalogSource, AutomationLane,
     AutomationRegistration, AutomationRegistrationProposal, AutomationRolePolicy,
     AutomationSourcePolicyEntry, AutomationSourcePolicyProposal, AutomationSourceStatus,
-    RegistryDerivedCatalogBasis, SearchDerivedStatus, SourceArchiveInspectOptions,
+    RegistryDerivedCatalogBasis, SearchDerivedStatus, SourceArchiveAutomationRoot,
+    SourceArchiveInspectOptions, SourceArchiveLiveSourceFence, SourceArchiveRegistryRoute,
+    SourceArchiveRegistryVerifiedImportRequest, SourceArchiveRegistryVerifiedImportResult,
+    SourceArchiveRegistryVerifiedOwnerResolution, SourceArchiveSnapshot,
     apply_automation_registration, apply_automation_source_policy, automation_source_policy_path,
     preview_automation_registration, preview_automation_source_policy, publish_automation_catalog,
     publish_registry_derived_automation_catalog, read_automation_catalog, read_automation_registry,
@@ -25,8 +28,6 @@ use workvcs_core::{
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
@@ -367,17 +368,9 @@ struct RegistryDerivedMembership {
     registry_revision: u64,
     registry_digest: String,
     routing_activation_path: PathBuf,
+    #[serde(skip)]
+    archive_registry_route: SourceArchiveRegistryRoute,
     members: Vec<RegistryDerivedMember>,
-    #[serde(skip)]
-    historical_owner_index: BTreeMap<HistoricalOwnerKey, RegistryDerivedMember>,
-    #[serde(skip)]
-    historical_owner_boundaries: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct HistoricalOwnerKey {
-    identity_kind: String,
-    identity: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -387,48 +380,33 @@ struct HistoricalOwnerFailure {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct HistoricalOwnerObservation {
-    identity: HistoricalOwnerKey,
-    metadata_sha256: String,
+struct ResolvedHistoricalSourceMember {
+    member: RegistryDerivedMember,
+    owner_resolution: SourceArchiveRegistryVerifiedOwnerResolution,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct HistoricalAliasFingerprint {
-    anchor: PathBuf,
-    link_path: PathBuf,
-    link_target: PathBuf,
-    link_target_sha256: String,
-    device: u64,
-    inode: u64,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    length: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
+type SourceArchiveImporter<'a> = dyn FnMut(
+        SourceArchiveRegistryVerifiedImportRequest,
+    ) -> Result<SourceArchiveRegistryVerifiedImportResult>
+    + 'a;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RegistryDerivedLiveCheckStage {
+    Reuse,
+    PostImport,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct HistoricalProbeResolution {
-    original_cwd: PathBuf,
-    boundary: PathBuf,
-    probe_cwd: PathBuf,
-    alias: Option<HistoricalAliasFingerprint>,
+type RegistryDerivedLiveCheckHook<'a> = dyn FnMut(&Path, RegistryDerivedLiveCheckStage) + 'a;
+
+#[derive(Clone, Debug)]
+struct RegistryDerivedLiveSourceFence {
+    source_path: PathBuf,
+    path_key: String,
+    live_fence: SourceArchiveLiveSourceFence,
+    member: RegistryDerivedMember,
+    previous: Option<GlobalSourceInventoryEntry>,
+    catalog_range: std::ops::Range<usize>,
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct HistoricalOwnerCacheEntry {
-    resolution: HistoricalProbeResolution,
-    observation: HistoricalOwnerObservation,
-    owner: std::result::Result<RegistryDerivedMember, HistoricalOwnerFailure>,
-}
-
-type HistoricalOwnerCache = BTreeMap<PathBuf, HistoricalOwnerCacheEntry>;
-
-type SourceArchiveImporter<'a> =
-    dyn FnMut(SourceArchiveImportOptions) -> Result<SourceArchiveImportResult> + 'a;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1033,6 +1011,7 @@ fn registry_derived_membership(
     project_registry: Option<&Path>,
 ) -> Result<RegistryDerivedMembership> {
     let effective = effective_registry_config(project_registry.map(Path::to_path_buf))?;
+    let configured_home = effective.configured_home.clone();
     let registry_path = canonical_registry_path(
         absolute_cli_path("project registry", effective.registry_path.clone())?,
         false,
@@ -1046,6 +1025,16 @@ fn registry_derived_membership(
         LoadedProjectRegistry::V2 { registry, digest } => (registry, digest),
     };
     let activation = require_active_read_routing(&effective, &registry_path, &registry)?;
+    let archive_registry_route = if configured_home.is_some() {
+        SourceArchiveRegistryRoute::Home(
+            registry_path
+                .parent()
+                .expect("configured-home registry has a parent")
+                .to_path_buf(),
+        )
+    } else {
+        SourceArchiveRegistryRoute::RegistryOnly(registry_path.clone())
+    };
     let members = registry
         .bindings()
         .iter()
@@ -1057,110 +1046,15 @@ fn registry_derived_membership(
             branch_id: binding.branch_id(),
         })
         .collect::<Vec<_>>();
-    let members_by_project = members
-        .iter()
-        .map(|member| (member.project_ref_id, member.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let mut historical_owner_index = BTreeMap::new();
-    let mut historical_owner_boundaries = Vec::new();
-    for locator in registry.locators().iter().filter(|locator| {
-        locator.role() == LocatorRole::Identity && locator.state() == LocatorState::Active
-    }) {
-        let identity_kind = match locator.authority() {
-            LocatorAuthority::SemanticProject => continue,
-            LocatorAuthority::Repository => "git-common-dir",
-            LocatorAuthority::Cwd => "cwd",
-        };
-        let Some(member) = members_by_project.get(&locator.project_ref_id()).cloned() else {
-            continue;
-        };
-        let key = HistoricalOwnerKey {
-            identity_kind: identity_kind.to_owned(),
-            identity: locator.normalized_value().to_owned(),
-        };
-        let identity_path = PathBuf::from(locator.normalized_value());
-        let boundaries = if locator.authority() == LocatorAuthority::Repository {
-            historical_repository_boundaries(&identity_path)
-        } else {
-            vec![identity_path]
-        };
-        for boundary in boundaries {
-            historical_owner_boundaries.extend(
-                historical_cwd_aliases_without_io(&boundary).unwrap_or_else(|_| vec![boundary]),
-            );
-        }
-        if let Some(previous) = historical_owner_index.insert(key.clone(), member.clone())
-            && previous != member
-        {
-            return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                "active historical owner locator {}:{} maps to multiple registry members",
-                key.identity_kind, key.identity
-            )));
-        }
-    }
-    historical_owner_boundaries.sort();
-    historical_owner_boundaries.dedup();
     Ok(RegistryDerivedMembership {
         registry_path,
         registry_id: registry.registry_id().to_string(),
         registry_revision: registry.revision(),
         registry_digest: digest.to_string(),
         routing_activation_path: activation.path,
+        archive_registry_route,
         members,
-        historical_owner_index,
-        historical_owner_boundaries,
     })
-}
-
-fn historical_repository_boundaries(common_dir: &Path) -> Vec<PathBuf> {
-    let mut boundaries = Vec::new();
-    if common_dir.file_name().and_then(|value| value.to_str()) == Some(".git")
-        && let Some(parent) = common_dir.parent()
-        && parent.parent().is_some()
-    {
-        boundaries.push(parent.to_path_buf());
-    }
-    let worktrees = common_dir.join("worktrees");
-    let Ok(entries) = fs::read_dir(&worktrees) else {
-        return boundaries;
-    };
-    for entry in entries.flatten() {
-        let admin = entry.path();
-        let Ok(metadata) = fs::symlink_metadata(&admin) else {
-            continue;
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            continue;
-        }
-        let Ok(bytes) =
-            read_historical_git_metadata(&admin.join("gitdir"), "Git worktree backlink")
-        else {
-            continue;
-        };
-        let Ok(text) = std::str::from_utf8(&bytes) else {
-            continue;
-        };
-        let target = Path::new(text.trim_end_matches(['\r', '\n']));
-        let target = if target.is_absolute() {
-            target.to_path_buf()
-        } else {
-            admin.join(target)
-        };
-        let Ok(target) = normalize_historical_cwd_without_io(&target) else {
-            continue;
-        };
-        if target.file_name().and_then(|value| value.to_str()) != Some(".git") {
-            continue;
-        }
-        if let Some(root) = target.parent()
-            && root.parent().is_some()
-        {
-            boundaries.push(root.to_path_buf());
-        }
-    }
-    boundaries.sort();
-    boundaries.dedup();
-    boundaries
 }
 
 fn registration_proposal(
@@ -1189,7 +1083,8 @@ fn registration_proposal(
             "automation registration requires a versioned registry-v2 snapshot".to_owned(),
         )
     })?;
-    let automation_root = root.unwrap_or_else(|| default_automation_root(&discovery.registry_path));
+    let configured_root = root.unwrap_or_else(|| default_automation_root(&discovery.registry_path));
+    let automation_root = resolve_automation_root(Some(configured_root), None)?;
     let proposal = AutomationRegistrationProposal {
         registration_id: registration_id.unwrap_or_else(|| project_ref_id.to_string()),
         project_ref_id,
@@ -1500,7 +1395,7 @@ fn reconcile_registry_derived_once(
     root: &Path,
     project_registry: Option<&Path>,
 ) -> Result<ReconcileReport> {
-    let mut importer = Engine::import_source_archive;
+    let mut importer = Engine::import_registry_verified_source_archive;
     reconcile_registry_derived_once_with_importer(root, project_registry, &mut importer)
 }
 
@@ -1508,6 +1403,21 @@ fn reconcile_registry_derived_once_with_importer(
     root: &Path,
     project_registry: Option<&Path>,
     importer: &mut SourceArchiveImporter<'_>,
+) -> Result<ReconcileReport> {
+    let mut live_check_hook = |_: &Path, _: RegistryDerivedLiveCheckStage| {};
+    reconcile_registry_derived_once_with_importer_and_live_check_hook(
+        root,
+        project_registry,
+        importer,
+        &mut live_check_hook,
+    )
+}
+
+fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
+    root: &Path,
+    project_registry: Option<&Path>,
+    importer: &mut SourceArchiveImporter<'_>,
+    live_check_hook: &mut RegistryDerivedLiveCheckHook<'_>,
 ) -> Result<ReconcileReport> {
     let _reconciliation_lock = ReconciliationLock::acquire(root)?;
     let membership = registry_derived_membership(project_registry)?;
@@ -1612,13 +1522,14 @@ fn reconcile_registry_derived_once_with_importer(
 
     let previous_inventory = read_global_source_inventory(root)?;
     let mut current_inventory = BTreeMap::new();
-    let mut historical_owner_cache = HistoricalOwnerCache::new();
+    let mut core_owner_resolutions = Vec::new();
+    let mut live_source_fences = Vec::new();
     for source in active_sources {
         run_registry_derived_historical_reconciliation(
             root,
             source,
             &membership,
-            &mut historical_owner_cache,
+            &mut core_owner_resolutions,
             &previous_inventory,
             &mut current_inventory,
             &mut catalog_sources,
@@ -1630,10 +1541,14 @@ fn reconcile_registry_derived_once_with_importer(
             &mut rollout_files_deleted,
             &mut rollout_archives_ready,
             &mut rollout_archives_failed,
+            &mut live_source_fences,
             importer,
+            live_check_hook,
         )?;
     }
-    validate_historical_owner_cache(&historical_owner_cache, &membership)?;
+    for resolution in &core_owner_resolutions {
+        resolution.revalidate_live_evidence()?;
+    }
     let current_membership = registry_derived_membership(Some(&membership.registry_path))?;
     if current_membership != membership {
         return Err(WorkVcsError::ControlPlaneInvalid(
@@ -1641,6 +1556,33 @@ fn reconcile_registry_derived_once_with_importer(
                 .to_owned(),
         ));
     }
+    let current_source_policy = read_automation_source_policy(root)?;
+    if current_source_policy != source_policy {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "global source policy changed during registry-derived reconciliation".to_owned(),
+        ));
+    }
+    apply_registry_derived_live_source_fences(
+        &live_source_fences,
+        &mut current_inventory,
+        &mut catalog_sources,
+    )?;
+    rollout_archives_ready = catalog_sources
+        .iter()
+        .filter(|source| {
+            source.lane == AutomationLane::HistoricalReference
+                && source.artifact_kind == AutomationArtifactKind::SourceArchive
+                && source.status == AutomationSourceStatus::Ready
+        })
+        .count();
+    rollout_archives_failed = catalog_sources
+        .iter()
+        .filter(|source| {
+            source.lane == AutomationLane::HistoricalReference
+                && source.artifact_kind == AutomationArtifactKind::SourceArchive
+                && source.status == AutomationSourceStatus::Failed
+        })
+        .count();
     write_global_source_inventory(root, current_inventory)?;
 
     let publication = publish_registry_derived_automation_catalog(
@@ -1704,7 +1646,7 @@ fn run_registry_derived_historical_reconciliation(
     root: &Path,
     source_policy: &AutomationSourcePolicyEntry,
     membership: &RegistryDerivedMembership,
-    historical_owner_cache: &mut HistoricalOwnerCache,
+    core_owner_resolutions: &mut Vec<SourceArchiveRegistryVerifiedOwnerResolution>,
     previous_inventory: &GlobalSourceInventory,
     current_inventory: &mut BTreeMap<String, GlobalSourceInventoryEntry>,
     catalog_sources: &mut Vec<AutomationCatalogSource>,
@@ -1716,7 +1658,9 @@ fn run_registry_derived_historical_reconciliation(
     rollout_files_deleted: &mut usize,
     rollout_archives_ready: &mut usize,
     rollout_archives_failed: &mut usize,
+    live_source_fences: &mut Vec<RegistryDerivedLiveSourceFence>,
     importer: &mut SourceArchiveImporter<'_>,
+    live_check_hook: &mut RegistryDerivedLiveCheckHook<'_>,
 ) -> Result<()> {
     let archive_root = root
         .join("history")
@@ -1770,8 +1714,8 @@ fn run_registry_derived_historical_reconciliation(
             .files
             .get(&path_key)
             .filter(|entry| entry.source_id == source_policy.source_id);
-        let fingerprint = match fingerprint_source(&file) {
-            Ok(fingerprint) => fingerprint,
+        let snapshot = match SourceArchiveSnapshot::capture(&source_policy.rollout_root, &file) {
+            Ok(snapshot) => snapshot,
             Err(error) => {
                 if let Some(entry) = previous {
                     current_inventory.insert(path_key.clone(), entry.clone());
@@ -1797,63 +1741,70 @@ fn run_registry_derived_historical_reconciliation(
                 continue;
             }
         };
-        let member =
-            match resolve_registry_derived_source_member(&file, membership, historical_owner_cache)
-            {
-                Ok(member) if !source_policy_excludes_member(source_policy, &member) => member,
-                Ok(member) => {
-                    let error = WorkVcsError::ControlPlaneInvalid(format!(
-                        "rollout source {} resolves to excluded ProjectRef {}",
-                        file.display(),
-                        member.project_ref_id
+        let fingerprint = fingerprint_from_snapshot(&snapshot);
+        let resolved = match resolve_registry_derived_source_member(&snapshot, membership) {
+            Ok(resolved) if !source_policy_excludes_member(source_policy, &resolved.member) => {
+                resolved
+            }
+            Ok(resolved) => {
+                let member = resolved.member;
+                let error = WorkVcsError::ControlPlaneInvalid(format!(
+                    "rollout source {} resolves to excluded ProjectRef {}",
+                    file.display(),
+                    member.project_ref_id
+                ));
+                if let Some(entry) = previous {
+                    current_inventory.insert(path_key.clone(), entry.clone());
+                    catalog_sources.push(failed_global_catalog_source(
+                        &entry.member,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
                     ));
-                    if let Some(entry) = previous {
-                        current_inventory.insert(path_key.clone(), entry.clone());
-                        catalog_sources.push(failed_global_catalog_source(
-                            &entry.member,
-                            AutomationLane::HistoricalReference,
-                            AutomationArtifactKind::SourceArchive,
-                            file,
-                            &error.code().to_string(),
-                            &error.to_string(),
-                        ));
-                    } else {
-                        catalog_sources.push(failed_unattributed_catalog_source(
-                            file,
-                            &error.code().to_string(),
-                            &error.to_string(),
-                        )?);
-                    }
-                    *rollout_archives_failed += 1;
-                    continue;
+                } else {
+                    catalog_sources.push(failed_unattributed_catalog_source(
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    )?);
                 }
-                Err(error) => {
-                    if let Some(entry) = previous {
-                        current_inventory.insert(path_key.clone(), entry.clone());
-                        catalog_sources.push(failed_global_catalog_source(
-                            &entry.member,
-                            AutomationLane::HistoricalReference,
-                            AutomationArtifactKind::SourceArchive,
-                            file,
-                            &error.code,
-                            &error.error,
-                        ));
-                    } else {
-                        catalog_sources.push(failed_unattributed_catalog_source(
-                            file,
-                            &error.code,
-                            &error.error,
-                        )?);
-                    }
-                    *rollout_archives_failed += 1;
-                    continue;
+                *rollout_archives_failed += 1;
+                continue;
+            }
+            Err(error) => {
+                if let Some(entry) = previous {
+                    current_inventory.insert(path_key.clone(), entry.clone());
+                    catalog_sources.push(failed_global_catalog_source(
+                        &entry.member,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file,
+                        &error.code,
+                        &error.error,
+                    ));
+                } else {
+                    catalog_sources.push(failed_unattributed_catalog_source(
+                        file,
+                        &error.code,
+                        &error.error,
+                    )?);
                 }
-            };
-        let change = classify_source_change(
-            &file,
+                *rollout_archives_failed += 1;
+                continue;
+            }
+        };
+        core_owner_resolutions.push(resolved.owner_resolution.clone());
+        let member = resolved.member.clone();
+        let catalog_start = catalog_sources.len();
+        let live_fence = snapshot.live_source_fence();
+        let fence_source_path = file.clone();
+        let change = classify_source_change_from_bytes(
             previous.map(|entry| &entry.fingerprint),
             &fingerprint,
-        )?;
+            snapshot.bytes(),
+        );
         match change {
             SourceChange::New => *rollout_files_new += 1,
             SourceChange::Appended => *rollout_files_appended += 1,
@@ -1874,32 +1825,92 @@ fn run_registry_derived_historical_reconciliation(
                 archive_reference_matches_source(reference, &file, &fingerprint)
             });
         if reusable {
-            retain_global_archive(
-                &member,
-                &entry,
-                catalog_sources,
-                rollout_archives_ready,
-                rollout_archives_failed,
-            );
+            live_check_hook(&file, RegistryDerivedLiveCheckStage::Reuse);
+            match snapshot.verify_live_source() {
+                Ok(true) => retain_global_archive(
+                    &member,
+                    &entry,
+                    catalog_sources,
+                    rollout_archives_ready,
+                    rollout_archives_failed,
+                ),
+                Ok(false) => {
+                    retain_global_archive(
+                        &member,
+                        &entry,
+                        catalog_sources,
+                        rollout_archives_ready,
+                        rollout_archives_failed,
+                    );
+                    *rollout_archives_failed += 1;
+                    catalog_sources.push(failed_global_catalog_source(
+                        &member,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file.clone(),
+                        "integrity_invalid",
+                        &format!(
+                            "source_changed_after_snapshot: path={} snapshot_bytes={} snapshot_sha256={} live_state=changed outcome=reused prior_archive=present",
+                            file.display(),
+                            fingerprint.bytes,
+                            fingerprint.sha256,
+                        ),
+                    ));
+                }
+                Err(error) => {
+                    retain_global_archive(
+                        &member,
+                        &entry,
+                        catalog_sources,
+                        rollout_archives_ready,
+                        rollout_archives_failed,
+                    );
+                    *rollout_archives_failed += 1;
+                    catalog_sources.push(failed_global_catalog_source(
+                        &member,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file.clone(),
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    ));
+                }
+            }
         } else {
             let member_archive_root = archive_root.join(member.project_ref_id.to_string());
-            let options = SourceArchiveImportOptions::new(
-                member.identity(),
+            let request = SourceArchiveRegistryVerifiedImportRequest::new(
+                membership.archive_registry_route.clone(),
+                SourceArchiveAutomationRoot::Explicit(root.to_path_buf()),
                 &member_archive_root,
-                vec![file.clone()],
-            )?
-            .include_assistant(matches!(
-                source_policy.role_policy,
-                AutomationRolePolicy::UserAndAssistant
-            ));
-            match importer(options) {
-                Ok(result) => {
+                snapshot,
+                source_policy.source_id.clone(),
+            )?;
+            match importer(request) {
+                Ok(verified) => {
+                    if verified.member_identity != member.identity() {
+                        return Err(WorkVcsError::IntegrityInvalid(format!(
+                            "core registry-verified publisher resolved {} to a different member than the reconciliation planner",
+                            file.display()
+                        )));
+                    }
+                    let result = verified.import;
                     let reference = archive_reference(result.archive_path, &result.manifest)?;
-                    if !archive_reference_matches_source(&reference, &file, &fingerprint) {
+                    live_check_hook(&file, RegistryDerivedLiveCheckStage::PostImport);
+                    let live_result = live_fence.verify_live_source();
+                    let current_matches = matches!(&live_result, Ok(true));
+                    if !archive_reference_matches_source(&reference, &file, &fingerprint)
+                        || !current_matches
+                    {
+                        let live_state = match &live_result {
+                            Ok(true) => "matches captured snapshot".to_owned(),
+                            Ok(false) => "changed from captured snapshot".to_owned(),
+                            Err(error) => format!("verification failed: {error}"),
+                        };
                         let error = source_changed_during_archive_import_error(
                             &file,
                             &fingerprint,
                             &reference,
+                            &live_state,
                             result.outcome,
                             entry.archive.is_some(),
                         );
@@ -1956,7 +1967,15 @@ fn run_registry_derived_historical_reconciliation(
                 }
             }
         }
-        current_inventory.insert(path_key, entry);
+        current_inventory.insert(path_key.clone(), entry);
+        live_source_fences.push(RegistryDerivedLiveSourceFence {
+            source_path: fence_source_path,
+            path_key,
+            live_fence,
+            member,
+            previous: previous.cloned(),
+            catalog_range: catalog_start..catalog_sources.len(),
+        });
     }
 
     let deleted_sources = previous_inventory
@@ -1982,6 +2001,84 @@ fn run_registry_derived_historical_reconciliation(
             rollout_archives_failed,
         )?;
         *rollout_archives_failed += 1;
+    }
+    Ok(())
+}
+
+fn apply_registry_derived_live_source_fences(
+    fences: &[RegistryDerivedLiveSourceFence],
+    current_inventory: &mut BTreeMap<String, GlobalSourceInventoryEntry>,
+    catalog_sources: &mut Vec<AutomationCatalogSource>,
+) -> Result<()> {
+    for fence in fences.iter().rev() {
+        let live_result = fence.live_fence.verify_live_source();
+        if matches!(live_result, Ok(true)) {
+            continue;
+        }
+
+        let prior_archive_present = fence
+            .previous
+            .as_ref()
+            .is_some_and(|entry| entry.member == fence.member && entry.archive.is_some());
+        let mut replacements = Vec::new();
+        let mut retained_previous = None;
+        if let Some(previous) = fence
+            .previous
+            .as_ref()
+            .filter(|entry| entry.member == fence.member)
+            && let Some(reference) = previous.archive.as_ref()
+        {
+            match ready_global_archive_catalog_source(&fence.member, reference) {
+                Ok(source) => {
+                    replacements.push(source);
+                    retained_previous = Some(previous.clone());
+                }
+                Err(error) => replacements.push(failed_global_catalog_source(
+                    &fence.member,
+                    AutomationLane::HistoricalReference,
+                    AutomationArtifactKind::SourceArchive,
+                    reference.artifact_path.clone(),
+                    &error.code().to_string(),
+                    &error.to_string(),
+                )),
+            }
+        }
+
+        let prior = if prior_archive_present {
+            "present"
+        } else {
+            "absent"
+        };
+        let detail = match live_result {
+            Ok(false) => format!(
+                "source_changed_before_publication: path={} snapshot_bytes={} snapshot_sha256={} prior_archive={prior}",
+                fence.source_path.display(),
+                fence.live_fence.source_bytes(),
+                fence.live_fence.source_sha256(),
+            ),
+            Err(error) => format!(
+                "source_failed_final_publication_fence: path={} snapshot_bytes={} snapshot_sha256={} prior_archive={prior}: {error}",
+                fence.source_path.display(),
+                fence.live_fence.source_bytes(),
+                fence.live_fence.source_sha256(),
+            ),
+            Ok(true) => unreachable!("ready live source was handled above"),
+        };
+        replacements.push(failed_global_catalog_source(
+            &fence.member,
+            AutomationLane::HistoricalReference,
+            AutomationArtifactKind::SourceArchive,
+            fence.source_path.clone(),
+            "integrity_invalid",
+            &detail,
+        ));
+
+        if let Some(previous) = retained_previous {
+            current_inventory.insert(fence.path_key.clone(), previous);
+        } else if let Some(candidate) = current_inventory.get_mut(&fence.path_key) {
+            candidate.archive = None;
+        }
+        catalog_sources.splice(fence.catalog_range.clone(), replacements);
     }
     Ok(())
 }
@@ -2419,6 +2516,37 @@ fn fingerprint_source(path: &Path) -> Result<SourceFingerprint> {
     })
 }
 
+fn fingerprint_from_snapshot(snapshot: &SourceArchiveSnapshot) -> SourceFingerprint {
+    SourceFingerprint {
+        bytes: snapshot.source_bytes(),
+        sha256: snapshot.source_sha256().to_owned(),
+    }
+}
+
+fn classify_source_change_from_bytes(
+    previous: Option<&SourceFingerprint>,
+    current: &SourceFingerprint,
+    current_bytes: &[u8],
+) -> SourceChange {
+    let Some(previous) = previous else {
+        return SourceChange::New;
+    };
+    if previous == current {
+        return SourceChange::Unchanged;
+    }
+    let prefix_length = usize::try_from(previous.bytes).ok();
+    if current.bytes > previous.bytes
+        && prefix_length.is_some_and(|length| {
+            current_bytes
+                .get(..length)
+                .is_some_and(|prefix| hex::encode(Sha256::digest(prefix)) == previous.sha256)
+        })
+    {
+        return SourceChange::Appended;
+    }
+    SourceChange::Rewritten
+}
+
 fn classify_source_change(
     path: &Path,
     previous: Option<&SourceFingerprint>,
@@ -2747,6 +2875,7 @@ fn source_changed_during_archive_import_error(
     source: &Path,
     pre_fingerprint: &SourceFingerprint,
     imported: &SourceArchiveReference,
+    live_state: &str,
     outcome: workvcs_core::SourceArchiveImportOutcome,
     prior_archive_present: bool,
 ) -> WorkVcsError {
@@ -2760,12 +2889,13 @@ fn source_changed_during_archive_import_error(
         "absent"
     };
     WorkVcsError::IntegrityInvalid(format!(
-        "source_changed_during_archive_import: path={} pre_bytes={} pre_sha256={} import_bytes={} import_sha256={} outcome={} prior_archive={}",
+        "source_changed_during_archive_import: path={} pre_bytes={} pre_sha256={} import_bytes={} import_sha256={} live_state={} outcome={} prior_archive={}",
         source.display(),
         pre_fingerprint.bytes,
         pre_fingerprint.sha256,
         imported.source_bytes,
         imported.source_sha256,
+        live_state,
         outcome,
         prior_archive,
     ))
@@ -2874,832 +3004,47 @@ fn failed_unattributed_catalog_source(
     })
 }
 
-fn rollout_cwd_from_session_meta(source: &Path) -> Result<PathBuf> {
-    let bytes = fs::read(source).map_err(storage_error("read rollout metadata"))?;
-    let mut observed = None::<String>;
-    let mut session_meta_records = 0_usize;
-    for (offset, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        let value: serde_json::Value = serde_json::from_slice(line).map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "rollout source {} line {} is invalid JSON: {error}",
-                source.display(),
-                offset + 1
-            ))
-        })?;
-        if value.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
-            continue;
-        }
-        session_meta_records += 1;
-        let cwd = value
-            .get("payload")
-            .and_then(|payload| payload.get("cwd"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                WorkVcsError::ControlPlaneInvalid(format!(
-                    "rollout source {} session_meta has no trusted cwd",
-                    source.display()
-                ))
-            })?;
-        let candidate = Path::new(cwd);
-        if !candidate.is_absolute()
-            || candidate.components().any(|component| {
-                matches!(
-                    component,
-                    std::path::Component::CurDir | std::path::Component::ParentDir
-                )
-            })
-        {
-            return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                "rollout source {} session_meta cwd is not an absolute normalized path",
-                source.display()
-            )));
-        }
-        if let Some(previous) = &observed {
-            if previous != cwd {
-                return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                    "rollout source {} has inconsistent session_meta cwd values",
-                    source.display()
-                )));
-            }
-        } else {
-            observed = Some(cwd.to_owned());
-        }
-    }
-    if session_meta_records == 0 {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "rollout source {} has no session_meta metadata",
-            source.display()
-        )));
-    }
-    observed.map(PathBuf::from).ok_or_else(|| {
-        WorkVcsError::ControlPlaneInvalid(format!(
-            "rollout source {} has no usable session_meta cwd",
-            source.display()
-        ))
-    })
-}
-
 fn resolve_registry_derived_source_member(
-    source: &Path,
+    snapshot: &SourceArchiveSnapshot,
     membership: &RegistryDerivedMembership,
-    cache: &mut HistoricalOwnerCache,
-) -> std::result::Result<RegistryDerivedMember, HistoricalOwnerFailure> {
+) -> std::result::Result<ResolvedHistoricalSourceMember, HistoricalOwnerFailure> {
     let failure = |error: WorkVcsError, context: String| HistoricalOwnerFailure {
         code: error.code().to_string(),
         error: format!("{context}: {error}"),
     };
-    let cwd = rollout_cwd_from_session_meta(source).map_err(|error| {
+    let resolved = Engine::resolve_registry_verified_source_owner(
+        membership.archive_registry_route.clone(),
+        snapshot,
+    )
+    .map_err(|error| {
         failure(
             error,
             format!(
-                "cannot recover historical owner for rollout source {}",
-                source.display()
+                "cannot recover historical owner for rollout source {} from the selected active registry route",
+                snapshot.source_path().display()
             ),
         )
     })?;
-    let normalized_cwd = normalize_historical_cwd_without_io(&cwd).map_err(|error| {
-        failure(
-            error,
-            format!(
-                "cannot normalize historical rollout cwd {} without filesystem access",
-                cwd.display()
-            ),
-        )
-    })?;
-    let lexical_cwds = historical_cwd_aliases_without_io(&normalized_cwd).map_err(|error| {
-        failure(
-            error,
-            format!(
-                "cannot derive historical rollout cwd aliases for {} without filesystem access",
-                cwd.display()
-            ),
-        )
-    })?;
-    let selected = select_historical_probe_path(
-        &normalized_cwd,
-        &membership.historical_owner_boundaries,
-        &lexical_cwds,
-    );
-    let cached = cache.get(&normalized_cwd);
-    let selected = match (selected, cached) {
-        (Ok(selected), _) => selected,
-        (Err(error), Some(cached)) => {
-            return Err(failure(
-                WorkVcsError::ControlPlaneInvalid(format!(
-                    "historical rollout cwd {} could not reproduce its cached local resolution {:?}: {error}",
-                    cwd.display(),
-                    cached.resolution
-                )),
-                format!(
-                    "cannot reuse historical owner attribution for rollout source {}",
-                    source.display()
-                ),
-            ));
-        }
-        (Err(error), None) => {
-            return Err(failure(
-                error,
-                format!(
-                    "cannot safely enter historical rollout cwd {} from an active local identity boundary",
-                    cwd.display()
-                ),
-            ));
-        }
-    };
-    let Some(resolution) = selected else {
-        if let Some(cached) = cached {
-            return Err(failure(
-                WorkVcsError::ControlPlaneInvalid(format!(
-                    "historical rollout cwd {} no longer reproduces cached local resolution {:?}",
-                    cwd.display(),
-                    cached.resolution
-                )),
-                format!(
-                    "cannot reuse historical owner attribution for rollout source {}",
-                    source.display()
-                ),
-            ));
-        }
-        let error = WorkVcsError::ProjectOwnerUnbound {
-            registry_path: membership.registry_path.display().to_string(),
-            resolution_rank: "verified-local-boundary".to_owned(),
-            unmapped_locators: 1,
-            resolution_diagnostics: 0,
-        };
-        return Err(failure(
-            error,
-            format!(
-                "historical rollout cwd {} is outside every active local identity boundary in registry revision {}",
-                cwd.display(),
-                membership.registry_revision
-            ),
-        ));
-    };
-    let observation = observe_historical_owner(&resolution.probe_cwd).map_err(|error| {
-        failure(
-            error,
-            format!(
-                "cannot inspect historical rollout cwd {} without an external Git process",
-                cwd.display()
-            ),
-        )
-    })?;
-    if let Some(cached) = cached {
-        if cached.resolution != resolution {
-            return Err(failure(
-                WorkVcsError::ControlPlaneInvalid(format!(
-                    "historical rollout cwd {} changed local resolution during reconciliation from {:?} to {:?}",
-                    cwd.display(),
-                    cached.resolution,
-                    resolution
-                )),
-                format!(
-                    "cannot reuse historical owner attribution for rollout source {}",
-                    source.display()
-                ),
-            ));
-        }
-        if cached.observation != observation {
-            return Err(failure(
-                WorkVcsError::ControlPlaneInvalid(format!(
-                    "historical rollout cwd {} changed identity metadata during reconciliation from {}:{}@{} to {}:{}@{}",
-                    resolution.probe_cwd.display(),
-                    cached.observation.identity.identity_kind,
-                    cached.observation.identity.identity,
-                    cached.observation.metadata_sha256,
-                    observation.identity.identity_kind,
-                    observation.identity.identity,
-                    observation.metadata_sha256
-                )),
-                format!(
-                    "cannot reuse historical owner attribution for rollout source {}",
-                    source.display()
-                ),
-            ));
-        }
-        return cached.owner.clone();
-    }
-    let key = &observation.identity;
-    let resolved = membership
-        .historical_owner_index
-        .get(key)
+    let member = membership
+        .members
+        .iter()
+        .find(|member| member.identity() == resolved.member_identity)
         .cloned()
         .ok_or_else(|| {
-            let error = WorkVcsError::ProjectOwnerUnbound {
-                registry_path: membership.registry_path.display().to_string(),
-                resolution_rank: if key.identity_kind == "git-common-dir" {
-                    "repository"
-                } else {
-                    "cwd"
-                }
-                .to_owned(),
-                unmapped_locators: 1,
-                resolution_diagnostics: 0,
-            };
             failure(
-                error,
+                WorkVcsError::ControlPlaneInvalid(
+                    "core historical owner resolver selected a tuple outside current membership"
+                        .to_owned(),
+                ),
                 format!(
-                    "historical rollout cwd {} has no exact active {} owner locator for {} in registry revision {}",
-                    cwd.display(),
-                    key.identity_kind,
-                    key.identity,
-                    membership.registry_revision
+                    "cannot recover historical owner for rollout source {}",
+                    snapshot.source_path().display()
                 ),
             )
-        });
-    cache.insert(
-        normalized_cwd,
-        HistoricalOwnerCacheEntry {
-            resolution,
-            observation,
-            owner: resolved.clone(),
-        },
-    );
-    resolved
-}
-
-fn validate_historical_owner_cache(
-    cache: &HistoricalOwnerCache,
-    membership: &RegistryDerivedMembership,
-) -> Result<()> {
-    for (original_cwd, cached) in cache {
-        let candidates = historical_cwd_aliases_without_io(original_cwd).map_err(|error| {
-            WorkVcsError::ControlPlaneInvalid(format!(
-                "historical rollout cwd {} aliases could not be revalidated after reconciliation: {error}",
-                original_cwd.display()
-            ))
         })?;
-        let current_resolution = select_historical_probe_path(
-            original_cwd,
-            &membership.historical_owner_boundaries,
-            &candidates,
-        )
-        .map_err(|error| {
-            WorkVcsError::ControlPlaneInvalid(format!(
-                "historical rollout cwd {} local resolution could not be revalidated after reconciliation: {error}",
-                original_cwd.display()
-            ))
-        })?
-        .ok_or_else(|| {
-            WorkVcsError::ControlPlaneInvalid(format!(
-                "historical rollout cwd {} no longer resolves through its cached active local identity boundary",
-                original_cwd.display()
-            ))
-        })?;
-        if current_resolution != cached.resolution {
-            return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                "historical rollout cwd {} changed local resolution during reconciliation from {:?} to {:?}",
-                original_cwd.display(),
-                cached.resolution,
-                current_resolution
-            )));
-        }
-        let current = observe_historical_owner(&current_resolution.probe_cwd).map_err(|error| {
-            WorkVcsError::ControlPlaneInvalid(format!(
-                "historical rollout cwd {} could not be revalidated after reconciliation: {error}",
-                original_cwd.display()
-            ))
-        })?;
-        if current != cached.observation {
-            return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                "historical rollout cwd {} changed identity metadata during reconciliation from {}:{}@{} to {}:{}@{}",
-                original_cwd.display(),
-                cached.observation.identity.identity_kind,
-                cached.observation.identity.identity,
-                cached.observation.metadata_sha256,
-                current.identity.identity_kind,
-                current.identity.identity,
-                current.metadata_sha256
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn normalize_historical_cwd_without_io(cwd: &Path) -> Result<PathBuf> {
-    if !cwd.is_absolute() {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "historical rollout cwd {} is not absolute",
-            cwd.display()
-        )));
-    }
-    let mut normalized = PathBuf::new();
-    for component in cwd.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            std::path::Component::RootDir => normalized.push(component.as_os_str()),
-            std::path::Component::CurDir => {}
-            std::path::Component::Normal(value) => normalized.push(value),
-            std::path::Component::ParentDir => {
-                return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                    "historical rollout cwd {} contains a parent-directory component",
-                    cwd.display()
-                )));
-            }
-        }
-    }
-    Ok(normalized)
-}
-
-fn verify_historical_probe_path(boundary: &Path, candidate: &Path) -> Result<PathBuf> {
-    let relative = candidate.strip_prefix(boundary).map_err(|_| {
-        WorkVcsError::ControlPlaneInvalid(format!(
-            "historical cwd {} is outside active identity boundary {}",
-            candidate.display(),
-            boundary.display()
-        ))
-    })?;
-    verify_absolute_directory_path_without_symlinks(
-        boundary,
-        "active historical identity boundary",
-    )?;
-    let mut cursor = boundary.to_path_buf();
-    for component in relative.components() {
-        if !matches!(component, std::path::Component::Normal(_)) {
-            return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                "historical cwd {} has a non-normal component below active boundary {}",
-                candidate.display(),
-                boundary.display()
-            )));
-        }
-        cursor.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&cursor).map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "cannot inspect historical cwd component {}: {error}",
-                cursor.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(WorkVcsError::IntegrityInvalid(format!(
-                "historical cwd component {} is a symlink that could escape its active identity boundary",
-                cursor.display()
-            )));
-        }
-        if !metadata.is_dir() {
-            return Err(WorkVcsError::IntegrityInvalid(format!(
-                "historical cwd component {} is not a directory",
-                cursor.display()
-            )));
-        }
-    }
-    Ok(candidate.to_path_buf())
-}
-
-fn select_historical_probe_path(
-    original_cwd: &Path,
-    boundaries: &[PathBuf],
-    candidates: &[PathBuf],
-) -> Result<Option<HistoricalProbeResolution>> {
-    let mut matches = boundaries
-        .iter()
-        .flat_map(|boundary| {
-            candidates.iter().filter_map(move |candidate| {
-                candidate
-                    .starts_with(boundary)
-                    .then_some((boundary, candidate))
-            })
-        })
-        .collect::<Vec<_>>();
-    if let Some(maximum_depth) = matches
-        .iter()
-        .map(|(boundary, _)| boundary.components().count())
-        .max()
-    {
-        matches.retain(|(boundary, _)| boundary.components().count() == maximum_depth);
-        let mut last_error = None;
-        for (boundary, candidate) in matches {
-            match verify_historical_probe_path(boundary, candidate) {
-                Ok(path) => {
-                    return Ok(Some(HistoricalProbeResolution {
-                        original_cwd: original_cwd.to_path_buf(),
-                        boundary: boundary.clone(),
-                        probe_cwd: path,
-                        alias: None,
-                    }));
-                }
-                Err(error) => last_error = Some(error),
-            }
-        }
-        return Err(last_error.expect("a matching historical boundary has a validation result"));
-    }
-
-    select_dynamic_historical_alias(original_cwd, boundaries, candidates)
-}
-
-#[cfg(unix)]
-fn select_dynamic_historical_alias(
-    original_cwd: &Path,
-    boundaries: &[PathBuf],
-    candidates: &[PathBuf],
-) -> Result<Option<HistoricalProbeResolution>> {
-    let mut resolutions = Vec::new();
-    let mut safely_inspected_candidate = false;
-    let mut last_anchor_error = None;
-    for candidate_cwd in candidates {
-        for boundary in boundaries {
-            let Some(anchor) = common_historical_path_ancestor(candidate_cwd, boundary) else {
-                continue;
-            };
-            if anchor
-                .components()
-                .filter(|component| matches!(component, std::path::Component::Normal(_)))
-                .count()
-                < 2
-            {
-                continue;
-            }
-            let relative = candidate_cwd
-                .strip_prefix(&anchor)
-                .expect("shared path ancestor is a prefix");
-            let Some(std::path::Component::Normal(alias_name)) = relative.components().next()
-            else {
-                continue;
-            };
-            if let Err(error) = verify_absolute_directory_path_without_symlinks(
-                &anchor,
-                "historical alias trusted anchor",
-            ) {
-                last_anchor_error = Some(error);
-                continue;
-            }
-            let alias_path = anchor.join(alias_name);
-            let metadata = match fs::symlink_metadata(&alias_path) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    safely_inspected_candidate = true;
-                    continue;
-                }
-                Err(error) => {
-                    return Err(WorkVcsError::QueryInvalid(format!(
-                        "cannot inspect historical alias candidate {}: {error}",
-                        alias_path.display()
-                    )));
-                }
-            };
-            safely_inspected_candidate = true;
-            if !metadata.file_type().is_symlink() {
-                continue;
-            }
-            let fingerprint = snapshot_historical_alias(&anchor, &alias_path)?;
-            let target = normalize_absolute_single_hop_alias_target(&fingerprint.link_target)?;
-            let suffix = candidate_cwd.strip_prefix(&alias_path).map_err(|_| {
-                WorkVcsError::ControlPlaneInvalid(format!(
-                    "historical alias candidate {} is not a prefix of {}",
-                    alias_path.display(),
-                    candidate_cwd.display()
-                ))
-            })?;
-            let expanded = normalize_historical_cwd_without_io(&target.join(suffix))?;
-            if !expanded.starts_with(boundary) {
-                continue;
-            }
-            let probe_cwd = verify_historical_probe_path(boundary, &expanded)?;
-            let stable_fingerprint = snapshot_historical_alias(&anchor, &alias_path)?;
-            if stable_fingerprint != fingerprint {
-                return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                    "historical alias {} changed while its active-boundary resolution was being verified",
-                    alias_path.display()
-                )));
-            }
-            resolutions.push(HistoricalProbeResolution {
-                original_cwd: original_cwd.to_path_buf(),
-                boundary: boundary.clone(),
-                probe_cwd,
-                alias: Some(stable_fingerprint),
-            });
-        }
-    }
-    resolutions.sort_by(|left, right| {
-        left.probe_cwd
-            .cmp(&right.probe_cwd)
-            .then_with(|| {
-                right
-                    .boundary
-                    .components()
-                    .count()
-                    .cmp(&left.boundary.components().count())
-            })
-            .then_with(|| left.boundary.cmp(&right.boundary))
-    });
-    resolutions.dedup();
-    let Some(first) = resolutions.first() else {
-        if !safely_inspected_candidate && let Some(error) = last_anchor_error {
-            return Err(error);
-        }
-        return Ok(None);
-    };
-    if resolutions
-        .iter()
-        .any(|candidate| candidate.probe_cwd != first.probe_cwd)
-    {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "historical rollout cwd {} has ambiguous active-boundary alias resolutions",
-            original_cwd.display()
-        )));
-    }
-    Ok(resolutions.into_iter().next())
-}
-
-#[cfg(not(unix))]
-fn select_dynamic_historical_alias(
-    _original_cwd: &Path,
-    _boundaries: &[PathBuf],
-    _candidates: &[PathBuf],
-) -> Result<Option<HistoricalProbeResolution>> {
-    Ok(None)
-}
-
-fn common_historical_path_ancestor(left: &Path, right: &Path) -> Option<PathBuf> {
-    let mut shared = PathBuf::new();
-    let mut matched = false;
-    for (left_component, right_component) in left.components().zip(right.components()) {
-        if left_component != right_component {
-            break;
-        }
-        shared.push(left_component.as_os_str());
-        matched = true;
-    }
-    matched.then_some(shared)
-}
-
-#[cfg(unix)]
-fn historical_alias_metadata_fingerprint(
-    anchor: &Path,
-    link_path: &Path,
-    link_target: &Path,
-    metadata: &fs::Metadata,
-) -> HistoricalAliasFingerprint {
-    let mut digest = Sha256::new();
-    digest.update(link_target.as_os_str().as_bytes());
-    HistoricalAliasFingerprint {
-        anchor: anchor.to_path_buf(),
-        link_path: link_path.to_path_buf(),
-        link_target: link_target.to_path_buf(),
-        link_target_sha256: hex::encode(digest.finalize()),
-        device: metadata.dev(),
-        inode: metadata.ino(),
-        mode: metadata.mode(),
-        uid: metadata.uid(),
-        gid: metadata.gid(),
-        length: metadata.len(),
-        modified_seconds: metadata.mtime(),
-        modified_nanoseconds: metadata.mtime_nsec(),
-        changed_seconds: metadata.ctime(),
-        changed_nanoseconds: metadata.ctime_nsec(),
-    }
-}
-
-#[cfg(unix)]
-fn snapshot_historical_alias(
-    anchor: &Path,
-    link_path: &Path,
-) -> Result<HistoricalAliasFingerprint> {
-    let before = fs::symlink_metadata(link_path).map_err(|error| {
-        WorkVcsError::QueryInvalid(format!(
-            "cannot inspect historical alias {} before reading it: {error}",
-            link_path.display()
-        ))
-    })?;
-    if !before.file_type().is_symlink() {
-        return Err(WorkVcsError::IntegrityInvalid(format!(
-            "historical alias {} changed to a non-symlink",
-            link_path.display()
-        )));
-    }
-    let target = fs::read_link(link_path).map_err(|error| {
-        WorkVcsError::QueryInvalid(format!(
-            "cannot read historical alias {}: {error}",
-            link_path.display()
-        ))
-    })?;
-    let after = fs::symlink_metadata(link_path).map_err(|error| {
-        WorkVcsError::QueryInvalid(format!(
-            "cannot inspect historical alias {} after reading it: {error}",
-            link_path.display()
-        ))
-    })?;
-    if !after.file_type().is_symlink() {
-        return Err(WorkVcsError::IntegrityInvalid(format!(
-            "historical alias {} changed to a non-symlink while it was read",
-            link_path.display()
-        )));
-    }
-    let before = historical_alias_metadata_fingerprint(anchor, link_path, &target, &before);
-    let after = historical_alias_metadata_fingerprint(anchor, link_path, &target, &after);
-    if before != after {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "historical alias {} changed while it was being read",
-            link_path.display()
-        )));
-    }
-    Ok(after)
-}
-
-#[cfg(unix)]
-fn normalize_absolute_single_hop_alias_target(target: &Path) -> Result<PathBuf> {
-    if !target.is_absolute() {
-        return Err(WorkVcsError::IntegrityInvalid(format!(
-            "historical alias target {} is relative; only absolute single-hop aliases are supported",
-            target.display()
-        )));
-    }
-    let mut normalized = PathBuf::new();
-    for component in target.components() {
-        match component {
-            std::path::Component::RootDir | std::path::Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-            std::path::Component::Prefix(_)
-            | std::path::Component::CurDir
-            | std::path::Component::ParentDir => {
-                return Err(WorkVcsError::IntegrityInvalid(format!(
-                    "historical alias target {} is not an absolute normalized single-hop path",
-                    target.display()
-                )));
-            }
-        }
-    }
-    if normalized.as_os_str().as_bytes() != target.as_os_str().as_bytes() {
-        return Err(WorkVcsError::IntegrityInvalid(format!(
-            "historical alias target {} is not an absolute normalized single-hop path",
-            target.display()
-        )));
-    }
-    Ok(normalized)
-}
-
-fn verify_absolute_directory_path_without_symlinks(path: &Path, label: &str) -> Result<()> {
-    if !path.is_absolute() {
-        return Err(WorkVcsError::ControlPlaneInvalid(format!(
-            "{label} {} is not absolute",
-            path.display()
-        )));
-    }
-    let mut cursor = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => cursor.push(prefix.as_os_str()),
-            std::path::Component::RootDir => {
-                cursor.push(component.as_os_str());
-                continue;
-            }
-            std::path::Component::Normal(value) => cursor.push(value),
-            std::path::Component::CurDir | std::path::Component::ParentDir => {
-                return Err(WorkVcsError::ControlPlaneInvalid(format!(
-                    "{label} {} contains a non-normal component",
-                    path.display()
-                )));
-            }
-        }
-        let metadata = fs::symlink_metadata(&cursor).map_err(|error| {
-            WorkVcsError::QueryInvalid(format!(
-                "cannot inspect {label} component {}: {error}",
-                cursor.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(WorkVcsError::IntegrityInvalid(format!(
-                "{label} component {} is a symlink",
-                cursor.display()
-            )));
-        }
-        if !metadata.is_dir() {
-            return Err(WorkVcsError::IntegrityInvalid(format!(
-                "{label} component {} is not a directory",
-                cursor.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn historical_cwd_aliases_without_io(cwd: &Path) -> Result<Vec<PathBuf>> {
-    let normalized = normalize_historical_cwd_without_io(cwd)?;
-    let mut aliases = vec![normalized.clone()];
-    #[cfg(target_os = "macos")]
-    for public_root in ["/var", "/tmp", "/etc"] {
-        if normalized.starts_with(public_root) {
-            let relative = normalized.strip_prefix("/").expect("absolute path");
-            aliases.push(Path::new("/private").join(relative));
-            break;
-        }
-        let private_root = Path::new("/private").join(
-            Path::new(public_root)
-                .strip_prefix("/")
-                .expect("public root is absolute"),
-        );
-        if normalized.starts_with(&private_root) {
-            let relative = normalized
-                .strip_prefix("/private")
-                .expect("private path prefix");
-            aliases.push(Path::new("/").join(relative));
-            break;
-        }
-    }
-    aliases.sort();
-    aliases.dedup();
-    Ok(aliases)
-}
-
-fn read_historical_git_metadata(path: &Path, label: &str) -> Result<Vec<u8>> {
-    const MAX_METADATA_BYTES: u64 = 16 * 1024;
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        WorkVcsError::QueryInvalid(format!(
-            "cannot inspect {label} {}: {error}",
-            path.display()
-        ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(WorkVcsError::IntegrityInvalid(format!(
-            "{label} {} must be a regular file, not a symlink or special file",
-            path.display()
-        )));
-    }
-    if metadata.len() > MAX_METADATA_BYTES {
-        return Err(WorkVcsError::IntegrityInvalid(format!(
-            "{label} {} exceeds the {MAX_METADATA_BYTES} byte safety bound",
-            path.display()
-        )));
-    }
-    fs::read(path).map_err(storage_error("read historical Git identity metadata"))
-}
-
-fn hash_historical_metadata(digest: &mut Sha256, label: &str, bytes: &[u8]) {
-    digest.update((label.len() as u64).to_le_bytes());
-    digest.update(label.as_bytes());
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-}
-
-fn observe_historical_owner(cwd: &Path) -> Result<HistoricalOwnerObservation> {
-    verify_absolute_directory_path_without_symlinks(cwd, "historical rollout cwd")?;
-    let identity = resolve_project_identity_without_git_subprocess(cwd)?;
-    let key = HistoricalOwnerKey {
-        identity_kind: identity.kind,
-        identity: identity.identity,
-    };
-    let mut digest = Sha256::new();
-    hash_historical_metadata(&mut digest, "identity-kind", key.identity_kind.as_bytes());
-    hash_historical_metadata(&mut digest, "identity", key.identity.as_bytes());
-    hash_historical_metadata(&mut digest, "root", identity.root.as_bytes());
-    if key.identity_kind == "git-common-dir" {
-        let marker = PathBuf::from(&identity.root).join(".git");
-        let marker_metadata = fs::symlink_metadata(&marker)
-            .map_err(storage_error("inspect historical Git metadata marker"))?;
-        if marker_metadata.is_dir() {
-            hash_historical_metadata(&mut digest, "marker-kind", b"directory");
-            let head = read_historical_git_metadata(&marker.join("HEAD"), "Git HEAD")?;
-            hash_historical_metadata(&mut digest, "head", &head);
-        } else if marker_metadata.is_file() && !marker_metadata.file_type().is_symlink() {
-            hash_historical_metadata(&mut digest, "marker-kind", b"worktree-pointer");
-            let pointer = read_historical_git_metadata(&marker, "Git worktree pointer")?;
-            hash_historical_metadata(&mut digest, "worktree-pointer", &pointer);
-            let pointer_text = std::str::from_utf8(&pointer).map_err(|error| {
-                WorkVcsError::IntegrityInvalid(format!(
-                    "Git worktree pointer {} is not UTF-8: {error}",
-                    marker.display()
-                ))
-            })?;
-            let target = pointer_text
-                .trim_end_matches(['\r', '\n'])
-                .strip_prefix("gitdir: ")
-                .ok_or_else(|| {
-                    WorkVcsError::IntegrityInvalid(format!(
-                        "Git worktree pointer {} has an invalid format",
-                        marker.display()
-                    ))
-                })?;
-            let target = Path::new(target);
-            let target = if target.is_absolute() {
-                target.to_path_buf()
-            } else {
-                marker
-                    .parent()
-                    .expect("Git marker has a parent")
-                    .join(target)
-            };
-            let admin = canonical_existing_path("Git worktree metadata directory", &target)?;
-            for (label, name) in [
-                ("commondir", "commondir"),
-                ("gitdir", "gitdir"),
-                ("head", "HEAD"),
-            ] {
-                let bytes = read_historical_git_metadata(&admin.join(name), label)?;
-                hash_historical_metadata(&mut digest, label, &bytes);
-            }
-        } else {
-            return Err(WorkVcsError::IntegrityInvalid(format!(
-                "Git metadata marker {} changed to an unsafe type",
-                marker.display()
-            )));
-        }
-    }
-    Ok(HistoricalOwnerObservation {
-        identity: key,
-        metadata_sha256: hex::encode(digest.finalize()),
+    Ok(ResolvedHistoricalSourceMember {
+        member,
+        owner_resolution: resolved,
     })
 }
 
@@ -4533,12 +3878,30 @@ fn start_watcher(root: &Path, project_registry: Option<&Path>) -> Result<DaemonW
 #[cfg(unix)]
 fn refresh_watcher(state: &mut DaemonWatcher, root: &Path, project_registry: Option<&Path>) {
     match watcher_target_plan(root, project_registry) {
-        Ok(plan) => replace_watcher_targets(state, plan),
+        Ok(plan) => apply_watcher_refresh_plan(state, plan),
         Err(error) => record_watcher_error(
             &state.health,
             format!("cannot refresh watcher targets: {error}"),
         ),
     }
+}
+
+#[cfg(unix)]
+fn apply_watcher_refresh_plan(state: &mut DaemonWatcher, plan: WatchTargetPlan) {
+    apply_watcher_refresh_plan_with(state, plan, replace_watcher_targets);
+}
+
+#[cfg(unix)]
+fn apply_watcher_refresh_plan_with(
+    state: &mut DaemonWatcher,
+    plan: WatchTargetPlan,
+    replace: impl FnOnce(&mut DaemonWatcher, WatchTargetPlan),
+) {
+    if let Some(error) = &plan.discovery_error {
+        record_watcher_error(&state.health, error.clone());
+        return;
+    }
+    replace(state, plan);
 }
 
 #[cfg(unix)]
@@ -4683,11 +4046,23 @@ fn replace_watcher_targets(state: &mut DaemonWatcher, plan: WatchTargetPlan) {
     let Some(watcher) = state.watcher.as_mut() else {
         return;
     };
-    for path in state.backend_targets.keys() {
+    let (removed_or_changed, added_or_changed) =
+        watcher_target_diff(&state.backend_targets, &plan.backend_targets);
+    for path in &removed_or_changed {
         let _ = watcher.unwatch(path);
+        state.backend_targets.remove(path);
     }
-    state.backend_targets.clear();
-    for (path, (recursive, label)) in &plan.backend_targets {
+    for (path, (_, label)) in &plan.backend_targets {
+        if let Some((current_recursive, current_label)) = state.backend_targets.get_mut(path) {
+            debug_assert_eq!(current_recursive, &plan.backend_targets[path].0);
+            *current_label = *label;
+        }
+    }
+    for path in &added_or_changed {
+        let (recursive, label) = plan
+            .backend_targets
+            .get(path)
+            .expect("watch target diff only adds desired targets");
         let mode = if *recursive {
             RecursiveMode::Recursive
         } else {
@@ -4714,6 +4089,28 @@ fn replace_watcher_targets(state: &mut DaemonWatcher, plan: WatchTargetPlan) {
     if let Some(error) = plan.discovery_error {
         record_watcher_error(&state.health, error);
     }
+}
+
+#[cfg(unix)]
+fn watcher_target_diff(
+    current: &BTreeMap<PathBuf, (bool, &'static str)>,
+    desired: &BTreeMap<PathBuf, (bool, &'static str)>,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let removed_or_changed = current
+        .iter()
+        .filter_map(|(path, (recursive, _))| match desired.get(path) {
+            Some((next_recursive, _)) if next_recursive == recursive => None,
+            _ => Some(path.clone()),
+        })
+        .collect();
+    let added_or_changed = desired
+        .iter()
+        .filter_map(|(path, (recursive, _))| match current.get(path) {
+            Some((current_recursive, _)) if current_recursive == recursive => None,
+            _ => Some(path.clone()),
+        })
+        .collect();
+    (removed_or_changed, added_or_changed)
 }
 
 #[cfg(unix)]
@@ -5871,8 +5268,12 @@ fn storage_error(context: &'static str) -> impl Fn(std::io::Error) -> WorkVcsErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
     use tempfile::TempDir;
-    use workvcs_core::automation::AUTOMATION_CATALOG_FORMAT_VERSION;
+    use workvcs_core::{
+        SourceArchiveOwnerResolutionScheme, automation::AUTOMATION_CATALOG_FORMAT_VERSION,
+    };
 
     fn write_test_rollout(path: &Path, text: &str) {
         let thread = "01900000-0000-7000-8000-000000000001";
@@ -5894,9 +5295,10 @@ mod tests {
     fn automation_fixture(
         temporary: &TempDir,
     ) -> (PathBuf, AutomationRegistration, PathBuf, PathBuf) {
-        let automation_root = temporary.path().join("automation");
-        let project_root = temporary.path().join("project");
-        let rollout_root = temporary.path().join("rollouts");
+        let temporary_root = temporary.path().canonicalize().unwrap();
+        let automation_root = temporary_root.join("automation");
+        let project_root = temporary_root.join("project");
+        let rollout_root = temporary_root.join("rollouts");
         fs::create_dir(&automation_root).unwrap();
         fs::create_dir(&project_root).unwrap();
         fs::create_dir(&rollout_root).unwrap();
@@ -5904,7 +5306,7 @@ mod tests {
         fs::set_permissions(&automation_root, fs::Permissions::from_mode(0o700)).unwrap();
         let source = rollout_root.join("thread.jsonl");
         write_test_rollout(&source, "retained historical evidence");
-        let store_path = temporary.path().join("unavailable-store.sqlite");
+        let store_path = temporary_root.join("unavailable-store.sqlite");
         fs::write(&store_path, b"not a Store").unwrap();
         let registration = AutomationRegistration {
             registration_id: "registration-1".to_owned(),
@@ -5964,6 +5366,53 @@ mod tests {
                 "type":"response_item",
                 "timestamp":"2026-01-01T00:00:02Z",
                 "payload":{"type":"message","role":"assistant","id":assistant,"content":[{"type":"output_text","text":"assistant text must be excluded"}]}
+            }),
+        ];
+        let bytes = lines
+            .into_iter()
+            .map(|line| serde_json::to_string(&line).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(path, format!("{bytes}\n")).unwrap();
+    }
+
+    fn write_registry_derived_multi_context_rollout(
+        path: &Path,
+        first_cwd: &Path,
+        second_cwd: &Path,
+        text: &str,
+    ) {
+        let shared_turn = "01900000-0000-7000-8000-000000000099";
+        let lines = [
+            serde_json::json!({
+                "type":"session_meta",
+                "timestamp":"2026-01-01T00:00:00Z",
+                "payload":{"id":"01900000-0000-7000-8000-000000000021","cwd":first_cwd}
+            }),
+            serde_json::json!({
+                "type":"response_item",
+                "timestamp":"2026-01-01T00:00:01Z",
+                "payload":{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":text}],
+                    "internal_chat_message_metadata_passthrough":{"turn_id":shared_turn}
+                }
+            }),
+            serde_json::json!({
+                "type":"session_meta",
+                "timestamp":"2026-01-01T00:00:02Z",
+                "payload":{"id":"01900000-0000-7000-8000-000000000022","cwd":second_cwd}
+            }),
+            serde_json::json!({
+                "type":"response_item",
+                "timestamp":"2026-01-01T00:00:03Z",
+                "payload":{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":text}],
+                    "internal_chat_message_metadata_passthrough":{"turn_id":shared_turn}
+                }
             }),
         ];
         let bytes = lines
@@ -6269,147 +5718,23 @@ mod tests {
             existing_artifacts_deleted: false,
         }
     }
-
-    #[cfg(unix)]
     #[test]
-    fn native_historical_identity_is_nested_and_linked_worktree_strict() {
-        let temporary = TempDir::new().unwrap();
-        let temporary_root = temporary.path().canonicalize().unwrap();
-
-        let repository = temporary_root.join("repository");
-        let nested = repository.join("src/nested");
-        fs::create_dir_all(repository.join(".git")).unwrap();
-        fs::create_dir_all(&nested).unwrap();
-        let identity = resolve_project_identity_without_git_subprocess(&nested).unwrap();
-        assert_eq!(identity.kind, "git-common-dir");
-        assert_eq!(
-            identity.root,
-            fs::canonicalize(&repository).unwrap().display().to_string()
-        );
-        assert_eq!(
-            identity.identity,
-            fs::canonicalize(repository.join(".git"))
-                .unwrap()
-                .display()
-                .to_string()
-        );
-
-        let common_repository = temporary_root.join("common-repository");
-        let common_dir = common_repository.join(".git");
-        let worktree = temporary_root.join("linked-worktree");
-        let worktree_nested = worktree.join("nested");
-        let worktree_admin = common_dir.join("worktrees/linked");
-        fs::create_dir_all(&worktree_admin).unwrap();
-        fs::create_dir_all(&worktree_nested).unwrap();
-        fs::write(
-            worktree.join(".git"),
-            format!("gitdir: {}\n", worktree_admin.display()),
-        )
-        .unwrap();
-        fs::write(worktree_admin.join("commondir"), "../..\n").unwrap();
-        fs::write(
-            worktree_admin.join("gitdir"),
-            format!("{}\n", worktree.join(".git").display()),
-        )
-        .unwrap();
-        fs::write(worktree_admin.join("HEAD"), b"ref: refs/heads/linked\n").unwrap();
-        let identity = resolve_project_identity_without_git_subprocess(&worktree_nested).unwrap();
-        assert_eq!(identity.kind, "git-common-dir");
-        assert_eq!(
-            identity.identity,
-            fs::canonicalize(&common_dir).unwrap().display().to_string()
-        );
-        assert_eq!(
-            identity.root,
-            fs::canonicalize(&worktree).unwrap().display().to_string()
-        );
-        let observed = observe_historical_owner(&worktree_nested).unwrap();
-        fs::write(
-            worktree_admin.join("HEAD"),
-            b"ref: refs/heads/linked-changed\n",
-        )
-        .unwrap();
-        let changed = observe_historical_owner(&worktree_nested).unwrap();
-        assert_eq!(changed.identity, observed.identity);
-        assert_ne!(changed.metadata_sha256, observed.metadata_sha256);
-        let linked_aliases = historical_cwd_aliases_without_io(&worktree_nested).unwrap();
-        assert!(
-            historical_repository_boundaries(&common_dir)
-                .iter()
-                .any(|boundary| linked_aliases
-                    .iter()
-                    .any(|candidate| candidate.starts_with(boundary)))
-        );
-        let unrelated = temporary_root.join("unrelated-backlink-target");
-        let unverified_admin = common_dir.join("worktrees/unverified");
-        fs::create_dir(&unverified_admin).unwrap();
-        fs::write(
-            unverified_admin.join("gitdir"),
-            format!("{}\n", unrelated.join(".git").display()),
-        )
-        .unwrap();
-        assert!(
-            historical_repository_boundaries(&common_dir)
-                .iter()
-                .any(|boundary| boundary == &unrelated)
-        );
-
-        let backlink_outside = temporary_root.join("backlink-outside");
-        let backlink_worktree = backlink_outside.join("worktree");
-        fs::create_dir_all(&backlink_worktree).unwrap();
-        let backlink_link = temporary_root.join("backlink-link");
-        std::os::unix::fs::symlink(&backlink_outside, &backlink_link).unwrap();
-        let unsafe_root = backlink_link.join("worktree");
-        let unsafe_admin = common_dir.join("worktrees/unsafe-link");
-        fs::create_dir(&unsafe_admin).unwrap();
-        fs::write(
-            unsafe_admin.join("gitdir"),
-            format!("{}\n", unsafe_root.join(".git").display()),
-        )
-        .unwrap();
-        let boundaries = historical_repository_boundaries(&common_dir);
-        let error = select_historical_probe_path(
-            &unsafe_root,
-            &boundaries,
-            std::slice::from_ref(&unsafe_root),
-        )
-        .unwrap_err();
-        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
-        assert!(error.to_string().contains("is a symlink"));
-
-        let symlinked = temporary_root.join("symlinked-marker");
-        fs::create_dir(&symlinked).unwrap();
-        std::os::unix::fs::symlink(&common_dir, symlinked.join(".git")).unwrap();
-        let error = resolve_project_identity_without_git_subprocess(&symlinked).unwrap_err();
-        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
-
-        let separate = temporary_root.join("separate-git-dir");
-        let separate_metadata = temporary_root.join("separate-metadata");
-        fs::create_dir(&separate).unwrap();
-        fs::create_dir(&separate_metadata).unwrap();
-        fs::write(
-            separate.join(".git"),
-            format!("gitdir: {}\n", separate_metadata.display()),
-        )
-        .unwrap();
-        let error = resolve_project_identity_without_git_subprocess(&separate).unwrap_err();
-        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
-        assert!(error.to_string().contains("no common-dir pointer"));
-        assert!(historical_repository_boundaries(&separate_metadata).is_empty());
-    }
-
-    #[test]
-    fn historical_owner_cache_revalidates_local_identity_before_reuse_and_publication() {
+    fn core_owner_resolution_revalidates_local_identity_before_publication() {
         let temporary = TempDir::new().unwrap();
         let fixture = registry_derived_automation_fixture(&temporary);
         let membership = registry_derived_membership(Some(&fixture.registry_path)).unwrap();
         let source = fixture.rollout_root.join("thread.jsonl");
-        let cwd = rollout_cwd_from_session_meta(&source).unwrap();
-        let mut cache = HistoricalOwnerCache::new();
-
-        let member =
-            resolve_registry_derived_source_member(&source, &membership, &mut cache).unwrap();
-        assert_eq!(member.project_ref_id, fixture.project_ref_id);
+        let snapshot = SourceArchiveSnapshot::capture(&fixture.rollout_root, &source).unwrap();
+        let cwd = PathBuf::from(
+            snapshot.observed_session_meta()[0]
+                .raw_cwd
+                .as_deref()
+                .unwrap(),
+        );
+        let resolved = resolve_registry_derived_source_member(&snapshot, &membership).unwrap();
+        assert_eq!(resolved.member.project_ref_id, fixture.project_ref_id);
+        let owner_resolution = resolved.owner_resolution;
+        owner_resolution.revalidate_live_evidence().unwrap();
 
         #[cfg(unix)]
         {
@@ -6418,15 +5743,11 @@ mod tests {
             fs::create_dir(&replacement).unwrap();
             fs::rename(&cwd, &moved_cwd).unwrap();
             std::os::unix::fs::symlink(&replacement, &cwd).unwrap();
-            let error = validate_historical_owner_cache(&cache, &membership).unwrap_err();
-            assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
-            assert!(
-                error
-                    .to_string()
-                    .contains("historical identity boundary component"),
-                "{error}"
-            );
-            assert!(error.to_string().contains("is a symlink"), "{error}");
+            let error = owner_resolution.revalidate_live_evidence().unwrap_err();
+            assert!(matches!(
+                error,
+                WorkVcsError::IntegrityInvalid(_) | WorkVcsError::StorageFailure(_)
+            ));
             fs::remove_file(&cwd).unwrap();
             fs::rename(&moved_cwd, &cwd).unwrap();
 
@@ -6440,37 +5761,33 @@ mod tests {
                 &escaped,
                 "symlink escape must be rejected before canonicalization",
             );
+            let escaped_snapshot =
+                SourceArchiveSnapshot::capture(&fixture.rollout_root, &escaped_source).unwrap();
             let error =
-                resolve_registry_derived_source_member(&escaped_source, &membership, &mut cache)
-                    .unwrap_err();
+                resolve_registry_derived_source_member(&escaped_snapshot, &membership).unwrap_err();
             assert_eq!(error.code, "integrity_invalid");
-            assert!(error.error.contains("symlink that could escape"));
+            assert!(
+                error
+                    .error
+                    .contains("symlink or has an unsafe filesystem type")
+            );
         }
 
         fs::create_dir(cwd.join(".git")).unwrap();
         fs::write(cwd.join(".git/HEAD"), b"ref: refs/heads/main\n").unwrap();
-        let error =
-            resolve_registry_derived_source_member(&source, &membership, &mut cache).unwrap_err();
-        assert_eq!(error.code, "control_plane_invalid");
-        assert!(
-            error
-                .error
-                .contains("changed identity metadata during reconciliation")
-        );
+        let error = resolve_registry_derived_source_member(&snapshot, &membership).unwrap_err();
+        assert!(matches!(
+            error.code.as_str(),
+            "project_owner_unbound" | "integrity_invalid"
+        ));
 
-        let error = validate_historical_owner_cache(&cache, &membership).unwrap_err();
-        assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+        let error = owner_resolution.revalidate_live_evidence().unwrap_err();
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
         assert!(
             error
                 .to_string()
-                .contains("changed identity metadata during reconciliation")
+                .contains("no longer matches its live native resolver observation")
         );
-
-        let first = observe_historical_owner(&cwd).unwrap();
-        fs::write(cwd.join(".git/HEAD"), b"ref: refs/heads/changed\n").unwrap();
-        let changed = observe_historical_owner(&cwd).unwrap();
-        assert_eq!(changed.identity, first.identity);
-        assert_ne!(changed.metadata_sha256, first.metadata_sha256);
     }
 
     #[cfg(unix)]
@@ -6481,7 +5798,14 @@ mod tests {
         let fixture_root = temporary.path().canonicalize().unwrap();
         let membership = registry_derived_membership(Some(&fixture.registry_path)).unwrap();
         let physical_source = fixture.rollout_root.join("thread.jsonl");
-        let physical_cwd = rollout_cwd_from_session_meta(&physical_source).unwrap();
+        let physical_snapshot =
+            SourceArchiveSnapshot::capture(&fixture.rollout_root, &physical_source).unwrap();
+        let physical_cwd = PathBuf::from(
+            physical_snapshot.observed_session_meta()[0]
+                .raw_cwd
+                .as_deref()
+                .unwrap(),
+        );
         let alias_root = fixture_root.join("known-alias");
         let alias_target = physical_cwd.parent().unwrap().to_path_buf();
         std::os::unix::fs::symlink(&alias_target, &alias_root).unwrap();
@@ -6492,104 +5816,30 @@ mod tests {
             &alias_cwd,
             "verified historical alias evidence",
         );
-        let mut cache = HistoricalOwnerCache::new();
-        let member =
-            resolve_registry_derived_source_member(&alias_source, &membership, &mut cache).unwrap();
-        assert_eq!(member.project_ref_id, fixture.project_ref_id);
-        let cached = cache.get(&alias_cwd).unwrap();
-        assert_eq!(cached.resolution.original_cwd, alias_cwd);
-        assert_eq!(cached.resolution.probe_cwd, physical_cwd);
-        let fingerprint = cached.resolution.alias.as_ref().unwrap();
+        let alias_snapshot =
+            SourceArchiveSnapshot::capture(&fixture.rollout_root, &alias_source).unwrap();
+        let resolved =
+            resolve_registry_derived_source_member(&alias_snapshot, &membership).unwrap();
+        assert_eq!(resolved.member.project_ref_id, fixture.project_ref_id);
+        let owner_resolution = resolved.owner_resolution;
+        let evidence = &owner_resolution.observed_session_meta[0].owner_resolution;
+        assert_eq!(evidence.normalized_cwd, alias_cwd);
+        assert_eq!(evidence.probe_cwd, physical_cwd);
+        let fingerprint = evidence.alias.as_ref().unwrap();
         assert_eq!(fingerprint.link_path, alias_root);
         assert_eq!(fingerprint.link_target, alias_target);
-        validate_historical_owner_cache(&cache, &membership).unwrap();
+        owner_resolution.revalidate_live_evidence().unwrap();
 
         let held_alias = fixture_root.join("held-original-alias");
         fs::rename(&alias_root, &held_alias).unwrap();
         std::os::unix::fs::symlink(&alias_target, &alias_root).unwrap();
-        let error = resolve_registry_derived_source_member(&alias_source, &membership, &mut cache)
-            .unwrap_err();
-        assert_eq!(error.code, "control_plane_invalid");
-        assert!(error.error.contains("changed local resolution"));
-
-        let physical_a_parent = fixture_root.join("physical-a");
-        let physical_b_parent = fixture_root.join("physical-b");
-        let physical_a = physical_a_parent.join("project");
-        let physical_b = physical_b_parent.join("project");
-        fs::create_dir_all(&physical_a).unwrap();
-        fs::create_dir_all(&physical_b).unwrap();
-        let retarget_alias = fixture_root.join("retarget-alias");
-        std::os::unix::fs::symlink(&physical_a_parent, &retarget_alias).unwrap();
-        let retarget_cwd = retarget_alias.join("project");
-        let mut retarget_membership = membership.clone();
-        retarget_membership.historical_owner_boundaries =
-            vec![physical_a.clone(), physical_b.clone()];
-        let retarget_candidates = historical_cwd_aliases_without_io(&retarget_cwd).unwrap();
-        let resolution = select_historical_probe_path(
-            &retarget_cwd,
-            &retarget_membership.historical_owner_boundaries,
-            &retarget_candidates,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(resolution.probe_cwd, physical_a);
-        let observation = observe_historical_owner(&resolution.probe_cwd).unwrap();
-        let mut retarget_cache = HistoricalOwnerCache::new();
-        retarget_cache.insert(
-            retarget_cwd.clone(),
-            HistoricalOwnerCacheEntry {
-                resolution,
-                observation,
-                owner: Ok(retarget_membership.members[0].clone()),
-            },
-        );
-        let held_retarget = fixture_root.join("held-retarget-alias");
-        fs::rename(&retarget_alias, &held_retarget).unwrap();
-        std::os::unix::fs::symlink(&physical_b_parent, &retarget_alias).unwrap();
-        let error =
-            validate_historical_owner_cache(&retarget_cache, &retarget_membership).unwrap_err();
-        assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
-        assert!(error.to_string().contains("changed local resolution"));
-
-        let relative_alias = fixture_root.join("relative-alias");
-        std::os::unix::fs::symlink("physical-a", &relative_alias).unwrap();
-        let relative_cwd = relative_alias.join("project");
-        let error = select_historical_probe_path(
-            &relative_cwd,
-            std::slice::from_ref(&physical_a),
-            std::slice::from_ref(&relative_cwd),
-        )
-        .unwrap_err();
+        let error = owner_resolution.revalidate_live_evidence().unwrap_err();
         assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
-        assert!(error.to_string().contains("target") && error.to_string().contains("relative"));
-
-        let external_alias = fixture_root.join("external-alias");
-        let nonexistent_external = fixture_root.join("external-target-does-not-exist");
-        std::os::unix::fs::symlink(&nonexistent_external, &external_alias).unwrap();
-        let external_cwd = external_alias.join("project");
         assert!(
-            select_historical_probe_path(
-                &external_cwd,
-                std::slice::from_ref(&physical_a),
-                std::slice::from_ref(&external_cwd),
-            )
-            .unwrap()
-            .is_none()
+            error
+                .to_string()
+                .contains("changed after its captured owner observation")
         );
-        assert!(!nonexistent_external.exists());
-
-        let direct_external = fixture_root.join("direct-external");
-        fs::create_dir(&direct_external).unwrap();
-        let direct_suffix = physical_a.join("suffix-link");
-        std::os::unix::fs::symlink(&direct_external, &direct_suffix).unwrap();
-        let error = select_historical_probe_path(
-            &direct_suffix,
-            std::slice::from_ref(&physical_a),
-            std::slice::from_ref(&direct_suffix),
-        )
-        .unwrap_err();
-        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
-        assert!(error.to_string().contains("symlink that could escape"));
     }
 
     #[test]
@@ -6611,7 +5861,7 @@ mod tests {
     #[test]
     fn daemon_client_times_out_when_listener_accepts_but_never_responds() {
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("automation");
+        let root = temporary.path().canonicalize().unwrap().join("automation");
         let runtime = root.join("runtime");
         fs::create_dir_all(&runtime).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -6648,7 +5898,7 @@ mod tests {
         }
 
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("automation");
+        let root = temporary.path().canonicalize().unwrap().join("automation");
         let runtime = root.join("runtime");
         fs::create_dir_all(&runtime).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -6749,7 +5999,7 @@ mod tests {
             SourceChange::Rewritten
         );
 
-        let automation_root = temporary.path().join("automation");
+        let automation_root = temporary.path().canonicalize().unwrap().join("automation");
         let reference = SourceArchiveReference {
             artifact_path: temporary.path().join("archive"),
             artifact_manifest_sha256: "a".repeat(64),
@@ -6896,6 +6146,504 @@ mod tests {
     }
 
     #[test]
+    fn registry_derived_catalog_keeps_byte_identical_source_containers_distinct() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let first_source = fixture.rollout_root.join("thread.jsonl");
+        let copied_source = fixture.rollout_root.join("copied-thread.jsonl");
+        fs::copy(&first_source, &copied_source).unwrap();
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let report =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(report.status, "completed", "{report:#?}");
+        assert_eq!(report.rollout_archives_ready, 2);
+        let catalog = read_automation_catalog(&report.catalog_path).unwrap();
+        let historical = catalog
+            .sources
+            .iter()
+            .filter(|source| {
+                source.lane == AutomationLane::HistoricalReference
+                    && source.status == AutomationSourceStatus::Ready
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(historical.len(), 2);
+        assert_ne!(historical[0].artifact_path, historical[1].artifact_path);
+
+        let query = query_catalog(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &report.catalog_path,
+            "historical",
+            None,
+        )
+        .unwrap();
+        assert_eq!(query.matched_items, 2);
+        let document_ids = query
+            .items
+            .iter()
+            .map(|item| {
+                item.payload["document"]["document_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let source_paths = query
+            .items
+            .iter()
+            .map(|item| {
+                item.payload["document"]["source_path"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            document_ids.len(),
+            2,
+            "global query must not fold copy identities"
+        );
+        assert_eq!(
+            source_paths.len(),
+            2,
+            "global query must preserve both containers"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_derived_multi_context_native_and_alias_share_one_verified_owner() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let source = fixture.rollout_root.join("thread.jsonl");
+        let physical_cwd = fixture.project_roots[0].clone();
+        let alias_root = temporary.path().canonicalize().unwrap().join("known-alias");
+        std::os::unix::fs::symlink(physical_cwd.parent().unwrap(), &alias_root).unwrap();
+        let alias_cwd = alias_root.join(physical_cwd.file_name().unwrap());
+        write_registry_derived_multi_context_rollout(
+            &source,
+            &physical_cwd,
+            &alias_cwd,
+            "two physical occurrences remain distinct",
+        );
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let membership = registry_derived_membership(Some(&fixture.registry_path)).unwrap();
+        let snapshot = SourceArchiveSnapshot::capture(&fixture.rollout_root, &source).unwrap();
+        let resolved = resolve_registry_derived_source_member(&snapshot, &membership).unwrap();
+        assert_eq!(resolved.member.project_ref_id, fixture.project_ref_id);
+
+        let first = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(first.status, "completed", "{first:#?}");
+        assert_eq!(first.rollout_archives_ready, 1);
+        let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        let entry = &inventory.files[source.to_str().unwrap()];
+        let reference = entry.archive.as_ref().unwrap();
+        let inspected = Engine::inspect_source_archive(SourceArchiveInspectOptions::new(
+            entry.member.identity(),
+            &reference.artifact_path,
+        ))
+        .unwrap();
+        assert_eq!(inspected.manifest.format_version, 2);
+        let file = &inspected.manifest.files[0];
+        assert_eq!(file.observed_session_meta.len(), 2);
+        assert_eq!(file.observed_session_meta[0].raw_cwd, physical_cwd);
+        assert_eq!(file.observed_session_meta[1].raw_cwd, alias_cwd);
+        let attribution = inspected.manifest.automatic_attribution.as_ref().unwrap();
+        assert_eq!(attribution.observed_session_meta.len(), 2);
+        assert_eq!(
+            attribution.observed_session_meta[0].owner_resolution.scheme,
+            SourceArchiveOwnerResolutionScheme::NativeIdentityV1
+        );
+        assert_eq!(
+            attribution.observed_session_meta[1].owner_resolution.scheme,
+            SourceArchiveOwnerResolutionScheme::SafeAliasV1
+        );
+        assert!(
+            attribution.observed_session_meta[1]
+                .owner_resolution
+                .alias
+                .is_some()
+        );
+        let query = Engine::query_source_archive(
+            SourceArchiveQueryOptions::new(
+                entry.member.identity(),
+                &reference.artifact_path,
+                "physical occurrences",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(query.matched_documents, 2);
+        assert_eq!(
+            query
+                .items
+                .iter()
+                .map(|item| item.document.document_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            2,
+            "two messages with one repeated turn id must remain distinct"
+        );
+        assert!(
+            query
+                .items
+                .iter()
+                .all(|item| item.document.source_message_id.is_none())
+        );
+
+        let second =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(second.status, "completed", "{second:#?}");
+        assert_eq!(second.rollout_files_unchanged, 1);
+        assert_eq!(
+            read_global_source_inventory(&fixture.automation_root)
+                .unwrap()
+                .files[source.to_str().unwrap()]
+            .archive,
+            entry.archive,
+            "all-context validation should preserve the exact immutable archive on rerun"
+        );
+    }
+
+    #[test]
+    fn registry_derived_cross_owner_contexts_fail_before_history_publication() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture_with_project_count(&temporary, 2);
+        let source = fixture.rollout_root.join("thread.jsonl");
+        write_registry_derived_multi_context_rollout(
+            &source,
+            &fixture.project_roots[0],
+            &fixture.project_roots[1],
+            "cross-owner source must be quarantined",
+        );
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let registry_before = fs::read(&fixture.registry_path).unwrap();
+        let source_before = fs::read(&source).unwrap();
+        let membership = registry_derived_membership(Some(&fixture.registry_path)).unwrap();
+        let stores_before = membership
+            .members
+            .iter()
+            .map(|member| {
+                (
+                    member.store_path.clone(),
+                    fs::read(&member.store_path).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let report =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(report.status, "partial_failure", "{report:#?}");
+        assert_eq!(report.rollout_archives_ready, 0);
+        assert_eq!(report.rollout_archives_failed, 1);
+        assert!(!report.canonical_source_written);
+        assert!(!report.project_registry_written);
+        assert!(!report.source_files_written);
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+        for (store_path, bytes) in stores_before {
+            assert_eq!(fs::read(store_path).unwrap(), bytes);
+        }
+        assert!(
+            !fixture.automation_root.join("history").exists(),
+            "contradictory ownership must be rejected before archive creation"
+        );
+        assert!(
+            read_global_source_inventory(&fixture.automation_root)
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        let catalog = read_automation_catalog(&report.catalog_path).unwrap();
+        assert!(catalog.sources.iter().all(|item| {
+            item.lane != AutomationLane::HistoricalReference
+                || item.status != AutomationSourceStatus::Ready
+        }));
+        assert!(catalog.sources.iter().any(|item| {
+            item.status == AutomationSourceStatus::Failed
+                && item.artifact_path == source
+                && item
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("different ProjectRef member tuples"))
+        }));
+    }
+
+    #[test]
+    fn registry_derived_unbound_and_missing_cwd_sources_stay_quarantined() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let source = fixture.rollout_root.join("thread.jsonl");
+        let outside = temporary.path().join("outside-owner-boundaries");
+        fs::create_dir(&outside).unwrap();
+        write_registry_derived_test_rollout(&source, &outside, "unbound source text");
+        let missing_cwd_source = fixture.rollout_root.join("missing-cwd.jsonl");
+        let lines = [
+            serde_json::json!({
+                "type":"session_meta",
+                "payload":{"id":"01900000-0000-7000-8000-000000000031"}
+            }),
+            serde_json::json!({
+                "type":"response_item",
+                "payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"missing cwd text"}]}
+            }),
+        ];
+        fs::write(
+            &missing_cwd_source,
+            format!(
+                "{}\n",
+                lines
+                    .into_iter()
+                    .map(|line| serde_json::to_string(&line).unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        )
+        .unwrap();
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let report =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(report.status, "partial_failure", "{report:#?}");
+        assert_eq!(report.rollout_archives_ready, 0);
+        assert_eq!(report.rollout_archives_failed, 2);
+        assert!(!fixture.automation_root.join("history").exists());
+        assert!(
+            read_global_source_inventory(&fixture.automation_root)
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        let catalog = read_automation_catalog(&report.catalog_path).unwrap();
+        assert!(catalog.sources.iter().any(|item| {
+            item.status == AutomationSourceStatus::Failed
+                && item.artifact_path == source
+                && item.error_code.as_deref() == Some("project_owner_unbound")
+        }));
+        assert!(catalog.sources.iter().any(|item| {
+            item.status == AutomationSourceStatus::Failed
+                && item.artifact_path == missing_cwd_source
+                && item
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("no trusted cwd"))
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_derived_alias_retarget_aborts_inventory_and_catalog_publication() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture_with_project_count(&temporary, 2);
+        let source = fixture.rollout_root.join("thread.jsonl");
+        let first_cwd = fixture.project_roots[0].clone();
+        let alias_root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("moving-alias");
+        std::os::unix::fs::symlink(first_cwd.parent().unwrap(), &alias_root).unwrap();
+        let alias_cwd = alias_root.join(first_cwd.file_name().unwrap());
+        write_registry_derived_multi_context_rollout(
+            &source,
+            &first_cwd,
+            &alias_cwd,
+            "retarget fence evidence",
+        );
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let replacement_parent = fixture.project_roots[1].parent().unwrap().to_path_buf();
+        let held_alias = temporary.path().join("held-moving-alias");
+        let mut importer_calls = 0;
+        let error = {
+            let mut importer = |request| {
+                importer_calls += 1;
+                let result = Engine::import_registry_verified_source_archive(request)?;
+                fs::rename(&alias_root, &held_alias).unwrap();
+                std::os::unix::fs::symlink(&replacement_parent, &alias_root).unwrap();
+                Ok(result)
+            };
+            reconcile_registry_derived_once_with_importer(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &mut importer,
+            )
+            .unwrap_err()
+        };
+        assert_eq!(importer_calls, 1);
+        assert!(matches!(error, WorkVcsError::IntegrityInvalid(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("changed after its captured owner observation"),
+            "{error}"
+        );
+        assert!(
+            !global_source_inventory_path(&fixture.automation_root).exists(),
+            "an alias fence failure must not publish inventory"
+        );
+        assert!(
+            !fixture.automation_root.join("catalogs").exists(),
+            "an alias fence failure must not publish a catalog"
+        );
+    }
+
+    #[test]
+    fn registry_derived_source_policy_drift_aborts_inventory_and_catalog_publication() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let mut importer_calls = 0;
+        let error = {
+            let mut importer = |request| {
+                importer_calls += 1;
+                let result = Engine::import_registry_verified_source_archive(request)?;
+                let current = read_automation_source_policy(&fixture.automation_root)?;
+                revoke_automation_source_policy(
+                    &fixture.automation_root,
+                    current.revision,
+                    &current.digest_sha256,
+                    "rollouts",
+                )?;
+                Ok(result)
+            };
+            reconcile_registry_derived_once_with_importer(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &mut importer,
+            )
+            .unwrap_err()
+        };
+        assert_eq!(importer_calls, 1);
+        assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+        assert!(
+            error.to_string().contains("source policy changed"),
+            "{error}"
+        );
+        assert!(!global_source_inventory_path(&fixture.automation_root).exists());
+        assert!(!fixture.automation_root.join("catalogs").exists());
+    }
+
+    #[test]
+    fn registry_derived_registry_drift_aborts_inventory_and_catalog_publication() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let effective = effective_registry_config(Some(fixture.registry_path.clone())).unwrap();
+        let activation_path = routing_activation_path(&effective, &fixture.registry_path);
+        let mut importer_calls = 0;
+        let error = {
+            let mut importer = |request| {
+                importer_calls += 1;
+                let result = Engine::import_registry_verified_source_archive(request)?;
+                let mut registry_value: serde_json::Value = serde_json::from_slice(
+                    &fs::read(&fixture.registry_path).expect("read registry"),
+                )
+                .expect("decode registry");
+                registry_value["revision"] = serde_json::json!(2);
+                let registry = ProjectRegistryV2::from_json_bytes(
+                    &serde_json::to_vec(&registry_value).expect("encode registry"),
+                )
+                .expect("updated registry");
+                fs::write(
+                    &fixture.registry_path,
+                    registry.stored_json_bytes().expect("stored registry"),
+                )
+                .expect("write registry");
+                let activation = RoutingActivationCandidate::for_registry(&registry)
+                    .expect("updated activation");
+                fs::write(
+                    &activation_path,
+                    activation.stored_json_bytes().expect("stored activation"),
+                )
+                .expect("write activation");
+                Ok(result)
+            };
+            reconcile_registry_derived_once_with_importer(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &mut importer,
+            )
+            .unwrap_err()
+        };
+        assert_eq!(importer_calls, 1);
+        assert!(matches!(error, WorkVcsError::ControlPlaneInvalid(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("registry membership or routing activation changed"),
+            "{error}"
+        );
+        assert!(!global_source_inventory_path(&fixture.automation_root).exists());
+        assert!(!fixture.automation_root.join("catalogs").exists());
+    }
+
+    #[test]
+    fn unchanged_registry_inventory_reuses_legacy_v1_archive_without_migration() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let source = fixture.rollout_root.join("thread.jsonl");
+        let membership = registry_derived_membership(Some(&fixture.registry_path)).unwrap();
+        let member = membership.members[0].clone();
+        let archive_root = fixture
+            .automation_root
+            .join("history")
+            .join("registry-derived")
+            .join("rollouts")
+            .join(member.project_ref_id.to_string());
+        let legacy = Engine::import_source_archive(
+            SourceArchiveImportOptions::new(member.identity(), &archive_root, vec![source.clone()])
+                .unwrap()
+                .include_assistant(false),
+        )
+        .unwrap();
+        assert_eq!(legacy.manifest.format_version, 1);
+        let manifest_before = fs::read(legacy.archive_path.join("manifest.json")).unwrap();
+        let documents_before = fs::read(legacy.archive_path.join("documents.json")).unwrap();
+        let reference = archive_reference(legacy.archive_path.clone(), &legacy.manifest).unwrap();
+        write_global_source_inventory(
+            &fixture.automation_root,
+            BTreeMap::from([(
+                source.to_str().unwrap().to_owned(),
+                GlobalSourceInventoryEntry {
+                    source_id: "rollouts".to_owned(),
+                    member,
+                    fingerprint: fingerprint_source(&source).unwrap(),
+                    archive: Some(reference.clone()),
+                },
+            )]),
+        )
+        .unwrap();
+
+        let report =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(report.status, "completed", "{report:#?}");
+        assert_eq!(report.rollout_files_unchanged, 1);
+        let retained = read_global_source_inventory(&fixture.automation_root)
+            .unwrap()
+            .files[source.to_str().unwrap()]
+        .archive
+        .clone()
+        .unwrap();
+        assert_eq!(retained, reference);
+        let inspected = Engine::inspect_source_archive(SourceArchiveInspectOptions::new(
+            membership.members[0].identity(),
+            &retained.artifact_path,
+        ))
+        .unwrap();
+        assert_eq!(inspected.manifest.format_version, 1);
+        assert_eq!(
+            fs::read(retained.artifact_path.join("manifest.json")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            fs::read(retained.artifact_path.join("documents.json")).unwrap(),
+            documents_before
+        );
+    }
+
+    #[test]
     fn registry_derived_import_drift_with_prior_is_local_and_converges() {
         let temporary = TempDir::new().unwrap();
         let fixture = registry_derived_automation_fixture(&temporary);
@@ -6915,6 +6663,7 @@ mod tests {
         let seeded_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
         let raced_key = raced_source.to_str().unwrap();
         let stable_key = stable_source.to_str().unwrap();
+        let prior_raced_fingerprint = seeded_inventory.files[raced_key].fingerprint.clone();
         let prior_raced_archive = seeded_inventory.files[raced_key].archive.clone().unwrap();
         let prior_stable_archive = seeded_inventory.files[stable_key].archive.clone().unwrap();
 
@@ -6927,7 +6676,7 @@ mod tests {
         let mut importer_calls = 0;
         let mut imported_after_drift = None;
         let raced = {
-            let mut importer = |options| {
+            let mut importer = |request| {
                 importer_calls += 1;
                 assert_eq!(
                     importer_calls, 1,
@@ -6938,8 +6687,8 @@ mod tests {
                     "01900000-0000-7000-8000-000000000015",
                     "appended after fingerprint and before Engine import",
                 );
-                let result = Engine::import_source_archive(options)?;
-                imported_after_drift = Some(result.clone());
+                let result = Engine::import_registry_verified_source_archive(request)?;
+                imported_after_drift = Some(result.import.clone());
                 Ok(result)
             };
             reconcile_registry_derived_once_with_importer(
@@ -6956,11 +6705,10 @@ mod tests {
             &imported_after_drift.manifest,
         )
         .unwrap();
-        assert!(!archive_reference_matches_source(
-            &imported_reference,
-            &raced_source,
-            &pre_fingerprint
-        ));
+        assert!(
+            archive_reference_matches_source(&imported_reference, &raced_source, &pre_fingerprint),
+            "Engine must import the immutable captured snapshot, not the appended live file"
+        );
         assert_eq!(raced.status, "partial_failure");
         assert!(!raced.complete);
         assert_eq!(raced.canonical_generations_ready, 1);
@@ -6985,16 +6733,26 @@ mod tests {
             .unwrap();
         assert_eq!(failure.error_code.as_deref(), Some("integrity_invalid"));
         let error = failure.error.as_deref().unwrap();
-        assert!(error.contains("source_changed_during_archive_import"));
+        assert!(
+            error.contains("source_changed_during_archive_import")
+                || error.contains("final_publication_fence")
+                || error.contains("changed_before_publication")
+        );
         assert!(error.contains(&format!("path={}", raced_source.display())));
-        assert!(error.contains(&format!("pre_bytes={}", pre_fingerprint.bytes)));
-        assert!(error.contains(&format!("pre_sha256={}", pre_fingerprint.sha256)));
-        assert!(error.contains(&format!("import_bytes={}", imported_reference.source_bytes)));
-        assert!(error.contains(&format!(
-            "import_sha256={}",
-            imported_reference.source_sha256
-        )));
-        assert!(error.contains("outcome=imported"));
+        if error.contains("source_changed_during_archive_import") {
+            assert!(error.contains(&format!("pre_bytes={}", pre_fingerprint.bytes)));
+            assert!(error.contains(&format!("pre_sha256={}", pre_fingerprint.sha256)));
+            assert!(error.contains(&format!("import_bytes={}", imported_reference.source_bytes)));
+            assert!(error.contains(&format!(
+                "import_sha256={}",
+                imported_reference.source_sha256
+            )));
+            assert!(error.contains("live_state=changed from captured snapshot"));
+            assert!(error.contains("outcome=imported"));
+        } else {
+            assert!(error.contains(&format!("snapshot_bytes={}", pre_fingerprint.bytes)));
+            assert!(error.contains(&format!("snapshot_sha256={}", pre_fingerprint.sha256)));
+        }
         assert!(error.contains("prior_archive=present"));
         assert!(raced_catalog.sources.iter().all(|source| {
             source.status != AutomationSourceStatus::Ready
@@ -7004,7 +6762,7 @@ mod tests {
         assert_eq!(raced_inventory.files.len(), 2);
         assert_eq!(
             raced_inventory.files[raced_key].fingerprint,
-            pre_fingerprint
+            prior_raced_fingerprint
         );
         assert_eq!(
             raced_inventory.files[raced_key].archive.as_ref(),
@@ -7022,13 +6780,14 @@ mod tests {
         assert_eq!(converged.canonical_generations_ready, 1);
         assert_eq!(converged.rollout_archives_failed, 0);
         let converged_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
-        assert_eq!(
+        assert_ne!(
             converged_inventory.files[raced_key]
                 .archive
                 .as_ref()
                 .unwrap()
                 .artifact_path,
-            imported_after_drift.archive_path
+            imported_after_drift.archive_path,
+            "the next run must archive the new live snapshot rather than adopt the raced archive"
         );
     }
 
@@ -7049,7 +6808,7 @@ mod tests {
         let mut importer_calls = 0;
         let mut imported_after_drift = None;
         let raced = {
-            let mut importer = |options| {
+            let mut importer = |request| {
                 importer_calls += 1;
                 if importer_calls == 1 {
                     append_registry_derived_test_message(
@@ -7058,9 +6817,9 @@ mod tests {
                         "first import changes only after fingerprint",
                     );
                 }
-                let result = Engine::import_source_archive(options)?;
+                let result = Engine::import_registry_verified_source_archive(request)?;
                 if importer_calls == 1 {
-                    imported_after_drift = Some(result.clone());
+                    imported_after_drift = Some(result.import.clone());
                 }
                 Ok(result)
             };
@@ -7079,11 +6838,10 @@ mod tests {
             &imported_after_drift.manifest,
         )
         .unwrap();
-        assert!(!archive_reference_matches_source(
-            &imported_reference,
-            &raced_source,
-            &pre_fingerprint
-        ));
+        assert!(
+            archive_reference_matches_source(&imported_reference, &raced_source, &pre_fingerprint),
+            "Engine must import the immutable captured snapshot, not the appended live file"
+        );
         assert_eq!(raced.status, "partial_failure");
         assert!(!raced.complete);
         assert_eq!(raced.canonical_generations_ready, 1);
@@ -7133,6 +6891,327 @@ mod tests {
         assert_eq!(converged.rollout_archives_failed, 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn registry_derived_final_fence_localizes_late_cross_source_mutations() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            Append,
+            Rewrite,
+            Delete,
+            UnsafePermission,
+            Fifo,
+        }
+
+        fn apply_mutation(kind: Mutation, source: &Path, cwd: &Path) {
+            match kind {
+                Mutation::Append => append_registry_derived_test_message(
+                    source,
+                    "01900000-0000-7000-8000-000000000061",
+                    "late cross-source append",
+                ),
+                Mutation::Rewrite => {
+                    write_registry_derived_test_rollout(source, cwd, "late cross-source rewrite")
+                }
+                Mutation::Delete => fs::remove_file(source).unwrap(),
+                Mutation::UnsafePermission => {
+                    fs::set_permissions(source, fs::Permissions::from_mode(0o666)).unwrap();
+                }
+                Mutation::Fifo => {
+                    fs::remove_file(source).unwrap();
+                    let path = std::ffi::CString::new(source.as_os_str().as_bytes()).unwrap();
+                    let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+                    assert_eq!(result, 0, "mkfifo: {}", std::io::Error::last_os_error());
+                }
+            }
+        }
+
+        let cases = [
+            (Mutation::Append, false),
+            (Mutation::Rewrite, true),
+            (Mutation::Delete, false),
+            (Mutation::UnsafePermission, true),
+            (Mutation::Fifo, false),
+        ];
+        for (mutation, with_prior) in cases {
+            let temporary = TempDir::new().unwrap();
+            let fixture = registry_derived_automation_fixture(&temporary);
+            let raced_source = fixture.rollout_root.join("thread.jsonl");
+            let stable_source = fixture.rollout_root.join("z-stable.jsonl");
+            write_registry_derived_test_rollout(
+                &stable_source,
+                &fixture.project_roots[0],
+                "stable B source remains ready",
+            );
+            install_registry_derived_source_policy(&fixture, Vec::new());
+
+            let prior_entry = if with_prior {
+                let seeded =
+                    reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+                assert_eq!(seeded.status, "completed", "{mutation:?}: {seeded:#?}");
+                let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+                let prior = inventory.files[raced_source.to_str().unwrap()].clone();
+                append_registry_derived_test_message(
+                    &stable_source,
+                    "01900000-0000-7000-8000-000000000062",
+                    "force B importer after A reuse",
+                );
+                Some(prior)
+            } else {
+                None
+            };
+
+            let trigger_call = if with_prior { 1 } else { 2 };
+            let mut importer_calls = 0;
+            let mut raced_candidate = None;
+            let report = {
+                let mut importer = |request| {
+                    importer_calls += 1;
+                    if importer_calls == trigger_call {
+                        apply_mutation(mutation, &raced_source, &fixture.project_roots[0]);
+                    }
+                    let result = Engine::import_registry_verified_source_archive(request)?;
+                    if !with_prior && importer_calls == 1 {
+                        raced_candidate = Some(result.import.archive_path.clone());
+                    }
+                    Ok(result)
+                };
+                reconcile_registry_derived_once_with_importer(
+                    &fixture.automation_root,
+                    Some(&fixture.registry_path),
+                    &mut importer,
+                )
+                .unwrap()
+            };
+
+            assert_eq!(importer_calls, if with_prior { 1 } else { 2 });
+            assert_eq!(
+                report.status, "partial_failure",
+                "{mutation:?}: {report:#?}"
+            );
+            assert!(!report.complete);
+            assert_eq!(report.canonical_generations_ready, 1);
+            assert_eq!(
+                report.rollout_archives_ready,
+                if with_prior { 2 } else { 1 }
+            );
+            assert_eq!(report.rollout_archives_failed, 1);
+            let catalog = read_automation_catalog(&report.catalog_path).unwrap();
+            assert!(catalog.sources.iter().any(|source| {
+                source.status == AutomationSourceStatus::Ready
+                    && source
+                        .source_anchor
+                        .contains(stable_source.to_str().unwrap())
+            }));
+            let failure = catalog
+                .sources
+                .iter()
+                .find(|source| {
+                    source.status == AutomationSourceStatus::Failed
+                        && source.artifact_path == raced_source
+                })
+                .unwrap();
+            assert!(
+                failure
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("final_publication_fence")
+                        || error.contains("changed_before_publication")),
+                "{mutation:?}: {failure:#?}"
+            );
+            if let Some(candidate) = raced_candidate {
+                assert!(catalog.sources.iter().all(|source| {
+                    source.status != AutomationSourceStatus::Ready
+                        || source.artifact_path != candidate
+                }));
+            }
+            let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+            let current = &inventory.files[raced_source.to_str().unwrap()];
+            if let Some(prior) = prior_entry {
+                assert_eq!(current, &prior, "{mutation:?}");
+                assert!(catalog.sources.iter().any(|source| {
+                    source.status == AutomationSourceStatus::Ready
+                        && source.artifact_path == prior.archive.as_ref().unwrap().artifact_path
+                }));
+            } else {
+                assert!(current.archive.is_none(), "{mutation:?}: {current:#?}");
+                assert!(catalog.sources.iter().all(|source| {
+                    source.status != AutomationSourceStatus::Ready
+                        || !source
+                            .source_anchor
+                            .contains(raced_source.to_str().unwrap())
+                }));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_derived_live_checks_reject_fifo_and_symlink_swaps_without_losing_later_source() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            Fifo,
+            LeafSymlink,
+            IntermediateSymlink,
+        }
+
+        fn mutate_source(
+            mutation: Mutation,
+            source: &Path,
+            source_parent: &Path,
+            outside_source: &Path,
+        ) {
+            match mutation {
+                Mutation::Fifo => {
+                    fs::remove_file(source).unwrap();
+                    let path = std::ffi::CString::new(source.as_os_str().as_bytes()).unwrap();
+                    let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+                    assert_eq!(result, 0, "mkfifo: {}", std::io::Error::last_os_error());
+                }
+                Mutation::LeafSymlink => {
+                    fs::remove_file(source).unwrap();
+                    std::os::unix::fs::symlink(outside_source, source).unwrap();
+                }
+                Mutation::IntermediateSymlink => {
+                    let displaced = source_parent.with_file_name("held-source-parent");
+                    fs::rename(source_parent, &displaced).unwrap();
+                    std::os::unix::fs::symlink(outside_source.parent().unwrap(), source_parent)
+                        .unwrap();
+                }
+            }
+        }
+
+        let stages = [
+            RegistryDerivedLiveCheckStage::Reuse,
+            RegistryDerivedLiveCheckStage::PostImport,
+        ];
+        let mutations = [
+            Mutation::Fifo,
+            Mutation::LeafSymlink,
+            Mutation::IntermediateSymlink,
+        ];
+        for stage in stages {
+            for mutation in mutations {
+                let temporary = TempDir::new().unwrap();
+                let fixture = registry_derived_automation_fixture(&temporary);
+                let nested = fixture.rollout_root.join("nested");
+                fs::create_dir(&nested).unwrap();
+                let raced_source = nested.join("thread.jsonl");
+                fs::rename(fixture.rollout_root.join("thread.jsonl"), &raced_source).unwrap();
+                let stable_source = fixture.rollout_root.join("z-stable.jsonl");
+                write_registry_derived_test_rollout(
+                    &stable_source,
+                    &fixture.project_roots[0],
+                    "later stable source remains ready",
+                );
+                let outside = temporary.path().canonicalize().unwrap().join("outside");
+                fs::create_dir(&outside).unwrap();
+                let outside_source = outside.join("thread.jsonl");
+                write_registry_derived_test_rollout(
+                    &outside_source,
+                    &fixture.project_roots[0],
+                    "outside marker must never be indexed",
+                );
+                install_registry_derived_source_policy(&fixture, Vec::new());
+
+                let prior = if stage == RegistryDerivedLiveCheckStage::Reuse {
+                    let seeded =
+                        reconcile_once(&fixture.automation_root, Some(&fixture.registry_path))
+                            .unwrap();
+                    assert_eq!(seeded.status, "completed", "{stage:?}/{mutation:?}");
+                    let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+                    let prior = inventory.files[raced_source.to_str().unwrap()].clone();
+                    append_registry_derived_test_message(
+                        &stable_source,
+                        "01900000-0000-7000-8000-000000000071",
+                        "force later B import",
+                    );
+                    Some(prior)
+                } else {
+                    None
+                };
+
+                let mut mutated = false;
+                let mut importer_calls = 0;
+                let mut raced_candidate = None;
+                let report = {
+                    let mut importer = |request| {
+                        importer_calls += 1;
+                        let result = Engine::import_registry_verified_source_archive(request)?;
+                        if stage == RegistryDerivedLiveCheckStage::PostImport && importer_calls == 1
+                        {
+                            raced_candidate = Some(result.import.archive_path.clone());
+                        }
+                        Ok(result)
+                    };
+                    let mut hook = |path: &Path, observed_stage| {
+                        if !mutated && path == raced_source && observed_stage == stage {
+                            mutate_source(mutation, &raced_source, &nested, &outside_source);
+                            mutated = true;
+                        }
+                    };
+                    reconcile_registry_derived_once_with_importer_and_live_check_hook(
+                        &fixture.automation_root,
+                        Some(&fixture.registry_path),
+                        &mut importer,
+                        &mut hook,
+                    )
+                    .unwrap()
+                };
+
+                assert!(mutated, "{stage:?}/{mutation:?}: hook did not run");
+                assert_eq!(
+                    importer_calls,
+                    if stage == RegistryDerivedLiveCheckStage::Reuse {
+                        1
+                    } else {
+                        2
+                    },
+                    "{stage:?}/{mutation:?}"
+                );
+                assert_eq!(report.status, "partial_failure", "{stage:?}/{mutation:?}");
+                assert_eq!(report.canonical_generations_ready, 1);
+                assert_eq!(report.rollout_archives_failed, 1);
+                let catalog = read_automation_catalog(&report.catalog_path).unwrap();
+                assert!(catalog.sources.iter().any(|source| {
+                    source.status == AutomationSourceStatus::Ready
+                        && source
+                            .source_anchor
+                            .contains(stable_source.to_str().unwrap())
+                }));
+                assert!(catalog.sources.iter().any(|source| {
+                    source.status == AutomationSourceStatus::Failed
+                        && source.artifact_path == raced_source
+                }));
+                if let Some(candidate) = raced_candidate {
+                    assert!(catalog.sources.iter().all(|source| {
+                        source.status != AutomationSourceStatus::Ready
+                            || source.artifact_path != candidate
+                    }));
+                }
+                let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+                let current = &inventory.files[raced_source.to_str().unwrap()];
+                if let Some(prior) = prior {
+                    assert_eq!(current, &prior, "{stage:?}/{mutation:?}");
+                } else {
+                    assert!(current.archive.is_none(), "{stage:?}/{mutation:?}");
+                }
+                let outside_query = query_catalog(
+                    &fixture.automation_root,
+                    Some(&fixture.registry_path),
+                    &report.catalog_path,
+                    "outside marker",
+                    None,
+                )
+                .unwrap();
+                assert_eq!(
+                    outside_query.matched_items, 0,
+                    "{stage:?}/{mutation:?}: outside source content leaked"
+                );
+            }
+        }
+    }
+
     #[test]
     fn registry_derived_import_owner_drift_is_not_adopted_by_prior_owner() {
         let temporary = TempDir::new().unwrap();
@@ -7162,12 +7241,11 @@ mod tests {
             "01900000-0000-7000-8000-000000000017",
             "pre-fingerprint update still belongs to the first owner",
         );
-        let pre_fingerprint = fingerprint_source(&raced_source).unwrap();
         let mut importer_calls = 0;
         let mut imported_after_rewrite = None;
         let second_root = fixture.project_roots[1].clone();
         let raced = {
-            let mut importer = |options| {
+            let mut importer = |request| {
                 importer_calls += 1;
                 assert_eq!(
                     importer_calls, 1,
@@ -7178,8 +7256,8 @@ mod tests {
                     &second_root,
                     "rewritten source belongs to the second owner",
                 );
-                let result = Engine::import_source_archive(options)?;
-                imported_after_rewrite = Some(result.clone());
+                let result = Engine::import_registry_verified_source_archive(request)?;
+                imported_after_rewrite = Some(result.import.clone());
                 Ok(result)
             };
             reconcile_registry_derived_once_with_importer(
@@ -7208,7 +7286,7 @@ mod tests {
         let raced_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
         assert_eq!(
             raced_inventory.files[raced_key].fingerprint,
-            pre_fingerprint
+            prior_entry.fingerprint
         );
         assert_eq!(
             raced_inventory.files[raced_key].member.project_ref_id,
@@ -7244,13 +7322,13 @@ mod tests {
             converged_archive.artifact_path, imported_after_rewrite.archive_path,
             "the old-owner derived artifact must not be adopted by the new owner"
         );
-        assert_eq!(
-            converged_archive.source_sha256,
-            imported_reference.source_sha256
+        assert_ne!(
+            converged_archive.source_sha256, imported_reference.source_sha256,
+            "the converged owner archive must describe the replacement snapshot"
         );
-        assert_eq!(
-            converged_archive.source_bytes,
-            imported_reference.source_bytes
+        assert_ne!(
+            converged_archive.source_bytes, imported_reference.source_bytes,
+            "the replacement snapshot has a distinct byte length in this fixture"
         );
         let converged_catalog = read_automation_catalog(&converged.catalog_path).unwrap();
         assert!(converged_catalog.sources.iter().any(|source| {
@@ -7397,7 +7475,11 @@ mod tests {
     #[test]
     fn empty_registry_reconcile_and_query_are_failed() {
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("empty-automation");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("empty-automation");
         fs::create_dir(&root).unwrap();
         #[cfg(unix)]
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -7590,17 +7672,27 @@ mod tests {
         fs::create_dir(&real).unwrap();
         let alias = temporary.path().join("alias");
         std::os::unix::fs::symlink(&real, &alias).unwrap();
-        let resolved = canonicalize_destination(&alias.join("new").join("derived")).unwrap();
+        let requested = alias.join("new").join("derived");
+        assert!(
+            !requested.exists(),
+            "preview must not create the selected root"
+        );
+        let resolved = resolve_automation_root(Some(requested), None).unwrap();
         assert_eq!(
             resolved,
             real.canonicalize().unwrap().join("new").join("derived")
         );
+        assert!(!resolved.exists(), "root selection must remain read-only");
+        assert!(matches!(
+            resolve_automation_root(Some(PathBuf::from("relative-root")), None),
+            Err(WorkVcsError::QueryInvalid(_))
+        ));
     }
 
     #[test]
     fn latest_catalog_is_discovered_without_a_mutable_pointer() {
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("automation");
+        let root = temporary.path().canonicalize().unwrap().join("automation");
         let registry = read_automation_registry(&root).unwrap();
         let published = publish_automation_catalog(
             &root,
@@ -7614,6 +7706,100 @@ mod tests {
         assert_eq!(latest.catalog_manifest_sha256, published.manifest_sha256);
         assert!(!latest.manifest.complete);
         assert!(latest.manifest.sources.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watcher_target_diff_keeps_unchanged_control_plane_watch_continuous() {
+        let control_plane = PathBuf::from("/private/tmp/workvcs-control-plane");
+        let old_rollout = PathBuf::from("/private/tmp/workvcs-rollout-old");
+        let new_rollout = PathBuf::from("/private/tmp/workvcs-rollout-new");
+        let current = BTreeMap::from([
+            (control_plane.clone(), (false, "project registry parent")),
+            (old_rollout.clone(), (true, "rollout root")),
+        ]);
+        let desired = BTreeMap::from([
+            (control_plane.clone(), (false, "routing activation parent")),
+            (new_rollout.clone(), (true, "rollout root")),
+        ]);
+
+        let (removed, added) = watcher_target_diff(&current, &desired);
+
+        assert_eq!(removed, vec![old_rollout]);
+        assert_eq!(added, vec![new_rollout]);
+        assert!(!removed.contains(&control_plane));
+        assert!(!added.contains(&control_plane));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watcher_refresh_retains_last_known_good_targets_until_discovery_recovers() {
+        let temporary = TempDir::new().unwrap();
+        let old_store = temporary.path().join("old-store");
+        let new_store = temporary.path().join("new-store");
+        fs::create_dir(&old_store).unwrap();
+        fs::create_dir(&new_store).unwrap();
+        let (_sender, receiver) = mpsc::sync_channel(1);
+        let old_filter = WatchFilterSet {
+            rules: vec![WatchFilterRule::Tree(old_store.clone())],
+        };
+        let health = Arc::new(WatcherHealth::default());
+        let mut state = DaemonWatcher {
+            receiver,
+            watcher: None,
+            health: health.clone(),
+            filter: Arc::new(Mutex::new(old_filter.clone())),
+            backend_targets: BTreeMap::from([(old_store.clone(), (true, "last-known-good Store"))]),
+        };
+        let failed = WatchTargetPlan {
+            backend_targets: BTreeMap::from([(
+                new_store.clone(),
+                (true, "untrusted partial Store plan"),
+            )]),
+            filter: WatchFilterSet {
+                rules: vec![WatchFilterRule::Tree(new_store.clone())],
+            },
+            discovery_error: Some("stale routing activation".to_owned()),
+        };
+        let mut backend_unwatch_calls = 0;
+
+        apply_watcher_refresh_plan_with(&mut state, failed, |_, _| {
+            backend_unwatch_calls += 1;
+        });
+
+        assert_eq!(backend_unwatch_calls, 0);
+        assert_eq!(
+            state.backend_targets,
+            BTreeMap::from([(old_store.clone(), (true, "last-known-good Store"))])
+        );
+        assert_eq!(*state.filter.lock().unwrap(), old_filter);
+        assert_eq!(health.errors.load(Ordering::SeqCst), 1);
+
+        let recovered_filter = WatchFilterSet {
+            rules: vec![WatchFilterRule::Tree(new_store.clone())],
+        };
+        apply_watcher_refresh_plan_with(
+            &mut state,
+            WatchTargetPlan {
+                backend_targets: BTreeMap::from([(new_store.clone(), (true, "recovered Store"))]),
+                filter: recovered_filter.clone(),
+                discovery_error: None,
+            },
+            |state, plan| {
+                let (removed, _) =
+                    watcher_target_diff(&state.backend_targets, &plan.backend_targets);
+                backend_unwatch_calls += removed.len();
+                state.backend_targets = plan.backend_targets;
+                *state.filter.lock().unwrap() = plan.filter;
+            },
+        );
+
+        assert_eq!(backend_unwatch_calls, 1);
+        assert_eq!(
+            state.backend_targets,
+            BTreeMap::from([(new_store, (true, "recovered Store"))])
+        );
+        assert_eq!(*state.filter.lock().unwrap(), recovered_filter);
     }
 
     #[cfg(unix)]
@@ -7686,7 +7872,7 @@ mod tests {
         assert_eq!(failed.stderr.bytes, b"raw-worker-stderr");
 
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("automation");
+        let root = temporary.path().canonicalize().unwrap().join("automation");
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let mut ledger = test_ledger();
@@ -7851,7 +8037,7 @@ mod tests {
         assert!(!cancelled.outcome.timed_out);
         assert_eq!(cancelled.outcome.timeout_seconds, None);
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("automation");
+        let root = temporary.path().canonicalize().unwrap().join("automation");
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let mut cancelled_ledger = test_ledger();
@@ -8068,7 +8254,7 @@ mod tests {
     #[test]
     fn worker_report_projects_failed_catalog_without_false_success() {
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("automation");
+        let root = temporary.path().canonicalize().unwrap().join("automation");
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let report = publish_failed_reconcile_report(&root);

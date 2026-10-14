@@ -8,6 +8,12 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(unix)]
+use std::ffi::{CString, OsStr};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 
 pub const AUTOMATION_REGISTRY_FORMAT_VERSION: u32 = 1;
@@ -1311,7 +1317,12 @@ fn validate_private_directory(path: &Path, label: &str) -> Result<()> {
 }
 
 fn validate_private_metadata(metadata: &fs::Metadata, directory: bool, label: &str) -> Result<()> {
-    if directory != metadata.is_dir() {
+    let expected_type = if directory {
+        metadata.is_dir()
+    } else {
+        metadata.is_file()
+    };
+    if !expected_type {
         return Err(WorkVcsError::IntegrityInvalid(format!(
             "{label} has an unexpected filesystem type"
         )));
@@ -1350,27 +1361,227 @@ fn validate_owner_and_writes(metadata: &fs::Metadata, label: &str) -> Result<()>
 }
 
 fn read_private_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
-    let mut options = OpenOptions::new();
-    options.read(true);
     #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
-    let mut file = options
-        .open(path)
-        .map_err(storage_error("open private file"))?;
+    {
+        read_private_file_unix(path, max_bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        let mut file = options
+            .open(path)
+            .map_err(storage_error("open private file"))?;
+        let metadata = file
+            .metadata()
+            .map_err(storage_error("inspect private file"))?;
+        validate_private_metadata(&metadata, false, "private file")?;
+        if metadata.len() > max_bytes {
+            return Err(WorkVcsError::IntegrityInvalid(format!(
+                "private file {} exceeds its byte bound",
+                path.display()
+            )));
+        }
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.read_to_end(&mut bytes)
+            .map_err(storage_error("read private file"))?;
+        Ok(bytes)
+    }
+}
+
+#[cfg(unix)]
+fn read_private_file_unix(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    validate_absolute_normal_path(path, "private file")?;
+    let parent = path.parent().ok_or_else(|| {
+        WorkVcsError::IntegrityInvalid(format!(
+            "private file {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    let name = path.file_name().ok_or_else(|| {
+        WorkVcsError::IntegrityInvalid(format!("private file {} has no name", path.display()))
+    })?;
+    let directory = open_private_directory_without_symlinks(parent)?;
+    let expected = fstatat_identity(directory.as_raw_fd(), name, path)?;
+    let name = CString::new(name.as_bytes()).map_err(|_| {
+        WorkVcsError::IntegrityInvalid(format!(
+            "private file {} contains a NUL byte",
+            path.display()
+        ))
+    })?;
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        )
+    };
+    if descriptor < 0 {
+        return Err(storage_error("open private file")(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    let mut file = unsafe { File::from_raw_fd(descriptor) };
     let metadata = file
         .metadata()
         .map_err(storage_error("inspect private file"))?;
     validate_private_metadata(&metadata, false, "private file")?;
-    if metadata.len() > max_bytes {
+    let opened = file_identity(&metadata);
+    if opened != expected || metadata.len() > max_bytes {
         return Err(WorkVcsError::IntegrityInvalid(format!(
-            "private file {} exceeds its byte bound",
+            "private file {} has an unsafe identity or exceeds its byte bound",
             path.display()
         )));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.read_to_end(&mut bytes)
         .map_err(storage_error("read private file"))?;
+    let after = file
+        .metadata()
+        .map_err(storage_error("reinspect private file"))?;
+    if file_identity(&after) != opened || bytes.len() as u64 != metadata.len() {
+        return Err(WorkVcsError::IntegrityInvalid(format!(
+            "private file {} changed while it was read",
+            path.display()
+        )));
+    }
     Ok(bytes)
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PrivateFileIdentity {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    uid: u32,
+    length: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+#[cfg(unix)]
+fn file_identity(metadata: &fs::Metadata) -> PrivateFileIdentity {
+    PrivateFileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        uid: metadata.uid(),
+        length: metadata.len(),
+        modified_seconds: metadata.mtime(),
+        modified_nanoseconds: metadata.mtime_nsec(),
+        changed_seconds: metadata.ctime(),
+        changed_nanoseconds: metadata.ctime_nsec(),
+    }
+}
+
+#[cfg(unix)]
+fn fstatat_identity(directory: i32, name: &OsStr, path: &Path) -> Result<PrivateFileIdentity> {
+    let name = CString::new(name.as_bytes()).map_err(|_| {
+        WorkVcsError::IntegrityInvalid(format!(
+            "private file {} contains a NUL byte",
+            path.display()
+        ))
+    })?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let result = unsafe {
+        libc::fstatat(
+            directory,
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        return Err(storage_error("inspect private file")(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    let stat = unsafe { stat.assume_init() };
+    Ok(PrivateFileIdentity {
+        device: stat.st_dev as u64,
+        inode: stat.st_ino,
+        mode: stat.st_mode as u32,
+        uid: stat.st_uid,
+        length: stat.st_size as u64,
+        modified_seconds: stat_modified_seconds(&stat),
+        modified_nanoseconds: stat_modified_nanoseconds(&stat),
+        changed_seconds: stat_changed_seconds(&stat),
+        changed_nanoseconds: stat_changed_nanoseconds(&stat),
+    })
+}
+
+#[cfg(unix)]
+fn stat_modified_seconds(stat: &libc::stat) -> i64 {
+    stat.st_mtime
+}
+
+#[cfg(unix)]
+fn stat_modified_nanoseconds(stat: &libc::stat) -> i64 {
+    stat.st_mtime_nsec
+}
+
+#[cfg(unix)]
+fn stat_changed_seconds(stat: &libc::stat) -> i64 {
+    stat.st_ctime
+}
+
+#[cfg(unix)]
+fn stat_changed_nanoseconds(stat: &libc::stat) -> i64 {
+    stat.st_ctime_nsec
+}
+
+#[cfg(unix)]
+fn open_private_directory_without_symlinks(path: &Path) -> Result<File> {
+    validate_absolute_normal_path(path, "private directory")?;
+    let root = CString::new("/").expect("root path contains no NUL");
+    let mut descriptor = unsafe {
+        libc::open(
+            root.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        return Err(storage_error("open filesystem root")(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            continue;
+        };
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            WorkVcsError::IntegrityInvalid(format!(
+                "private directory {} contains a NUL byte",
+                path.display()
+            ))
+        })?;
+        let next = unsafe {
+            libc::openat(
+                descriptor,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            )
+        };
+        if next < 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe { libc::close(descriptor) };
+            return Err(storage_error("open private directory component")(error));
+        }
+        unsafe { libc::close(descriptor) };
+        descriptor = next;
+    }
+    let directory = unsafe { File::from_raw_fd(descriptor) };
+    validate_private_metadata(
+        &directory
+            .metadata()
+            .map_err(storage_error("inspect private directory"))?,
+        true,
+        "private directory",
+    )?;
+    Ok(directory)
 }
 
 fn read_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
@@ -1458,12 +1669,13 @@ mod tests {
 
     fn fixture() -> (TempDir, PathBuf, AutomationRegistrationProposal) {
         let temporary = TempDir::new().unwrap();
-        let root = temporary.path().join("automation");
-        let project = temporary.path().join("project");
-        let rollout = temporary.path().join("rollouts");
+        let temporary_root = temporary.path().canonicalize().unwrap();
+        let root = temporary_root.join("automation");
+        let project = temporary_root.join("project");
+        let rollout = temporary_root.join("rollouts");
         fs::create_dir(&project).unwrap();
         fs::create_dir(&rollout).unwrap();
-        let store = temporary.path().join("store.sqlite");
+        let store = temporary_root.join("store.sqlite");
         fs::write(&store, b"store").unwrap();
         let proposal = AutomationRegistrationProposal {
             registration_id: "registration-1".to_owned(),
@@ -1647,6 +1859,60 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, WorkVcsError::QueryInvalid(_)));
         assert!(error.to_string().contains("overlaps"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_policy_reader_rejects_fifo_leaf_and_intermediate_symlinks() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temporary = TempDir::new().unwrap();
+        let temporary_root = temporary.path().canonicalize().unwrap();
+        let root = temporary_root.join("automation");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let policy = automation_source_policy_path(&root);
+        let fifo = CString::new(policy.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+        let error = read_automation_source_policy(&root).unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(
+            matches!(error, WorkVcsError::IntegrityInvalid(_)),
+            "{error:?}"
+        );
+
+        fs::remove_file(&policy).unwrap();
+        let outside = temporary_root.join("outside-policy.json");
+        fs::write(
+            &outside,
+            br#"{"format_version":1,"revision":0,"sources":[]}"#,
+        )
+        .unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&outside, &policy).unwrap();
+        assert!(read_automation_source_policy(&root).is_err());
+
+        fs::remove_file(&policy).unwrap();
+        let real_parent = temporary_root.join("real-parent");
+        let real_root = real_parent.join("automation");
+        fs::create_dir_all(&real_root).unwrap();
+        fs::set_permissions(&real_parent, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&real_root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(
+            automation_source_policy_path(&real_root),
+            fs::read(&outside).unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(
+            automation_source_policy_path(&real_root),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let alias_parent = temporary_root.join("alias-parent");
+        symlink(&real_parent, &alias_parent).unwrap();
+        assert!(read_automation_source_policy(&alias_parent.join("automation")).is_err());
     }
 
     #[test]

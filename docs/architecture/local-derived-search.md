@@ -16,6 +16,10 @@ runtime whose watcher only marks sources dirty. ADR-0530 adds explicitly
 registered automatic history import and immutable, lane-separated global
 derived catalog rounds. Neither decision creates a global canonical
 KnowledgeSpace or an automatic semantic write path.
+ADR-0533 binds automatic ownership and text extraction to one immutable source
+snapshot and versions historical occurrence/lineage provenance for the
+explicitly confirmed first recovery batch. It does not add historical-owner
+fallback, semantic-project mirror routing, or new project adoption.
 
 ## Authority and Data Flow
 
@@ -161,7 +165,11 @@ same full reconciliation rather than suppressing the coordinator. Thus
 delete, rename, replacement, permission change, overflow and lost-event
 conditions all converge through a complete registered-root scan. A worker
 re-resolves and checks ProjectRef, Store, Workspace, Branch and registry basis
-before each round. A canonical routing or Store failure does not skip the
+before each round. A failed membership discovery records the failure while
+retaining the last valid watcher targets and filter. A later valid discovery
+replaces them with the new membership; retaining watches never bypasses a
+worker's registry/activation gate. A canonical routing or Store failure does
+not skip the
 independent historical lane. Each successfully scanned rollout root owns its
 own deletion decision; a failed root or file observation retains and
 revalidates its prior immutable archive while recording a separate failure.
@@ -181,8 +189,17 @@ remains failed.
 
 A source archive is a separate private derived directory created only from
 caller-selected local Codex rollout files. It contains extracted user and
-optionally assistant message text plus exact thread, message, role, line, path
-and byte-digest provenance. Developer, system, tool and non-text content is
+optionally assistant message text plus exact container, observed metadata,
+message occurrence, role, line, path and byte-digest provenance. A native
+message ID is retained when present. Registry-verified automatic imports use
+the new versioned format: a missing ID is represented as an explicit derived
+occurrence bound to the exact snapshot, source container, physical line, role
+and text digest, never as a guessed native ID or a unique turn ID. Legacy
+explicit caller-mapped imports retain the v1/native-ID contract.
+Copied fork headers do not prove a message's original thread: unknown origin
+remains unknown while all observed headers remain inspectable. Supported v1
+archives stay byte-identical and readable without migration. Unknown versions
+or contradictory provenance are rejected. Developer, system, tool and non-text content is
 excluded and counted.
 
 Every archive result is fixed as historical reference with unknown currentness
@@ -251,8 +268,37 @@ rollout provenance and fixed non-authoritative labels; they are never presented
 as native canonical readback.
 
 Automatic reconciliation scans each policy-approved shared rollout root once,
-verifies session metadata against the selected registry member snapshot before
-importing a body, and remembers the last successful archive reference per
+captures one immutable byte snapshot and verifies all of its session metadata
+against the selected registry member snapshot before importing that same
+snapshot's body. Raw CWD aliases are accepted only when every context passes
+the existing safe identity proof and resolves to the same complete member
+tuple. Digest-bound attribution evidence retains the metadata, native/alias
+observations, registry and source-policy bases and resolution scope without
+becoming a registry locator or canonical ownership claim. Explicit manual
+source selection remains distinct from verified automatic attribution.
+Verified automatic attribution is privately issued by core after resolving all
+snapshot metadata. The public request expresses the existing configuration
+route and source selection, not an activation path or owner receipt. Core
+derives the selected route's exact activation marker and verifies live
+registry/policy state and native owner observations before issuance. Explicit
+registries and independently selected control planes remain supported; an
+offline bundle alone is not a verified token. Source paths must be normal
+component descendants of the exact selected policy root.
+Readback validates all internally provable identity,
+alias/hash, Git marker/common-directory/admin/backlink and snapshot relationships
+under the private local-publisher trust
+boundary; it does not claim cryptographic authenticity against an owner who
+can rewrite the entire archive and its hashes. Source capture uses a contained
+no-follow directory/file-descriptor path, and all live sources are fenced again
+before a round's inventory/catalog publication. A late source change is local
+failure even if its earlier import or reuse check passed.
+Immediate and final live checks use the same no-follow, nonblocking descriptor
+path. All-source fences retain only digest/object metadata, not source bodies
+or parsed trees; revalidation streams bytes without reparsing JSON.
+Policy and archive-member observations also use bounded, no-follow,
+nonblocking descriptor reads so a path check cannot be separated from the
+object subsequently read.
+Reconciliation remembers the last successful archive reference per
 attributed source. It revalidates that immutable artifact for unchanged input
 and keeps it in the historical-reference lane after source deletion or a failed
 replacement import. Conflicting, unbound, excluded or drifted attribution is a

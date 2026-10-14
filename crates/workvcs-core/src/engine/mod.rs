@@ -120,6 +120,9 @@ use crate::search::semantic::{
 use crate::search::source_archive::{
     SourceArchiveImportOptions, SourceArchiveImportResult, SourceArchiveInspectOptions,
     SourceArchiveInspectResult, SourceArchiveQueryOptions, SourceArchiveQueryResult,
+    SourceArchiveRegistryRoute, SourceArchiveRegistryVerifiedImportRequest,
+    SourceArchiveRegistryVerifiedImportResult, SourceArchiveRegistryVerifiedOwnerResolution,
+    SourceArchiveSnapshot,
 };
 use crate::search::{
     SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
@@ -1275,6 +1278,19 @@ impl Engine {
         options: SourceArchiveImportOptions,
     ) -> Result<SourceArchiveImportResult> {
         crate::search::source_archive::import_source_archive(&options)
+    }
+
+    pub fn import_registry_verified_source_archive(
+        request: SourceArchiveRegistryVerifiedImportRequest,
+    ) -> Result<SourceArchiveRegistryVerifiedImportResult> {
+        crate::search::source_archive::import_registry_verified_source_archive(request)
+    }
+
+    pub fn resolve_registry_verified_source_owner(
+        route: SourceArchiveRegistryRoute,
+        snapshot: &SourceArchiveSnapshot,
+    ) -> Result<SourceArchiveRegistryVerifiedOwnerResolution> {
+        crate::search::source_archive::resolve_registry_verified_source_owner(route, snapshot)
     }
 
     pub fn inspect_source_archive(

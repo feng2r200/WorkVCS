@@ -498,11 +498,22 @@ fn opened_identity_from_metadata(metadata: &fs::Metadata) -> SourceArchiveOpened
 }
 
 #[cfg(unix)]
+fn portable_unix_mode(mode: libc::mode_t) -> u32 {
+    // Darwin mode_t is u16, while Linux mode_t is already u32.
+    #[allow(clippy::useless_conversion)]
+    let mode = u32::from(mode);
+    mode
+}
+
+#[cfg(unix)]
 fn opened_identity_from_stat(metadata: &libc::stat) -> SourceArchiveOpenedIdentity {
+    // Darwin dev_t is narrower than the device identity returned by MetadataExt.
+    #[allow(clippy::unnecessary_cast)]
+    let device = metadata.st_dev as u64;
     SourceArchiveOpenedIdentity {
-        device: metadata.st_dev as u64,
+        device,
         inode: metadata.st_ino,
-        mode: metadata.st_mode as u32,
+        mode: portable_unix_mode(metadata.st_mode),
         uid: metadata.st_uid,
         gid: metadata.st_gid,
         length: metadata.st_size as u64,
@@ -3750,6 +3761,11 @@ fn validate_owner_resolution_evidence(
                     )
                 })?;
             let expanded = normalize_absolute_path_without_io(&alias.link_target.join(suffix))?;
+            // Keep readback portable without depending on the Unix-only stat helper.
+            #[allow(clippy::useless_conversion)]
+            let file_type_mask = u32::from(libc::S_IFMT);
+            #[allow(clippy::useless_conversion)]
+            let symlink_file_type = u32::from(libc::S_IFLNK);
             if normal_component_count(&expected_anchor) < 2
                 || alias.anchor != expected_anchor
                 || alias.link_path != expected_link_path
@@ -3757,7 +3773,7 @@ fn validate_owner_resolution_evidence(
                 || alias.link_target_sha256 != sha256_bytes(&target_bytes)
                 || alias.length != target_bytes.len() as u64
                 || expanded != evidence.probe_cwd
-                || alias.mode & u32::from(libc::S_IFMT) != u32::from(libc::S_IFLNK)
+                || alias.mode & file_type_mask != symlink_file_type
             {
                 return Err(WorkVcsError::StorageFailure(
                     "automatic source archive alias fingerprint or expansion is contradictory"
@@ -5736,7 +5752,7 @@ mod tests {
             link_target_sha256: "0".repeat(64),
             device: 1,
             inode: 2,
-            mode: u32::from(libc::S_IFLNK) | 0o777,
+            mode: portable_unix_mode(libc::S_IFLNK) | 0o777,
             uid: 1,
             gid: 1,
             length: path_raw_bytes(&target).len() as u64,
@@ -5772,7 +5788,7 @@ mod tests {
             link_target_sha256: sha256_bytes(&path_raw_bytes(&target)),
             device: 1,
             inode: 2,
-            mode: u32::from(libc::S_IFLNK) | 0o777,
+            mode: portable_unix_mode(libc::S_IFLNK) | 0o777,
             uid: 1,
             gid: 1,
             length: path_raw_bytes(&target).len() as u64,
@@ -5807,7 +5823,7 @@ mod tests {
             link_target_sha256: sha256_bytes(&path_raw_bytes(&target)),
             device: 1,
             inode: 2,
-            mode: u32::from(libc::S_IFLNK) | 0o777,
+            mode: portable_unix_mode(libc::S_IFLNK) | 0o777,
             uid: 1,
             gid: 1,
             length: path_raw_bytes(&target).len() as u64,

@@ -1500,10 +1500,15 @@ fn fstatat_identity(directory: i32, name: &OsStr, path: &Path) -> Result<Private
         ));
     }
     let stat = unsafe { stat.assume_init() };
+    // Darwin dev_t/mode_t and Linux dev_t/mode_t have different integer widths.
+    #[allow(clippy::unnecessary_cast)]
+    let device = stat.st_dev as u64;
+    #[allow(clippy::useless_conversion)]
+    let mode = u32::from(stat.st_mode);
     Ok(PrivateFileIdentity {
-        device: stat.st_dev as u64,
+        device,
         inode: stat.st_ino,
-        mode: stat.st_mode as u32,
+        mode,
         uid: stat.st_uid,
         length: stat.st_size as u64,
         modified_seconds: stat_modified_seconds(&stat),

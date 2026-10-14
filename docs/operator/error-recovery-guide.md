@@ -69,6 +69,13 @@ installed revision and activation markers are verified. It reports routing
 state in successful output rather than `registry_migration_required` error
 codes.
 
+Observation-only `project discover` treats a clean missing owner or binding
+as a successful not-found report: exit status 0, `discovery_status=not_found`,
+`binding_verified=false`, and a readable stdout message. Do not retry or
+look up help for this state. A successful observation grants no Store access
+or permission to fall back, ensure, or bootstrap. All other failures,
+including malformed, stale, ambiguous, or damaged authority, remain errors.
+
 Under registry v2, a valid resolver result whose winning owner has no binding
 is `project_owner_unbound` on reads that require a Store. It adds:
 

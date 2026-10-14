@@ -8093,8 +8093,8 @@ fn run(cli: Cli) -> Result<String> {
                     locator.project_ref,
                     locator.locator_context,
                     locator.locator_adapter_context,
-                )?;
-                Ok(render_project_discovery(&discovery))
+                );
+                render_project_discover_result(discovery)
             }
             ProjectCommand::Health {
                 cwd,
@@ -18443,6 +18443,45 @@ fn verify_project_binding_readonly(
         )));
     }
     Ok(())
+}
+
+fn render_project_discover_result(result: Result<ProjectDiscovery>) -> Result<String> {
+    match result {
+        Ok(discovery) => Ok(format!(
+            "discovery_status=found\n{}",
+            render_project_discovery(&discovery)
+        )),
+        Err(WorkVcsError::ProjectOwnerUnbound {
+            registry_path,
+            resolution_rank,
+            unmapped_locators,
+            resolution_diagnostics,
+        }) => Ok(format!(
+            "discovery_status=not_found\nabsence_reason=owner_unbound\nmessage=No verified WorkVCS project binding was found.\nregistry_path={}\nresolution_status=unbound\nresolution_rank={}\nproject_ref_id=none\nunmapped_locators={}\nresolution_diagnostics={}\nbinding_verified=false\nread_only=true\n",
+            escape_key_value(&registry_path),
+            escape_key_value(&resolution_rank),
+            unmapped_locators,
+            resolution_diagnostics,
+        )),
+        Err(WorkVcsError::ProjectBindingNotFound {
+            identity_kind,
+            identity,
+            project_root,
+            registry_path,
+        }) => Ok(format!(
+            "discovery_status=not_found\nabsence_reason=binding_missing\nmessage=No verified WorkVCS project binding was found.\nregistry_path={}\nproject_ref_id={}\nidentity_kind={}\nproject_identity={}\ncurrent_project_root={}\nbinding_verified=false\nread_only=true\n",
+            escape_key_value(&registry_path),
+            if identity_kind == "project-ref" {
+                escape_key_value(&identity)
+            } else {
+                "none".to_owned()
+            },
+            escape_key_value(&identity_kind),
+            escape_key_value(&identity),
+            escape_key_value(&project_root),
+        )),
+        Err(error) => Err(error),
+    }
 }
 
 fn render_project_discovery(discovery: &ProjectDiscovery) -> String {
@@ -77426,7 +77465,9 @@ mod tests {
         )
         .expect("write generic locator context");
 
-        let unbound = run(Cli::try_parse_from([
+        let registry_before = fs::read(&fixture.registry_path).unwrap();
+        let store_before = cli_sqlite_file_snapshots(&fixture.store_path);
+        let missing = run(Cli::try_parse_from([
             "workvcs",
             "project",
             "discover",
@@ -77438,7 +77479,27 @@ mod tests {
             &path_text(&context_path),
         ])
         .expect("parse semantic discover"))
-        .expect_err("unbound semantic owner must block CWD fallback");
+        .expect("unbound semantic discovery is a read-only not-found result");
+        assert_eq!(value(&missing, "discovery_status"), "not_found");
+        assert_eq!(value(&missing, "absence_reason"), "owner_unbound");
+        assert_eq!(value(&missing, "resolution_rank"), "semantic_project");
+        assert_eq!(value(&missing, "project_ref_id"), "none");
+        assert_eq!(value(&missing, "binding_verified"), "false");
+        assert_eq!(value(&missing, "read_only"), "true");
+        assert!(!missing.contains("store_path="));
+        assert!(!missing.contains("error_code="));
+        assert!(!missing.contains("recovery_action="));
+        assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
+        assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);
+
+        let unbound = discover_project_readonly_with_locator(
+            PathBuf::from(&fixture.project_text),
+            Some(fixture.registry_path.clone()),
+            None,
+            Some(context_path.clone()),
+            None,
+        )
+        .expect_err("Store-required discovery must still block CWD fallback");
         assert_eq!(unbound.code(), ErrorCode::ProjectOwnerUnbound);
         let rendered = render_workvcs_error(&unbound, ErrorOutputFormat::KeyValue);
         assert_eq!(value(&rendered, "error_code"), "project_owner_unbound");
@@ -77490,6 +77551,8 @@ mod tests {
         ])
         .expect("parse explicit ProjectRef discover"))
         .expect("explicit ProjectRef wins");
+        assert_eq!(value(&explicit, "discovery_status"), "found");
+        assert_eq!(value(&explicit, "binding_verified"), "true");
         assert_eq!(value(&explicit, "project_ref_id"), project_ref);
         assert_eq!(value(&explicit, "resolution_rank"), "explicit_project_ref");
         assert_eq!(value(&explicit, "locator_providers"), "1");
@@ -78791,16 +78854,20 @@ mod tests {
             "--registry",
             &path_text(&registry),
         ])
-        .expect("parse missing project discover"));
-        assert!(matches!(
-            missing,
-            Err(WorkVcsError::ProjectBindingNotFound {
-                identity_kind,
-                project_root,
-                ..
-            }) if identity_kind == "cwd"
-                && project_root == path_text(&fs::canonicalize(&project).expect("canonical project"))
-        ));
+        .expect("parse missing project discover"))
+        .expect("missing binding is a read-only discovery result");
+        assert_eq!(value(&missing, "discovery_status"), "not_found");
+        assert_eq!(value(&missing, "absence_reason"), "binding_missing");
+        assert_eq!(value(&missing, "identity_kind"), "cwd");
+        assert_eq!(value(&missing, "project_ref_id"), "none");
+        assert_eq!(value(&missing, "binding_verified"), "false");
+        assert_eq!(value(&missing, "read_only"), "true");
+        assert_eq!(
+            value(&missing, "current_project_root"),
+            path_text(&fs::canonicalize(&project).expect("canonical project"))
+        );
+        assert!(!missing.contains("error_code="));
+        assert!(!missing.contains("recovery_action="));
         assert!(!registry.exists());
         assert!(!registry_dir.exists());
         assert!(!store_root.exists());
@@ -78839,6 +78906,7 @@ mod tests {
         ])
         .expect("parse ensured project discover"))
         .expect("discover ensured project");
+        assert_eq!(value(&discovered, "discovery_status"), "found");
         assert_eq!(value(&discovered, "binding_verified"), "true");
         assert_eq!(
             value(&discovered, "workspace_id"),
@@ -79173,13 +79241,29 @@ mod tests {
             "--registry",
             &fixture.registry,
         ])
-        .expect("parse repo b discover"));
+        .expect("parse repo b discover"))
+        .expect("distinct repository has no verified binding");
 
-        assert!(matches!(
-            missing,
-            Err(WorkVcsError::ProjectBindingNotFound { identity_kind, .. })
-                if identity_kind == "git-common-dir"
-        ));
+        assert_eq!(value(&missing, "discovery_status"), "not_found");
+        assert_eq!(value(&missing, "identity_kind"), "git-common-dir");
+        assert_eq!(value(&missing, "binding_verified"), "false");
+    }
+
+    #[test]
+    fn cli_project_discover_not_found_escapes_untrusted_identity_fields() {
+        let output = render_project_discover_result(Err(WorkVcsError::ProjectBindingNotFound {
+            identity_kind: "cwd".to_owned(),
+            identity: "/project\nbinding_verified=true".to_owned(),
+            project_root: "/root\nstore_path=/unexpected".to_owned(),
+            registry_path: "/registry\nerror_code=injected".to_owned(),
+        }))
+        .expect("not-found observation");
+        assert_eq!(value(&output, "discovery_status"), "not_found");
+        assert_eq!(value(&output, "binding_verified"), "false");
+        assert_eq!(value(&output, "project_ref_id"), "none");
+        assert!(!output.lines().any(|line| line == "binding_verified=true"));
+        assert!(!output.lines().any(|line| line.starts_with("store_path=")));
+        assert!(!output.lines().any(|line| line.starts_with("error_code=")));
     }
 
     #[test]

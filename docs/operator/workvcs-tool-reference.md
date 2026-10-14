@@ -258,7 +258,14 @@ marker implicitly runs recovery. The recovery route and its fault boundaries are
 fixture-tested; current installed revision, registry identity, marker digests,
 and operation authority must be verified before use on a configured registry.
 
-Registry-v1 lookup still uses `project_binding_not_found`. Under an activated
+Observation-only `project discover` returns exit status 0 and
+`discovery_status=not_found`/`binding_verified=false` for a clean missing
+owner or binding, with a readable message on stdout. It returns
+`discovery_status=found` only after binding verification. A not-found result
+does not authorize Store reads, fallback, ensure, or bootstrap and needs no
+help lookup or retry. All other errors remain failures.
+
+Store-required registry-v1 lookup still uses `project_binding_not_found`. Under an activated
 registry-v2 route, a valid resolver result whose winning owner is cleanly
 unbound uses `project_owner_unbound` for read commands that require a Store;
 this is recoverable but non-retryable and never permits fallback or implicit

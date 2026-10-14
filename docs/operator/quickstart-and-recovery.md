@@ -432,9 +432,16 @@ display name. Provider absence can legitimately fall back to Git/CWD, while
 an explicitly supplied malformed or mismatched context must remain visible and
 fail closed where no authoritative winner exists.
 
-For registry v1, `error_code=project_binding_not_found` and
-`recovery_action=project_ensure` retain the existing owner-selection workflow.
-For an activated registry-v2 read, a clean winning owner without a binding is
+`project discover` reports ordinary absence with exit status 0,
+`discovery_status=not_found`, `binding_verified=false`, and a readable message
+on stdout. A verified binding reports `discovery_status=found`. Absence does
+not require a help lookup or retry, create a binding, or permit owner fallback.
+Malformed, stale, ambiguous, or damaged authority still returns an error.
+
+For Store-required registry-v1 reads, `error_code=project_binding_not_found`
+and `recovery_action=project_ensure` retain the existing owner-selection
+workflow. For an activated registry-v2 Store-required read, a clean winning
+owner without a binding is
 `project_owner_unbound`: it is recoverable but non-retryable, and does not
 authorize fallback or ensure. `project health --cwd` reports that state as
 degraded; strict health returns the same top-level code. Default capture and

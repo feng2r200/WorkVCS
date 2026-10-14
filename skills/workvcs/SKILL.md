@@ -72,8 +72,14 @@ semantic Project, verified Git common directory, canonical CWD, then pending
 resolution. A repository, mirror, temporary directory, coordination checkout,
 or display name is context, not an override of a known higher-ranked owner.
 
-Start with `workvcs project discover --cwd <path>`. When existing state can
-change the work, use exactly one bounded path:
+Start with `workvcs project discover --cwd <path>`. A successful
+`discovery_status=not_found` with `binding_verified=false` means no verified
+binding was found; it is an expected observation, not a reason to retry or
+inspect help. Preserve a valuable pending semantic packet, do not fall back
+from a known higher-ranked owner or auto-ensure, and obtain separate bootstrap
+authority before creating a binding. Malformed, stale, conflicting, or unsafe
+authority still fails closed. When existing state can change the work, use
+exactly one bounded path:
 
 - `recall --profile brief` for current project context;
 - `recall --profile handoff` for continuation or delegation;

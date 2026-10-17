@@ -281,6 +281,67 @@ For each Workspace, Branch, and Task, the active Claim set is exactly one of:
 empty, one exclusive Claim, or one-or-more shared Claims. The exact index,
 transaction, or lock mechanism enforcing that invariant remains Open.
 
+### ContinuationProjectPolicy, ContinuationScope, and ContinuationRotation
+
+ContinuationProjectPolicy is exact-Project runtime-control authority. It stores
+enabled state, monotonic revision, actor Session, canonical trusted
+product-control-plane authority envelope, receipt digest, and update time. The
+envelope binds separate user-authorization and Project-membership receipts.
+Admission binds the current enabled row and dispatch rereads it so revocation
+fences the product-effect boundary. It grants no Project-wide writing or
+ownership authority.
+
+ContinuationScopeRuntime is a current coordination projection keyed by exact
+Workspace, Branch, and Task. It references one listener Session, one carrier
+Session, one active exclusive Claim, and scope-local monotonically increasing
+listener revision and owner epoch. It is neither ObjectIdentity-backed Work
+State nor a global Project/Branch owner.
+
+ContinuationRotation is a stable runtime-provenance occurrence that binds the
+scope, initial listener/revision, source carrier, source Claim/epoch,
+idempotency key, creation operation/request digest, Handoff digest, typed
+currentness basis, current durable Project-policy reference, bounded
+continuation-packet contract, initial-message digest, embedded deterministic
+evaluator receipt and evidence references, and creation time. A
+separate runtime row stores the current listener/revision,
+decision-currentness digest, non-terminal state, durable dispatch, immutable
+initial-unknown receipt, creation-success receipt, optional candidate binding,
+current target-authored acceptance, and prior-acceptance history; a separate
+terminal result preserves those fields plus commit or abort outcome. Abort-only
+recovery adds an irreversible mode, recovery revision, observed currentness,
+and canonical recovery provenance while leaving the occurrence's original
+decision/currentness immutable. Complete recovery receipts are append-only
+Events linked by previous/current history-chain digests. Runtime and terminal
+readback carry only the latest recovery, count, and chain head; this preserves
+audit completeness without unbounded snapshot growth. A unique active-scope key
+enforces at most one in-flight rotation, while a unique source-Claim/
+idempotency key makes exact admission replay deterministic.
+
+Candidate-binding JSON is validation evidence, not the conversation itself:
+it must identify a non-forking, operation-correlated `create_thread` result,
+product receipt, resolved normal Work thread, and exact Project-binding
+provenance and affirm user visibility, auditability, and interactivity. Pending
+client IDs, forks, and hidden/internal execution identities are rejected. The
+target thread is reserved on the first success receipt and cannot later enter
+as a listener or ordinary Work carrier/source. Only the exact committed
+candidate Session with its exact resulting Claim and scope provenance may
+source later work. A target must accept
+the exact packet/Handoff before commit; listener replacement after acceptance
+archives that acceptance and requires a new one at the new revision.
+
+Normal listener replacement requires unchanged non-listener currentness.
+Abort-only replacement requires an inactive old listener and allows only
+reconciliation of the original immutable creation operation plus
+state-specific abort. It cannot dispatch, attach, accept, or commit; later
+listener recovery remains abort-only. Its read-only preview tolerates
+semantically replaced Handoff or missing dependency observations only to bind
+drift evidence; the apply step re-observes that evidence transactionally.
+
+Commit removes the source ClaimRuntime, creates a replacement Claim occurrence
+and ClaimRuntime for the candidate, advances ContinuationScopeRuntime, records
+the terminal rotation result, and removes ContinuationRotationRuntime in one
+transaction. This does not move a Branch head or create Work State.
+
 ### Merge
 
 Each MergeAttempt is a stable ObjectIdentity-backed occurrence with immutable

@@ -272,7 +272,10 @@ pub(crate) use knowledge_exposure::{
 };
 pub(crate) use knowledge_space::{create_knowledge_space, knowledge_space, knowledge_spaces};
 pub(crate) use lineage::{record_store_lineage, store_lineage, store_lineages};
-pub(crate) use migration::{record_store_migration, store_migration, store_migrations};
+pub(crate) use migration::{
+    record_store_migration, record_store_migration_in_transaction, store_migration,
+    store_migrations,
+};
 pub(crate) use plan::{create_plan, plan_at, plans_at, plans_at_with_cache, transition_plan};
 pub(crate) use projection::{
     branch_projection, mark_branch_projection_not_materialized, refresh_branch_projection,

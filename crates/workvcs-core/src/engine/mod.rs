@@ -128,7 +128,8 @@ use crate::search::{
     SearchQueryOptions, SearchQueryResult, SearchRefreshOptions, SearchRefreshResult,
 };
 use crate::store::{
-    ContextPacketSnapshotSchemaMigrationResult, Store, StoreInfo, StoreInitOptions,
+    ContextPacketSnapshotSchemaMigrationResult, ContinuationRotationSchemaMigrationResult, Store,
+    StoreInfo, StoreInitOptions,
 };
 use crate::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardOptions, ClaimGuardResult,
@@ -136,15 +137,24 @@ use crate::{
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
     ClaimTransferResult, ContextOverview, ContextOverviewOptions, ContextPacket, ContextPacketId,
     ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
-    ContextPacketSaveResult, ContextPacketSnapshot, MergeAbortOptions, MergeAbortResult,
-    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
-    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
-    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
-    RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
-    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions,
-    SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
-    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
-    VerifyOptions, VerifyResult,
+    ContextPacketSaveResult, ContextPacketSnapshot, ContinuationAbortOnlyRecoveryOptions,
+    ContinuationAbortOnlyRecoveryPreview, ContinuationAbortOnlyRecoveryPreviewOptions,
+    ContinuationCandidateAcceptOptions, ContinuationCandidateAttachOptions,
+    ContinuationCreationDispatchOptions, ContinuationCreationResultOptions,
+    ContinuationListenerReplaceOptions, ContinuationProjectPolicySetOptions,
+    ContinuationProjectPolicySnapshot, ContinuationRotationAbortOptions,
+    ContinuationRotationBeginOptions, ContinuationRotationCommitOptions,
+    ContinuationRotationCommitResult, ContinuationRotationId, ContinuationRotationSnapshot,
+    ContinuationScopeBindOptions, ContinuationScopeCurrentnessOptions,
+    ContinuationScopeCurrentnessSnapshot, ContinuationScopeSnapshot, MergeAbortOptions,
+    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
+    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeListOptions, MergeListResult,
+    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
+    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot,
+    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
+    SessionListOptions, SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult,
+    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
+    SessionSwitchResult, VerifyOptions, VerifyResult,
 };
 use std::path::Path;
 
@@ -175,6 +185,12 @@ impl Engine {
         path: impl AsRef<Path>,
     ) -> Result<ContextPacketSnapshotSchemaMigrationResult> {
         Store::migrate_context_packet_snapshot_schema(path.as_ref())
+    }
+
+    pub fn migrate_continuation_rotation_schema(
+        path: impl AsRef<Path>,
+    ) -> Result<ContinuationRotationSchemaMigrationResult> {
+        Store::migrate_continuation_rotation_schema(path.as_ref())
     }
 
     pub fn store_info(&self) -> Result<StoreInfo> {
@@ -1174,6 +1190,122 @@ impl Engine {
 
     pub fn end_session(&mut self, options: SessionEndOptions) -> Result<SessionEndResult> {
         self.store.end_session(&options)
+    }
+
+    pub fn set_continuation_project_policy(
+        &mut self,
+        options: ContinuationProjectPolicySetOptions,
+    ) -> Result<ContinuationProjectPolicySnapshot> {
+        self.store.set_continuation_project_policy(&options)
+    }
+
+    pub fn continuation_project_policy(
+        &self,
+        project_id: &str,
+    ) -> Result<ContinuationProjectPolicySnapshot> {
+        self.store.continuation_project_policy(project_id)
+    }
+
+    pub fn bind_continuation_scope(
+        &mut self,
+        options: ContinuationScopeBindOptions,
+    ) -> Result<ContinuationScopeSnapshot> {
+        self.store.bind_continuation_scope(&options)
+    }
+
+    pub fn preview_continuation_scope_currentness(
+        &mut self,
+        options: ContinuationScopeCurrentnessOptions,
+    ) -> Result<ContinuationScopeCurrentnessSnapshot> {
+        self.store.preview_continuation_scope_currentness(&options)
+    }
+
+    pub fn replace_continuation_listener(
+        &mut self,
+        options: ContinuationListenerReplaceOptions,
+    ) -> Result<ContinuationScopeSnapshot> {
+        self.store.replace_continuation_listener(&options)
+    }
+
+    pub fn recover_continuation_listener_abort_only(
+        &mut self,
+        options: ContinuationAbortOnlyRecoveryOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store
+            .recover_continuation_listener_abort_only(&options)
+    }
+
+    pub fn preview_abort_only_recovery(
+        &mut self,
+        options: ContinuationAbortOnlyRecoveryPreviewOptions,
+    ) -> Result<ContinuationAbortOnlyRecoveryPreview> {
+        self.store.preview_abort_only_recovery(&options)
+    }
+
+    pub fn begin_continuation_rotation(
+        &mut self,
+        options: ContinuationRotationBeginOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store.begin_continuation_rotation(&options)
+    }
+
+    pub fn dispatch_continuation_creation(
+        &mut self,
+        options: ContinuationCreationDispatchOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store.dispatch_continuation_creation(&options)
+    }
+
+    pub fn record_continuation_creation_result(
+        &mut self,
+        options: ContinuationCreationResultOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store.record_continuation_creation_result(&options)
+    }
+
+    pub fn attach_continuation_candidate(
+        &mut self,
+        options: ContinuationCandidateAttachOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store.attach_continuation_candidate(&options)
+    }
+
+    pub fn accept_continuation_candidate(
+        &mut self,
+        options: ContinuationCandidateAcceptOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store.accept_continuation_candidate(&options)
+    }
+
+    pub fn abort_continuation_rotation(
+        &mut self,
+        options: ContinuationRotationAbortOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store.abort_continuation_rotation(&options)
+    }
+
+    pub fn commit_continuation_rotation(
+        &mut self,
+        options: ContinuationRotationCommitOptions,
+    ) -> Result<ContinuationRotationCommitResult> {
+        self.store.commit_continuation_rotation(&options)
+    }
+
+    pub fn continuation_scope(
+        &self,
+        workspace_id: WorkspaceId,
+        branch_id: BranchId,
+        task_entity_id: EntityId,
+    ) -> Result<ContinuationScopeSnapshot> {
+        self.store
+            .continuation_scope(workspace_id, branch_id, task_entity_id)
+    }
+
+    pub fn continuation_rotation(
+        &self,
+        rotation_id: ContinuationRotationId,
+    ) -> Result<ContinuationRotationSnapshot> {
+        self.store.continuation_rotation(rotation_id)
     }
 
     pub fn start_merge(&mut self, options: MergeStartOptions) -> Result<MergeStartResult> {

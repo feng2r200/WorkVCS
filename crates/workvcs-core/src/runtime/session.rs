@@ -1,4 +1,4 @@
-use super::claim;
+use super::{claim, continuation};
 use crate::canonical::{CanonicalValue, WorkState, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history;
@@ -666,6 +666,15 @@ pub(crate) fn switch_session(
     let target_changed = current_runtime.active_workspace_id != options.active_workspace_id()
         || current_runtime.active_branch_id != options.active_branch_id();
     let released_claims = if target_changed {
+        continuation::prepare_session_departure(
+            &transaction,
+            options.session_id(),
+            Some((
+                current_runtime.active_workspace_id,
+                current_runtime.active_branch_id,
+            )),
+            now_us,
+        )?;
         claim::release_active_claims_for_session_branch(
             &transaction,
             options.session_id(),
@@ -873,6 +882,7 @@ pub(crate) fn end_session(
             ],
         )
         .map_err(storage_error)?;
+    continuation::prepare_session_departure(&transaction, options.session_id(), None, now_us)?;
     clear_focus_rows(&transaction, options.session_id())?;
     transaction
         .execute(
@@ -1113,6 +1123,7 @@ struct LiveSessionRuntimeProjection {
 pub(super) struct ActiveSessionProjection {
     pub(super) active_workspace_id: WorkspaceId,
     pub(super) active_branch_id: BranchId,
+    pub(super) last_activity_at_us: i64,
 }
 
 pub(super) fn active_session_projection(
@@ -1134,6 +1145,11 @@ pub(super) fn active_session_projection(
         active_branch_id: snapshot.active_branch_id.ok_or_else(|| {
             WorkVcsError::SessionInvalid(format!(
                 "active session {session_id} has no active branch"
+            ))
+        })?,
+        last_activity_at_us: snapshot.last_activity_at_us.ok_or_else(|| {
+            WorkVcsError::SessionInvalid(format!(
+                "active session {session_id} has no last activity timestamp"
             ))
         })?,
     })
@@ -1198,10 +1214,10 @@ fn load_active_branch(
 }
 
 pub(super) fn load_active_session_runtime_for_update(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     session_id: SessionId,
 ) -> Result<ActiveSessionProjection> {
-    let runtime = load_live_session_runtime_for_update(transaction, session_id)?;
+    let runtime = load_live_session_runtime_for_update(connection, session_id)?;
     if runtime.lifecycle_state != SessionLifecycleState::Active {
         return Err(WorkVcsError::SessionInvalid(format!(
             "session {session_id} is not active"
@@ -1211,7 +1227,15 @@ pub(super) fn load_active_session_runtime_for_update(
     Ok(ActiveSessionProjection {
         active_workspace_id: runtime.active_workspace_id,
         active_branch_id: runtime.active_branch_id,
+        last_activity_at_us: runtime.last_activity_at_us,
     })
+}
+
+pub(super) fn session_metadata_for_update(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<CanonicalValue> {
+    Ok(load_session(connection, session_id)?.metadata)
 }
 
 pub(super) fn session_lifecycle_state_for_connection(
@@ -1222,10 +1246,10 @@ pub(super) fn session_lifecycle_state_for_connection(
 }
 
 fn load_live_session_runtime_for_update(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     session_id: SessionId,
 ) -> Result<LiveSessionRuntimeProjection> {
-    let row = transaction
+    let row = connection
         .query_row(
             "SELECT active_workspace_id,
                     active_branch_id,
@@ -1248,7 +1272,7 @@ fn load_live_session_runtime_for_update(
 
     let Some((active_workspace_id, active_branch_id, last_activity_at_us, runtime_json)) = row
     else {
-        if session_exists(transaction, session_id)? {
+        if session_exists(connection, session_id)? {
             return Err(WorkVcsError::SessionInvalid(format!(
                 "session {session_id} is not active"
             )));
@@ -1281,8 +1305,8 @@ fn load_live_session_runtime_for_update(
     })
 }
 
-fn session_exists(transaction: &Transaction<'_>, session_id: SessionId) -> Result<bool> {
-    let count = transaction
+fn session_exists(connection: &Connection, session_id: SessionId) -> Result<bool> {
+    let count = connection
         .query_row(
             "SELECT count(*)
              FROM session

@@ -345,6 +345,224 @@ CREATE TABLE claim_runtime (
     last_activity_at_us INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE continuation_project_policy (
+    project_id TEXT NOT NULL PRIMARY KEY CHECK(length(project_id) BETWEEN 1 AND 2048),
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    actor_session_id BLOB NOT NULL CHECK(length(actor_session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    authority_json TEXT NOT NULL CHECK(json_valid(authority_json)),
+    receipt_digest BLOB NOT NULL CHECK(length(receipt_digest) = 32),
+    updated_at_us INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE continuation_scope_runtime (
+    scope_id BLOB NOT NULL UNIQUE CHECK(length(scope_id) = 16),
+    workspace_id BLOB NOT NULL CHECK(length(workspace_id) = 16)
+        REFERENCES workspace(workspace_id) ON DELETE RESTRICT,
+    branch_id BLOB NOT NULL CHECK(length(branch_id) = 16)
+        REFERENCES branch(branch_id) ON DELETE RESTRICT,
+    task_entity_id BLOB NOT NULL CHECK(length(task_entity_id) = 16)
+        REFERENCES entity(object_id) ON DELETE RESTRICT,
+    listener_session_id BLOB NOT NULL CHECK(length(listener_session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    listener_revision INTEGER NOT NULL CHECK(listener_revision >= 1),
+    carrier_session_id BLOB NOT NULL CHECK(length(carrier_session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    carrier_claim_id BLOB NOT NULL CHECK(length(carrier_claim_id) = 16)
+        REFERENCES claim(claim_id) ON DELETE RESTRICT,
+    owner_epoch INTEGER NOT NULL CHECK(owner_epoch >= 1),
+    updated_at_us INTEGER NOT NULL,
+    PRIMARY KEY(workspace_id, branch_id, task_entity_id),
+    CHECK(listener_session_id <> carrier_session_id)
+) STRICT;
+
+CREATE TABLE continuation_rotation (
+    rotation_id BLOB NOT NULL PRIMARY KEY CHECK(length(rotation_id) = 16),
+    scope_id BLOB NOT NULL CHECK(length(scope_id) = 16),
+    workspace_id BLOB NOT NULL CHECK(length(workspace_id) = 16)
+        REFERENCES workspace(workspace_id) ON DELETE RESTRICT,
+    branch_id BLOB NOT NULL CHECK(length(branch_id) = 16)
+        REFERENCES branch(branch_id) ON DELETE RESTRICT,
+    task_entity_id BLOB NOT NULL CHECK(length(task_entity_id) = 16)
+        REFERENCES entity(object_id) ON DELETE RESTRICT,
+    initial_listener_session_id BLOB NOT NULL CHECK(length(initial_listener_session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    initial_listener_revision INTEGER NOT NULL CHECK(initial_listener_revision >= 1),
+    source_session_id BLOB NOT NULL CHECK(length(source_session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    source_claim_id BLOB NOT NULL CHECK(length(source_claim_id) = 16)
+        REFERENCES claim(claim_id) ON DELETE RESTRICT,
+    source_owner_epoch INTEGER NOT NULL CHECK(source_owner_epoch >= 1),
+    idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) > 0),
+    creation_operation_id TEXT NOT NULL CHECK(length(creation_operation_id) > 0),
+    policy_decision_digest BLOB NOT NULL CHECK(length(policy_decision_digest) = 32),
+    policy_decision_json TEXT NOT NULL CHECK(json_valid(policy_decision_json)),
+    creation_request_digest BLOB NOT NULL CHECK(length(creation_request_digest) = 32),
+    creation_request_json TEXT NOT NULL CHECK(json_valid(creation_request_json)),
+    handoff_digest BLOB NOT NULL CHECK(length(handoff_digest) = 32),
+    basis_json TEXT NOT NULL CHECK(json_valid(basis_json)),
+    created_at_us INTEGER NOT NULL,
+    UNIQUE(source_claim_id, idempotency_key),
+    UNIQUE(creation_operation_id),
+    CHECK(initial_listener_session_id <> source_session_id)
+) STRICT;
+
+CREATE TABLE continuation_rotation_runtime (
+    rotation_id BLOB NOT NULL PRIMARY KEY CHECK(length(rotation_id) = 16)
+        REFERENCES continuation_rotation(rotation_id) ON DELETE RESTRICT,
+    workspace_id BLOB NOT NULL CHECK(length(workspace_id) = 16)
+        REFERENCES workspace(workspace_id) ON DELETE RESTRICT,
+    branch_id BLOB NOT NULL CHECK(length(branch_id) = 16)
+        REFERENCES branch(branch_id) ON DELETE RESTRICT,
+    task_entity_id BLOB NOT NULL CHECK(length(task_entity_id) = 16)
+        REFERENCES entity(object_id) ON DELETE RESTRICT,
+    listener_session_id BLOB NOT NULL CHECK(length(listener_session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    listener_revision INTEGER NOT NULL CHECK(listener_revision >= 1),
+    scope_currentness_digest BLOB NOT NULL CHECK(length(scope_currentness_digest) = 32),
+    abort_only INTEGER NOT NULL DEFAULT 0 CHECK(abort_only IN (0, 1)),
+    recovery_revision INTEGER NOT NULL DEFAULT 0 CHECK(recovery_revision >= 0),
+    recovery_json TEXT CHECK(recovery_json IS NULL OR json_valid(recovery_json)),
+    status TEXT NOT NULL CHECK(status IN (
+        'pending_creation',
+        'creation_dispatched',
+        'creation_unknown',
+        'creation_succeeded',
+        'candidate_attached',
+        'candidate_accepted'
+    )),
+    dispatch_json TEXT CHECK(dispatch_json IS NULL OR json_valid(dispatch_json)),
+    candidate_session_id BLOB CHECK(
+        candidate_session_id IS NULL OR length(candidate_session_id) = 16
+    ) REFERENCES session(session_id) ON DELETE RESTRICT,
+    candidate_binding_json TEXT CHECK(
+        candidate_binding_json IS NULL OR json_valid(candidate_binding_json)
+    ),
+    creation_receipt_json TEXT CHECK(
+        creation_receipt_json IS NULL OR json_valid(creation_receipt_json)
+    ),
+    initial_unknown_receipt_json TEXT CHECK(
+        initial_unknown_receipt_json IS NULL OR json_valid(initial_unknown_receipt_json)
+    ),
+    candidate_acceptance_json TEXT CHECK(
+        candidate_acceptance_json IS NULL OR json_valid(candidate_acceptance_json)
+    ),
+    candidate_acceptance_history_json TEXT NOT NULL
+        DEFAULT '{"acceptances":[],"schema_version":1}'
+        CHECK(
+            json_valid(candidate_acceptance_history_json)
+            AND json_type(candidate_acceptance_history_json, '$.acceptances') = 'array'
+        ),
+    last_activity_at_us INTEGER NOT NULL,
+    UNIQUE(workspace_id, branch_id, task_entity_id),
+    CHECK(
+        (abort_only = 0 AND recovery_revision = 0 AND recovery_json IS NULL)
+        OR (abort_only = 1 AND recovery_revision >= 1 AND recovery_json IS NOT NULL)
+    ),
+    CHECK(
+        (status = 'pending_creation'
+            AND dispatch_json IS NULL
+            AND candidate_session_id IS NULL
+            AND candidate_binding_json IS NULL
+            AND creation_receipt_json IS NULL
+            AND initial_unknown_receipt_json IS NULL
+            AND candidate_acceptance_json IS NULL)
+        OR
+        (status = 'creation_dispatched'
+            AND dispatch_json IS NOT NULL
+            AND candidate_session_id IS NULL
+            AND candidate_binding_json IS NULL
+            AND creation_receipt_json IS NULL
+            AND initial_unknown_receipt_json IS NULL
+            AND candidate_acceptance_json IS NULL)
+        OR
+        (status = 'creation_unknown'
+            AND dispatch_json IS NOT NULL
+            AND candidate_session_id IS NULL
+            AND candidate_binding_json IS NULL
+            AND creation_receipt_json IS NOT NULL
+            AND initial_unknown_receipt_json = creation_receipt_json
+            AND candidate_acceptance_json IS NULL)
+        OR
+        (status = 'creation_succeeded'
+            AND dispatch_json IS NOT NULL
+            AND candidate_session_id IS NULL
+            AND candidate_binding_json IS NULL
+            AND creation_receipt_json IS NOT NULL
+            AND candidate_acceptance_json IS NULL)
+        OR
+        (status = 'candidate_attached'
+            AND dispatch_json IS NOT NULL
+            AND candidate_session_id IS NOT NULL
+            AND candidate_binding_json IS NOT NULL
+            AND creation_receipt_json IS NOT NULL
+            AND candidate_acceptance_json IS NULL)
+        OR
+        (status = 'candidate_accepted'
+            AND dispatch_json IS NOT NULL
+            AND candidate_session_id IS NOT NULL
+            AND candidate_binding_json IS NOT NULL
+            AND creation_receipt_json IS NOT NULL
+            AND candidate_acceptance_json IS NOT NULL)
+    )
+) STRICT;
+
+CREATE TABLE continuation_rotation_result (
+    rotation_id BLOB NOT NULL PRIMARY KEY CHECK(length(rotation_id) = 16)
+        REFERENCES continuation_rotation(rotation_id) ON DELETE RESTRICT,
+    status TEXT NOT NULL CHECK(status IN ('committed', 'aborted')),
+    candidate_session_id BLOB CHECK(
+        candidate_session_id IS NULL OR length(candidate_session_id) = 16
+    ) REFERENCES session(session_id) ON DELETE RESTRICT,
+    resulting_claim_id BLOB CHECK(
+        resulting_claim_id IS NULL OR length(resulting_claim_id) = 16
+    ) REFERENCES claim(claim_id) ON DELETE RESTRICT,
+    listener_session_id BLOB NOT NULL CHECK(length(listener_session_id) = 16)
+        REFERENCES session(session_id) ON DELETE RESTRICT,
+    listener_revision INTEGER NOT NULL CHECK(listener_revision >= 1),
+    scope_currentness_digest BLOB NOT NULL CHECK(length(scope_currentness_digest) = 32),
+    abort_only INTEGER NOT NULL CHECK(abort_only IN (0, 1)),
+    recovery_revision INTEGER NOT NULL CHECK(recovery_revision >= 0),
+    recovery_json TEXT CHECK(recovery_json IS NULL OR json_valid(recovery_json)),
+    dispatch_json TEXT CHECK(dispatch_json IS NULL OR json_valid(dispatch_json)),
+    creation_receipt_json TEXT CHECK(
+        creation_receipt_json IS NULL OR json_valid(creation_receipt_json)
+    ),
+    initial_unknown_receipt_json TEXT CHECK(
+        initial_unknown_receipt_json IS NULL OR json_valid(initial_unknown_receipt_json)
+    ),
+    candidate_binding_json TEXT CHECK(
+        candidate_binding_json IS NULL OR json_valid(candidate_binding_json)
+    ),
+    candidate_acceptance_json TEXT CHECK(
+        candidate_acceptance_json IS NULL OR json_valid(candidate_acceptance_json)
+    ),
+    candidate_acceptance_history_json TEXT NOT NULL
+        CHECK(
+            json_valid(candidate_acceptance_history_json)
+            AND json_type(candidate_acceptance_history_json, '$.acceptances') = 'array'
+        ),
+    ended_at_us INTEGER NOT NULL,
+    result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+    CHECK(
+        (abort_only = 0 AND recovery_revision = 0 AND recovery_json IS NULL)
+        OR (abort_only = 1 AND recovery_revision >= 1 AND recovery_json IS NOT NULL)
+    ),
+    CHECK(
+        (status = 'committed'
+            AND abort_only = 0
+            AND candidate_session_id IS NOT NULL
+            AND resulting_claim_id IS NOT NULL
+            AND dispatch_json IS NOT NULL
+            AND creation_receipt_json IS NOT NULL
+            AND candidate_binding_json IS NOT NULL
+            AND candidate_acceptance_json IS NOT NULL)
+        OR
+        (status = 'aborted' AND resulting_claim_id IS NULL)
+    )
+) STRICT;
+
 CREATE TABLE merge_attempt (
     merge_id BLOB NOT NULL PRIMARY KEY CHECK(length(merge_id) = 16)
         REFERENCES object_identity(object_id) ON DELETE RESTRICT,

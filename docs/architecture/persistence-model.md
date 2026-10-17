@@ -24,7 +24,8 @@ Immutable semantic provenance
   Events, Session timeline, Evidence, ResourceObservations
 
 Current coordination
-  SessionRuntime, ClaimRuntime, MergeRuntime and their structured children
+  SessionRuntime, ClaimRuntime, ContinuationProjectPolicy, ContinuationScopeRuntime,
+  ContinuationRotationRuntime, MergeRuntime and their structured children
 
 Derived/rebuildable acceleration
   Branch current projections, typed projections, indexes, checkpoints

@@ -709,7 +709,7 @@ The current top-level CLI exposes these command families:
 | Versioned work graph | `workspace`, `branch`, `goal`, `plan`, `task`, `reference`, `entity` | Workspace and Work Branch state, Goals, Plans, Tasks, structural references, lifecycle transitions, containment, dependency, ordering, and general entity inspection. |
 | Acceptance and evidence | `ac`, `vr`, `verify`, `verification`, `evidence` | Acceptance Criteria, Verification Requirements, single-target verification wrapper output, Verification judgments, and Evidence records. |
 | Resources and drift | `resource`, `projection`, `verification cache-refresh` | Resource registration, observations, applicability, stale/drift/unavailable/error projections, and explicit foreground refresh. |
-| Runtime coordination | `session`, `claim`, `handoff`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, runnable Task projection, and next-work selection. |
+| Runtime coordination | `session`, `claim`, `handoff`, `continuation`, `next`, `runnable` | Agent Sessions, focus, exclusive/shared Claims, Claim transfer/takeover, focused Handoffs, exact-scope continuation attempts, runnable Task projection, and next-work selection. |
 | Authorization receipts | `receipt issue`, `receipt show`, `receipt list`, `receipt consume` | Current P0-3a/P0-3b mechanical AuthorizationReceipt issue, redacted inspection/listing, and branch-scoped single-use consume; revoke is not current. |
 | Entry, capture, and recall | `config`, `project`, `capture`, `record currentness-audit`, `record supersede-finding`, `record invalidate-finding`, `recall`, `resume` | Stable registry discovery, explicit idempotent first-use binding, binding audit, standalone cognition, bounded read-only semantic-currentness review, guarded Finding correction, profile-prioritized bounded project context, and Session-aware recovery. |
 | Local evidence search | `search refresh`, `search query`, `search model-provision`, `search semantic-query`, `search source-import`, `search source-query`, `search federated-query`, `search federated-semantic-query` | Immutable local lexical and semantic generations, verified local models, non-authoritative explicit history archives, request-scoped source-qualified federation, native readback, visible partial failures, and optional private exact-vector reuse. |
@@ -894,6 +894,212 @@ workvcs handoff create "$STORE" \
 The next session should run Store validation, inspect the Handoff, consume it
 only if it is the intended focus, then query `context` and `next` before
 claiming work.
+
+## Scoped Conversation Continuation Pattern
+
+`continuation` is an opt-in runtime-coordination protocol. It does not decide
+that rotation is useful and does not create, message, archive, or delete a
+Codex conversation. A policy layer makes the decision; a separately authorized
+product adapter creates and verifies the target; WorkVCS fences one exact
+`(Workspace, Work Branch, Task, exclusive Claim)` transfer.
+
+First persist explicit user opt-in for the exact product Project. The authority
+document must bind `action` (`enable` or `disable`), exact `project_id`, actor
+Session, `expected_revision`,
+`authorization_envelope_kind=trusted_product_control_plane`, the stable
+`product_actor_id`, separate canonical
+`user_authorization_receipt_digest` and
+`project_membership_receipt_digest`, and `authorized_at_us`. WorkVCS validates
+and preserves this trusted control-plane envelope; setting caller-authored
+fields is not itself proof of authorization. Updates are expected-revision
+guarded; inspect the returned revision and receipt before using them in policy
+evaluation:
+
+```bash
+workvcs continuation project-policy-set "$STORE" \
+  --actor "$LISTENER_SESSION_ID" --project-id "$PROJECT_ID" \
+  --expected-revision 0 --enabled true \
+  --authority-json "$PROJECT_POLICY_AUTHORITY_JSON"
+
+workvcs continuation project-policy-show "$STORE" --project-id "$PROJECT_ID"
+```
+
+Start listener and carrier Sessions with immutable roles and stable product
+thread identities, bind the exact scope, preview its currentness, then admit one
+idempotent attempt:
+
+```bash
+workvcs session start "$STORE" --workspace "$WORKSPACE_ID" --branch "$BRANCH_ID" \
+  --metadata-json '{"workvcs_session_role":"listener","thread_id":"01a-listener"}'
+workvcs session start "$STORE" --workspace "$WORKSPACE_ID" --branch "$BRANCH_ID" \
+  --metadata-json '{"workvcs_session_role":"work","thread_id":"01a-source"}'
+
+workvcs continuation scope-bind "$STORE" \
+  --workspace "$WORKSPACE_ID" --branch "$BRANCH_ID" --task "$TASK_ENTITY_ID" \
+  --listener "$LISTENER_SESSION_ID" --carrier "$WORK_SESSION_ID" --claim "$CLAIM_ID"
+
+workvcs continuation scope-currentness "$STORE" \
+  --source "$WORK_SESSION_ID" --claim "$CLAIM_ID" \
+  --expected-scope "$CONTINUATION_SCOPE_ID" \
+  --expected-listener "$LISTENER_SESSION_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --expected-owner-epoch "$OWNER_EPOCH" --handoff-digest "$HANDOFF_DIGEST" \
+  --basis-json "$CURRENTNESS_BASIS_JSON"
+
+workvcs continuation begin "$STORE" \
+  --listener "$LISTENER_SESSION_ID" --source "$WORK_SESSION_ID" --claim "$CLAIM_ID" \
+  --expected-scope "$CONTINUATION_SCOPE_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --expected-owner-epoch "$OWNER_EPOCH" --idempotency-key "$IDEMPOTENCY_KEY" \
+  --creation-operation-id "$CREATION_OPERATION_ID" \
+  --handoff-digest "$HANDOFF_DIGEST" \
+  --basis-json "$CURRENTNESS_BASIS_JSON" \
+  --policy-decision-json "$POLICY_DECISION_JSON" \
+  --creation-request-json "$CREATION_REQUEST_JSON"
+```
+
+The policy decision and request must bind the current durable Project-policy
+revision/receipt, exact scope identities, one bounded reference packet (maximum
+8,192 bytes, 64 items, and a 4,096-token budget), its digest, and the exact
+initial-message digest. The policy decision must embed the deterministic
+evaluator receipt and complete canonical result, including its version, result
+digest, complete non-empty gate summary, and one to 32 bounded evidence
+references; WorkVCS recomputes both result and receipt SHA-256 digests and
+validates the positive gates before admission. The request must record
+`source_transcript_included=false`. The typed basis must name the current
+Handoff Record; WorkVCS resolves Task/Handoff versions and Runtime activity
+instead of trusting a caller-supplied head echo.
+
+Before invoking the product adapter, durably record dispatch. Only after this
+command succeeds may the listener call non-forking `create_thread`; dispatch
+also rereads the exact enabled Project policy and recomputes scope currentness
+inside its transaction. Revocation or relevant source, Handoff, dependency,
+Claim, scope, or listener drift therefore fails before the product effect:
+
+```bash
+workvcs continuation creation-dispatch "$STORE" \
+  --rotation "$ROTATION_ID" --listener "$LISTENER_SESSION_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --dispatch-json "$CREATION_DISPATCH_JSON"
+
+# Call the product adapter only here, then record its created or unknown result.
+workvcs continuation creation-result "$STORE" \
+  --rotation "$ROTATION_ID" --listener "$LISTENER_SESSION_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --receipt-json "$CREATION_RECEIPT_JSON"
+```
+
+An unknown receipt is immutable and blocks a second attempt. Reconciliation to
+`created` must retain its digest and pending client identity; never retry with a
+new creation identity. A first successful receipt reserves its target thread
+even if the rotation later aborts. That identity cannot later enter the
+continuation protocol as a listener or ordinary Work carrier/source. Only the
+exact committed candidate carrying its exact resulting Claim in the exact
+scope may act as a later source. Product-receipt and abort-evidence digests use
+canonical 32-byte lowercase hexadecimal form.
+
+Only a normal Work conversation under the exact Project with a resolved stable
+`thread_id`, user visibility, auditability, and interactivity may be attached.
+The target must then author acceptance of the exact Handoff/reference packet
+before the listener can commit:
+
+```bash
+workvcs session start "$STORE" --workspace "$WORKSPACE_ID" --branch "$BRANCH_ID" \
+  --metadata-json '{"workvcs_session_role":"work_candidate","thread_id":"01a-target"}'
+
+workvcs continuation candidate-attach "$STORE" \
+  --rotation "$ROTATION_ID" --listener "$LISTENER_SESSION_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --candidate "$CANDIDATE_SESSION_ID" \
+  --binding-json "$CANDIDATE_BINDING_JSON"
+
+workvcs continuation candidate-accept "$STORE" \
+  --rotation "$ROTATION_ID" --candidate "$CANDIDATE_SESSION_ID" \
+  --acceptance-json "$TARGET_ACCEPTANCE_JSON"
+
+workvcs continuation commit "$STORE" \
+  --rotation "$ROTATION_ID" --listener "$LISTENER_SESSION_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --expected-owner-epoch "$OWNER_EPOCH" \
+  --expected-handoff-digest "$HANDOFF_DIGEST"
+```
+
+`commit` atomically transfers only the source Claim and increments only that
+scope's owner epoch. `abort` leaves the source authoritative, but its evidence
+contract depends on state: `cancelled_before_dispatch` for pending creation;
+`confirmed_not_created` plus evidence after dispatch or an unknown result; or
+`candidate_disposition_confirmed` plus a disposition and evidence after a
+created, attached, or accepted target. Archiving or otherwise disposing of a
+created target is a separate product action and authority boundary.
+
+Use `show`, `scope-show`, and Event history for readback. Normal listener
+recovery uses `listener-replace` with the expected listener revision and owner
+epoch; it can repair an ended listener during an active attempt only without
+rebasing other currentness drift. If a target had already accepted, the prior
+acceptance is kept in history and the target must accept again under the
+replacement listener revision before commit.
+
+If the old listener is inactive and normal continuation is unsafe, use the
+irreversible abort-only recovery surface:
+
+```bash
+workvcs continuation listener-recover-abort-only-preview "$STORE" \
+  --rotation "$ROTATION_ID" --expected-scope "$CONTINUATION_SCOPE_ID" \
+  --expected-listener "$LOST_LISTENER_SESSION_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --expected-recovery-revision "$RECOVERY_REVISION" \
+  --expected-owner-epoch "$OWNER_EPOCH"
+
+workvcs continuation listener-recover-abort-only "$STORE" \
+  --rotation "$ROTATION_ID" --expected-scope "$CONTINUATION_SCOPE_ID" \
+  --actor "$REPLACEMENT_LISTENER_SESSION_ID" \
+  --expected-listener "$LOST_LISTENER_SESSION_ID" \
+  --replacement-listener "$REPLACEMENT_LISTENER_SESSION_ID" \
+  --expected-listener-revision "$LISTENER_REVISION" \
+  --expected-recovery-revision "$RECOVERY_REVISION" \
+  --expected-owner-epoch "$OWNER_EPOCH" \
+  --authority-json "$ABORT_ONLY_RECOVERY_AUTHORITY_JSON"
+```
+
+Build the authority document from the exact preview output. Execution
+re-observes currentness transactionally, so any post-preview change fails
+without mutation. A semantically replaced Handoff or a removed currentness
+dependency may be observed by this abort-only preview and recorded as drift;
+normal continuation still fails closed on those conditions.
+
+The authority document binds `mode=abort_only`, rotation and scope, both
+listener identities, the old listener lifecycle, listener/recovery revisions,
+owner epoch, original and observed currentness digests, drift flag, original
+creation operation, recovery-evidence digest, authorization-receipt digest,
+and authorization time. The command preserves the original decision,
+currentness, Claim, candidate, receipts, and acceptance. It records the newly
+observed currentness but never rebases the old attempt. In abort-only mode,
+creation dispatch, candidate attachment/acceptance, and commit are rejected;
+only an exact `creation-result` reconciliation for the original immutable
+operation and the state-appropriate `abort` remain legal. The abort rationale
+must additionally bind `recovery_mode=abort_only`, the recovery revision, and
+the digest emitted as `rotation.recovery_receipt_digest`. A replacement
+for a later lost recovery listener remains abort-only. Start a fresh rotation
+only after terminal abort.
+
+`show` prints the constant-size `rotation.recovery_history_count` and
+`rotation.recovery_history_chain_digest` together with the latest recovery and
+receipt digest. Each successful recovery also appends a complete immutable
+`continuation.listener_recovered_abort_only` Event containing its authority,
+evidence, prior chain digest, and resulting chain digest. Read a bounded audit
+slice without expanding routine rotation output:
+
+```bash
+workvcs event list "$STORE" --workspace "$WORKSPACE_ID" \
+  --kind continuation.listener_recovered_abort_only --limit 100
+```
+
+A pending `clientThreadId`, fork, hidden/background task,
+SubAgent, side chat, internal candidate ID, or WorkVCS row is not valid target
+evidence. Replaying the same completed mutation returns its recorded result
+without a second state change; a conflicting replay fails closed. A previously
+committed `work_candidate` can later source another rotation only while its
+recorded resulting Claim is still the current exact carrier Claim.
 
 ## Resource And Drift Pattern
 

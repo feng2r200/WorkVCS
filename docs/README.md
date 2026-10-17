@@ -85,7 +85,19 @@ public release, and remote deployment remain separate decisions.
 - [ADR-0519: Authorized Existing-Binding Delivery and Operation Inventory](decisions/adr/0519-authorized-existing-binding-delivery-and-operation-inventory.md)
 - [ADR-0520: Operation Disposition and Global Inventory Classification](decisions/adr/0520-operation-disposition-and-global-inventory-classification.md)
 - [ADR-0521: Plan Manifest Validation and Routed Rejection Diagnostics](decisions/adr/0521-plan-manifest-validation-and-routed-rejection-diagnostics.md)
+- [ADR-0522: Runtime Entry Compatibility and Artifact Lifecycle](decisions/adr/0522-runtime-entry-compatibility-and-artifact-lifecycle.md)
+- [ADR-0523: Semantic-Versioned Delivery and Cleanup](decisions/adr/0523-semantic-versioned-delivery-and-cleanup.md)
 - [ADR-0524: Task Disposition and Execution Currentness](decisions/adr/0524-task-disposition-and-execution-currentness.md)
+- [ADR-0525: Local Derived FTS Search and Canonical Readback](decisions/adr/0525-local-derived-fts-search-and-canonical-readback.md)
+- [ADR-0526: On-Demand Local Search Generations](decisions/adr/0526-on-demand-local-search-generations.md)
+- [ADR-0527: Native Local Semantic Search and Reranking](decisions/adr/0527-native-local-semantic-search-and-reranking.md)
+- [ADR-0528: Explicit History Federation and Incremental Local Search](decisions/adr/0528-explicit-history-federation-and-incremental-local-search.md)
+- [ADR-0529: Single-User Local Automation Runtime](decisions/adr/0529-single-user-local-automation-runtime.md)
+- [ADR-0530: Global Derived Search Catalog and Automatic History](decisions/adr/0530-global-derived-search-catalog-and-automatic-history.md)
+- [ADR-0531: Registry-Derived Automation Membership and Global Source Policy](decisions/adr/0531-registry-derived-automation-membership-and-global-source-policy.md)
+- [ADR-0532: Explicit macOS Daemon Adoption](decisions/adr/0532-explicit-macos-daemon-adoption.md)
+- [ADR-0533: Snapshot-Bound Historical Occurrence and Lineage](decisions/adr/0533-snapshot-bound-historical-occurrence-and-lineage.md)
+- [ADR-0534: Scoped Continuation Rotation](decisions/adr/0534-scoped-continuation-rotation.md)
 - [Task Disposition and Currentness Local Adoption Evidence](provenance/task-disposition-and-currentness-local-adoption.md)
 - [ProjectRef Control Plane v2 Contract](architecture/projectref-control-plane-v2.md)
 - [ProjectRef Registry v2 Migration and Acceptance Contract](architecture/projectref-registry-v2-migration-and-acceptance.md)
@@ -420,8 +432,8 @@ These documents specify what WorkVCS currently means. Implementation readiness
 is tracked separately in the V1 readiness ledger and release-maturity status is
 tracked in the V1 release gate matrix. The previously delivered `0.2.0` Rust
 implementation is locally release-ready and dogfood-complete for the bounded
-V1 scope. This branch's crate and CLI package version is `1.2.0`, extending
-accepted ADR-0525 through ADR-0526. The separately authorized stable local
+V1 scope. This branch's crate and CLI package version is `1.6.0`, extending
+accepted ADR-0525 through ADR-0534. The separately authorized stable local
 adoption of 1.1.0 is recorded in the focused adoption evidence; exact build and delivery identities remain
 separately identified by runtime and Git provenance.
 Public release, tag, push, deploy,

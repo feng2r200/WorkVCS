@@ -61,6 +61,14 @@ separately under Current product stage. The product contract provides:
   Verification, and semantic records;
 - immutable provenance for Sessions, ChangeSets, Events, and Evidence;
 - explicit coordination state for focus, claims, and merge-in-progress;
+- exact-Project continuation opt-in plus exact-scope coordination with one
+  revision-fenced listener, one current Work carrier, one in-flight rotation,
+  durable pre-call dispatch, target-authored acceptance, and atomic transfer of
+  the continued Task's exclusive Claim without a Project-global writer;
+- product-adapter evidence that any attached continuation target is a resolved,
+  ordinary Work conversation under the exact requested Project and is visible,
+  auditable, and interactable by the user, with a bounded clean reference
+  packet rather than source-transcript injection;
 - a deterministic Context Resolver for `context`, `next`, and `why`;
 - low-coupling source-state drift evidence without making Git the database;
 - portable Stores and cross-Workspace Knowledge Spaces;
@@ -108,7 +116,10 @@ WorkVCS
 Pure Runtime Coordination operations update runtime state atomically and emit
 provenance Events without creating empty WorkStateCommits. The system
 automatically records facts it can observe mechanically, such as a
-Session start, branch switch, claim, status change, or commit. The Agent must
+Session start, branch switch, claim, continuation binding or rotation state,
+status change, or commit. WorkVCS does not create an Agent conversation or send
+cross-conversation messages; a product adapter performs those external effects
+and reconciles their identity before an atomic rotation commit. The Agent must
 explicitly record meaning only it knows, such as a Finding, Assumption,
 Question, Decision, Risk, or Knowledge statement. V1 does not infer these
 records from a transcript.
@@ -141,14 +152,17 @@ records from a transcript.
 9. **Project ownership is semantic and tool-neutral.** Explicit ProjectRef,
    verified semantic Project, Git, and CWD are ranked locator evidence;
    provider-specific adapters do not become core product dependencies.
+10. **Continuation fencing is scope-local.** A listener revision and owner
+    epoch protect only one exact Workspace, Work Branch, Task, and exclusive
+    Claim. They do not serialize unrelated WorkVCS or Git work.
 
 ## Current product stage
 
 This repository contains the confirmed WorkVCS design baseline and a locally
 release-ready V1 implementation in Rust, followed by focused post-V1 local
-improvements. This branch's crate and CLI package version is `1.4.5`. It adds
-the source implementation of ADR-0529 through ADR-0532 after the separately
-delivered ADR-0524 and local-search increments. Stable installed adoption,
+improvements. This branch's crate and CLI package version is `1.6.0`. It adds
+the source implementation of ADR-0534 after the separately delivered ADR-0524
+and local-search/automation increments. Stable installed adoption,
 Push, CI, tag, release, and activation remain separate evidence layers. The
 earlier bounded V1 product-maturity judgment does not establish a public
 release or broader maturity claim for this post-V1 implementation.

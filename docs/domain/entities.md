@@ -574,6 +574,102 @@ owner or mode.
 
 Claiming or claim-next does not change Task status or imply TaskStart.
 
+### ContinuationScope
+
+**Purpose:** Coordinates a possible conversation rotation for one exact
+Workspace, Work Branch, and Task without creating a Project-wide owner or
+Branch-wide writer lock.
+
+**Runtime state:** One listener Session plus monotonic listener revision, the
+current Work carrier Session, the current exclusive Claim, a strictly
+increasing scope-local owner epoch, and at most one active
+ContinuationRotation.
+
+**Relations:** The listener observes the scope but does not own its Claim. The
+carrier owns the exact Claim under the ordinary Claim rules. Other Tasks,
+Claims, Work Branches, Sessions, and Git worktrees remain independent.
+
+**Version behavior:** Runtime-only. Binding, listener replacement, rotation
+admission, candidate attachment, commit, and abort produce immutable Events.
+Commit advances the scope-local epoch and creates a replacement Claim
+occurrence rather than rewriting the prior Claim.
+
+### ContinuationProjectPolicy
+
+**Purpose:** Records whether continuation rotation is explicitly enabled for
+one exact product Project before any scope may admit or dispatch a rotation.
+
+**Owned state:** Exact Project ID, enabled state, monotonic revision, actor
+Session, canonical trusted product-control-plane envelope, its receipt digest,
+and update time. The envelope binds product actor, user-authorization receipt,
+Project-membership receipt, and authorization time. It is Project policy
+authority, not a Project-wide writer or Work owner.
+
+**Version behavior:** Runtime-control state updated by expected-revision CAS.
+Exact replay is idempotent. Admission binds its revision, receipt, and update
+time; dispatch rereads the same current row so revocation takes effect before
+the product-call boundary.
+
+### ContinuationRotation
+
+**Purpose:** Identifies one idempotent attempt to replace the Work carrier for
+one ContinuationScope.
+
+**Lifecycle:** `pending_creation -> creation_dispatched`, then
+`creation_dispatched -> creation_unknown -> creation_succeeded` or directly
+`creation_dispatched -> creation_succeeded`; success advances through
+`candidate_attached -> candidate_accepted -> committed`. Abort is available
+from pending creation with before-dispatch cancellation evidence, from
+dispatched/unknown creation with confirmed-not-created evidence, or after
+creation success with confirmed external candidate-disposition evidence.
+
+**Occurrence state:** Stable rotation identity, scope, initial listener and
+revision, source carrier, source Claim/owner epoch, idempotency key, creation
+operation/request digest, Handoff digest, typed currentness basis, durable
+Project-policy revision/receipt, bounded continuation-packet digest and limits,
+initial-message digest, embedded deterministic evaluator receipt/gate summary/
+evidence references, and creation time.
+
+**Runtime state:** Current listener/revision, computed decision-currentness
+digest, non-terminal status, durable pre-call dispatch, optional immutable
+initial-unknown receipt, optional creation-success receipt, optional candidate
+Session, canonical candidate-binding evidence, current target-authored
+acceptance, immutable prior-acceptance history, and activity time. Binding
+evidence includes non-forking creation-operation correlation, the resolved
+normal Work thread identity, exact Project-binding provenance, product receipt,
+and affirmative user-visible, auditable, and interactable product-runtime
+facts; a pending client identity or internal WorkVCS identity is insufficient.
+Exactly one active occurrence is permitted for one scope. A created target
+thread identity is reserved on first success and cannot be reused by another
+rotation, listener, or ordinary Work carrier/source, including after an abort
+before attachment. The sole source exception is the exact committed candidate
+Session carrying that rotation's exact resulting Claim in the exact scope.
+
+An abort-only recovery additionally stores an irreversible mode flag,
+monotonic recovery revision, old and replacement listeners, original and newly
+observed currentness, drift status, recovery authority/evidence, and recovery
+time. It preserves rather than rebases the original occurrence, receipts,
+candidate, and acceptance. Only the original creation operation may be
+reconciled before state-specific abort; dispatch, attach, accept, and commit
+are forbidden. Every recovery is an append-only Event linked by a digest
+chain. The rotation projection retains only the latest recovery plus a
+constant-size count and chain head, so complete audit history does not inflate
+normal continuation context.
+
+**Terminal result:** Both outcomes retain the final listener/revision,
+currentness digest, abort-only mode/recovery revision, bounded recovery-history
+count/chain summary, and latest recovery evidence when
+present, dispatch, initial unknown and creation-success receipts,
+candidate/binding and acceptance history when present, canonical result, and
+end time. Commit also records the replacement Claim and is impossible from
+abort-only mode. Abort records the state-specific rationale and leaves the
+source Claim authoritative. External conversation creation is never described
+as rolled back.
+
+**Version behavior:** Rotation occurrence and terminal result are immutable
+provenance. Only the separate active runtime projection is mutable and is
+removed at commit or abort.
+
 ### MergeAttempt
 
 **Purpose:** Identifies one persistent merge attempt independently of whether

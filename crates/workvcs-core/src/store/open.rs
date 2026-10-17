@@ -101,8 +101,17 @@ use crate::runtime::{
     ClaimReleaseResult, ClaimSnapshot, ClaimTaskOptions, ClaimTaskResult, ClaimTransferOptions,
     ClaimTransferResult, ContextOverview, ContextOverviewOptions, ContextPacket,
     ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
-    ContextPacketSaveResult, ContextPacketSnapshot, MergeAbortOptions, MergeAbortResult,
-    MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    ContextPacketSaveResult, ContextPacketSnapshot, ContinuationAbortOnlyRecoveryOptions,
+    ContinuationAbortOnlyRecoveryPreview, ContinuationAbortOnlyRecoveryPreviewOptions,
+    ContinuationCandidateAcceptOptions, ContinuationCandidateAttachOptions,
+    ContinuationCreationDispatchOptions, ContinuationCreationResultOptions,
+    ContinuationListenerReplaceOptions, ContinuationProjectPolicySetOptions,
+    ContinuationProjectPolicySnapshot, ContinuationRotationAbortOptions,
+    ContinuationRotationBeginOptions, ContinuationRotationCommitOptions,
+    ContinuationRotationCommitResult, ContinuationRotationSnapshot, ContinuationScopeBindOptions,
+    ContinuationScopeCurrentnessOptions, ContinuationScopeCurrentnessSnapshot,
+    ContinuationScopeSnapshot, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
+    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
     MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
     MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
     RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
@@ -122,10 +131,11 @@ use crate::store::bootstrap::{
 use crate::store::connection::StoreConnection;
 use crate::store::schema;
 use crate::{
-    BranchId, ClaimId, CommitId, EntityId, EventId, EvidenceId, ImportId, ResourceId,
-    ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkVcsError, WorkspaceId, history,
-    runtime,
+    BranchId, ClaimId, CommitId, ContinuationRotationId, EntityId, EventId, EvidenceId, ImportId,
+    ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId, WorkVcsError,
+    WorkspaceId, history, runtime,
 };
+use rusqlite::TransactionBehavior;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -310,6 +320,14 @@ pub struct ContextPacketSnapshotSchemaMigrationResult {
     pub migration: Option<StoreMigrationAttemptSnapshot>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContinuationRotationSchemaMigrationResult {
+    pub store_info: StoreInfo,
+    pub migrated: bool,
+    pub added_schema_objects: Vec<String>,
+    pub migration: Option<StoreMigrationAttemptSnapshot>,
+}
+
 impl Store {
     pub(crate) fn init(path: &Path, options: StoreInitOptions) -> Result<Self> {
         let mut connection = StoreConnection::open(path)?;
@@ -377,6 +395,66 @@ impl Store {
         };
         let store_info = validate_bootstrap(&connection)?;
         Ok(ContextPacketSnapshotSchemaMigrationResult {
+            store_info,
+            migrated: !added_schema_objects.is_empty(),
+            added_schema_objects,
+            migration: recorded_migration,
+        })
+    }
+
+    pub(crate) fn migrate_continuation_rotation_schema(
+        path: &Path,
+    ) -> Result<ContinuationRotationSchemaMigrationResult> {
+        Self::migrate_continuation_rotation_schema_inner(path, false)
+    }
+
+    fn migrate_continuation_rotation_schema_inner(
+        path: &Path,
+        fail_before_receipt: bool,
+    ) -> Result<ContinuationRotationSchemaMigrationResult> {
+        let mut connection = StoreConnection::open(path)?;
+        validate_application_id(&connection)?;
+        let before_info = load_store_info(&connection)?;
+        connection.verify_foreign_keys()?;
+        let transaction = connection
+            .inner_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(crate::error::storage_error)?;
+        let migration = schema::migrate_continuation_rotation_schema(&transaction)?;
+        let added_schema_objects = migration.added_schema_objects;
+        let recorded_migration = if added_schema_objects.is_empty() {
+            None
+        } else {
+            let detail = continuation_rotation_schema_migration_detail(&added_schema_objects)?;
+            if fail_before_receipt {
+                return Err(crate::error::WorkVcsError::StorageFailure(
+                    "injected continuation migration failure before receipt".to_owned(),
+                ));
+            }
+            Some(
+                history::record_store_migration_in_transaction(
+                    &transaction,
+                    StoreMigrationRecordOptions::new(
+                        STORE_FORMAT_VERSION,
+                        STORE_FORMAT_VERSION,
+                        before_info.manifest.schema_version,
+                        before_info.manifest.schema_version,
+                        "workvcs-continuation-rotation-v1",
+                        "completed",
+                        detail,
+                    )?,
+                    current_epoch_micros()?,
+                )?
+                .migration,
+            )
+        };
+        transaction.commit().map_err(crate::error::storage_error)?;
+        let recorded_migration = match recorded_migration {
+            Some(migration) => Some(migration),
+            None => prior_continuation_rotation_migration(&connection)?,
+        };
+        let store_info = validate_bootstrap(&connection)?;
+        Ok(ContinuationRotationSchemaMigrationResult {
             store_info,
             migrated: !added_schema_objects.is_empty(),
             added_schema_objects,
@@ -2010,6 +2088,157 @@ impl Store {
         runtime::end_session(&mut self.connection, options)
     }
 
+    pub(crate) fn set_continuation_project_policy(
+        &mut self,
+        options: &ContinuationProjectPolicySetOptions,
+    ) -> Result<ContinuationProjectPolicySnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::set_continuation_project_policy(&mut self.connection, options)
+    }
+
+    pub(crate) fn continuation_project_policy(
+        &self,
+        project_id: &str,
+    ) -> Result<ContinuationProjectPolicySnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::continuation_project_policy(self.connection.inner(), project_id)
+    }
+
+    pub(crate) fn bind_continuation_scope(
+        &mut self,
+        options: &ContinuationScopeBindOptions,
+    ) -> Result<ContinuationScopeSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::bind_continuation_scope(&mut self.connection, options)
+    }
+
+    pub(crate) fn preview_continuation_scope_currentness(
+        &mut self,
+        options: &ContinuationScopeCurrentnessOptions,
+    ) -> Result<ContinuationScopeCurrentnessSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::preview_continuation_scope_currentness(&mut self.connection, options)
+    }
+
+    pub(crate) fn replace_continuation_listener(
+        &mut self,
+        options: &ContinuationListenerReplaceOptions,
+    ) -> Result<ContinuationScopeSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::replace_continuation_listener(&mut self.connection, options)
+    }
+
+    pub(crate) fn recover_continuation_listener_abort_only(
+        &mut self,
+        options: &ContinuationAbortOnlyRecoveryOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::recover_continuation_listener_abort_only(&mut self.connection, options)
+    }
+
+    pub(crate) fn preview_abort_only_recovery(
+        &mut self,
+        options: &ContinuationAbortOnlyRecoveryPreviewOptions,
+    ) -> Result<ContinuationAbortOnlyRecoveryPreview> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::preview_abort_only_recovery(&mut self.connection, options)
+    }
+
+    pub(crate) fn begin_continuation_rotation(
+        &mut self,
+        options: &ContinuationRotationBeginOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::begin_continuation_rotation(&mut self.connection, options)
+    }
+
+    pub(crate) fn dispatch_continuation_creation(
+        &mut self,
+        options: &ContinuationCreationDispatchOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::dispatch_continuation_creation(&mut self.connection, options)
+    }
+
+    pub(crate) fn record_continuation_creation_result(
+        &mut self,
+        options: &ContinuationCreationResultOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::record_continuation_creation_result(&mut self.connection, options)
+    }
+
+    pub(crate) fn attach_continuation_candidate(
+        &mut self,
+        options: &ContinuationCandidateAttachOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::attach_continuation_candidate(&mut self.connection, options)
+    }
+
+    pub(crate) fn accept_continuation_candidate(
+        &mut self,
+        options: &ContinuationCandidateAcceptOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::accept_continuation_candidate(&mut self.connection, options)
+    }
+
+    pub(crate) fn abort_continuation_rotation(
+        &mut self,
+        options: &ContinuationRotationAbortOptions,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::abort_continuation_rotation(&mut self.connection, options)
+    }
+
+    pub(crate) fn commit_continuation_rotation(
+        &mut self,
+        options: &ContinuationRotationCommitOptions,
+    ) -> Result<ContinuationRotationCommitResult> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::commit_continuation_rotation(&mut self.connection, options)
+    }
+
+    pub(crate) fn continuation_scope(
+        &self,
+        workspace_id: WorkspaceId,
+        branch_id: BranchId,
+        task_entity_id: EntityId,
+    ) -> Result<ContinuationScopeSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::continuation_scope(
+            self.connection.inner(),
+            workspace_id,
+            branch_id,
+            task_entity_id,
+        )
+    }
+
+    pub(crate) fn continuation_rotation(
+        &self,
+        rotation_id: ContinuationRotationId,
+    ) -> Result<ContinuationRotationSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::continuation_rotation(self.connection.inner(), rotation_id)
+    }
+
     pub(crate) fn start_merge(&mut self, options: &MergeStartOptions) -> Result<MergeStartResult> {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
@@ -2228,4 +2457,115 @@ fn context_packet_snapshot_schema_migration_detail(
             ),
         ),
     ])
+}
+
+fn continuation_rotation_schema_migration_detail(
+    added_schema_objects: &[String],
+) -> Result<CanonicalValue> {
+    CanonicalValue::object(vec![
+        (
+            "migration_kind".to_owned(),
+            CanonicalValue::String("continuation_rotation_schema_addition".to_owned()),
+        ),
+        (
+            "added_schema_objects".to_owned(),
+            CanonicalValue::Array(
+                added_schema_objects
+                    .iter()
+                    .map(|object| CanonicalValue::String(object.clone()))
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+fn prior_continuation_rotation_migration(
+    connection: &StoreConnection,
+) -> Result<Option<StoreMigrationAttemptSnapshot>> {
+    let options = StoreMigrationListOptions::new()
+        .with_tool_version("workvcs-continuation-rotation-v1")?
+        .with_outcome("completed")?;
+    let migrations = history::store_migrations(connection, options)?.migrations;
+    Ok(migrations.into_iter().find(|migration| {
+        let Some(outcome) = migration.outcome.as_ref() else {
+            return false;
+        };
+        let CanonicalValue::Object(entries) = &outcome.detail else {
+            return false;
+        };
+        entries.iter().any(|(key, value)| {
+            key == "migration_kind"
+                && value
+                    == &CanonicalValue::String("continuation_rotation_schema_addition".to_owned())
+        })
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::WorkVcsError;
+    use rusqlite::Connection;
+
+    #[test]
+    fn continuation_schema_and_receipt_roll_back_together_on_injected_failure() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("migration-atomicity.sqlite");
+        let store = Store::init(
+            &path,
+            StoreInitOptions::new("migration-atomicity-test").expect("store options"),
+        )
+        .expect("initialize store");
+        drop(store);
+        let connection = Connection::open(&path).expect("raw connection");
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 DROP TABLE continuation_rotation_result;
+                 DROP TABLE continuation_rotation_runtime;
+                 DROP TABLE continuation_rotation;
+                 DROP TABLE continuation_scope_runtime;
+                 DROP TABLE continuation_project_policy;",
+            )
+            .expect("drop continuation schema");
+        let receipts_before = connection
+            .query_row("SELECT count(*) FROM store_migration_attempt", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("receipt count");
+        drop(connection);
+
+        let error = Store::migrate_continuation_rotation_schema_inner(&path, true)
+            .expect_err("injected migration failure");
+        assert!(matches!(error, WorkVcsError::StorageFailure(_)));
+
+        let connection = Connection::open(&path).expect("reopen raw connection");
+        let continuation_tables = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema
+                 WHERE type = 'table' AND name IN (
+                    'continuation_scope_runtime',
+                    'continuation_project_policy',
+                    'continuation_rotation',
+                    'continuation_rotation_runtime',
+                    'continuation_rotation_result'
+                 )",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("continuation table count");
+        let receipts_after = connection
+            .query_row("SELECT count(*) FROM store_migration_attempt", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("receipt count after failure");
+        assert_eq!(continuation_tables, 0);
+        assert_eq!(receipts_after, receipts_before);
+        drop(connection);
+
+        let recovered = Store::migrate_continuation_rotation_schema(&path)
+            .expect("migration remains retryable");
+        assert!(recovered.migrated);
+        assert!(recovered.migration.is_some());
+    }
 }

@@ -10,7 +10,9 @@ pub use bootstrap::{
 };
 pub(crate) use bootstrap::{current_epoch_micros, validate_bootstrap};
 pub(crate) use connection::StoreConnection;
-pub use open::ContextPacketSnapshotSchemaMigrationResult;
+pub use open::{
+    ContextPacketSnapshotSchemaMigrationResult, ContinuationRotationSchemaMigrationResult,
+};
 pub(crate) use open::{
     Store, local_content_relative_path, persist_local_content_object, relative_path_to_locator,
     verify_local_content_file,

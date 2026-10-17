@@ -122,6 +122,8 @@ typed_uuid!(CommitId);
 typed_uuid!(ChangeSetId);
 typed_uuid!(CheckpointId);
 typed_uuid!(ContextPacketId);
+typed_uuid!(ContinuationScopeId);
+typed_uuid!(ContinuationRotationId);
 typed_uuid!(ImportId);
 typed_uuid!(LineageId);
 typed_uuid!(MigrationId);

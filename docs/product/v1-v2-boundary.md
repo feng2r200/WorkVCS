@@ -153,6 +153,30 @@ V1 includes:
   separate;
 - a Claim active-set invariant of none, one exclusive, or one-or-more shared,
   with explicit provenance-bearing mode change and takeover.
+- exact-scope continuation coordination for one Workspace, Work Branch, Task,
+  and exclusive Claim, with at most one listener and one active rotation;
+- listener-directed creation of a Work candidate, while listener, SubAgent,
+  side-chat, and pre-commit candidate conversations cannot become a new
+  rotation source; a committed candidate may source a later rotation only with
+  exact current carrier/Claim provenance;
+- idempotent rotation admission, explicit external-creation-unknown recovery,
+  durable dispatch before product invocation, immutable unknown reconciliation,
+  and an atomic scope-epoch compare-and-swap that transfers only the exact
+  Claim to the accepted candidate;
+- revisioned exact-Project opt-in that is reread at dispatch, a bounded
+  packet/initial-message contract that excludes the source transcript, and
+  target-authored acceptance which must be renewed after normal listener
+  replacement;
+- irreversible abort-only recovery for an inactive lost listener when normal
+  recovery is unsafe: it preserves the original attempt, allows only original
+  operation reconciliation and state-specific abort, and cannot create,
+  attach, accept, or commit;
+- candidate readiness that requires a non-forking operation-correlated
+  `create_thread` receipt and a stable normal Work thread in the exact requested
+  Project with user-visible, auditable, and interactable product-runtime
+  evidence, not merely a pending client ID, hidden task, or WorkVCS row; and
+- preservation of parallel Work Branches, Tasks, Claims, Sessions, and Git
+  worktrees without a Project-global writer or owner.
 
 ### Deterministic Agent interface
 

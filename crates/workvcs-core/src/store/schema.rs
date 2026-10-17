@@ -8,9 +8,21 @@ const CONTEXT_PACKET_SNAPSHOT_OBJECTS: &[(&str, &str)] = &[
     ("index", "idx_context_packet_snapshot_branch_head"),
     ("index", "idx_context_packet_snapshot_session_created"),
 ];
+const CONTINUATION_ROTATION_OBJECTS: &[(&str, &str)] = &[
+    ("table", "continuation_project_policy"),
+    ("table", "continuation_scope_runtime"),
+    ("table", "continuation_rotation"),
+    ("table", "continuation_rotation_runtime"),
+    ("table", "continuation_rotation_result"),
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ContextPacketSnapshotSchemaMigration {
+    pub(crate) added_schema_objects: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContinuationRotationSchemaMigration {
     pub(crate) added_schema_objects: Vec<String>,
 }
 
@@ -117,6 +129,97 @@ pub(crate) fn migrate_context_packet_snapshot_schema(
     })
 }
 
+pub(crate) fn migrate_continuation_rotation_schema(
+    connection: &Connection,
+) -> Result<ContinuationRotationSchemaMigration> {
+    let actual = schema_objects(connection)?;
+    let expected = expected_schema_objects()?;
+    if actual == expected {
+        return Ok(ContinuationRotationSchemaMigration {
+            added_schema_objects: Vec::new(),
+        });
+    }
+
+    let actual_without_continuation = actual
+        .iter()
+        .filter(|object| !is_continuation_rotation_object(object))
+        .cloned()
+        .collect::<Vec<_>>();
+    let expected_without_continuation = expected
+        .iter()
+        .filter(|object| !is_continuation_rotation_object(object))
+        .cloned()
+        .collect::<Vec<_>>();
+    if actual_without_continuation != expected_without_continuation {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "cannot migrate continuation rotation schema because the installed schema is not the recognized immediate predecessor: {}",
+            schema_mismatch_summary(&actual, &expected)
+        )));
+    }
+
+    let installed_continuation_objects = actual
+        .iter()
+        .filter(|object| is_continuation_rotation_object(object))
+        .count();
+    if installed_continuation_objects != 0
+        && installed_continuation_objects != CONTINUATION_ROTATION_OBJECTS.len()
+    {
+        return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+            "cannot migrate continuation rotation schema from a partial object set ({installed_continuation_objects}/{}); restore the pre-migration store or the complete schema before retrying",
+            CONTINUATION_ROTATION_OBJECTS.len()
+        )));
+    }
+
+    for object in actual
+        .iter()
+        .filter(|object| is_continuation_rotation_object(object))
+    {
+        let Some(expected_object) = expected.iter().find(|candidate| {
+            candidate.object_type == object.object_type && candidate.name == object.name
+        }) else {
+            return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                "cannot migrate continuation rotation schema because installed schema contains unexpected {} {}",
+                object.object_type, object.name
+            )));
+        };
+        if object != expected_object {
+            return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                "cannot migrate continuation rotation schema because installed {} {} does not match schema-v0.1",
+                object.object_type, object.name
+            )));
+        }
+    }
+
+    let missing = expected
+        .iter()
+        .filter(|object| is_continuation_rotation_object(object))
+        .filter(|object| {
+            !actual.iter().any(|candidate| {
+                candidate.object_type == object.object_type && candidate.name == object.name
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(ContinuationRotationSchemaMigration {
+            added_schema_objects: Vec::new(),
+        });
+    }
+
+    for object in &missing {
+        connection
+            .execute_batch(&object.sql)
+            .map_err(storage_error)?;
+    }
+
+    Ok(ContinuationRotationSchemaMigration {
+        added_schema_objects: missing
+            .into_iter()
+            .map(|object| format!("{}:{}", object.object_type, object.name))
+            .collect(),
+    })
+}
+
 fn expected_schema_objects() -> Result<Vec<SchemaObject>> {
     let connection = Connection::open_in_memory().map_err(storage_error)?;
     connection
@@ -127,6 +230,12 @@ fn expected_schema_objects() -> Result<Vec<SchemaObject>> {
 
 fn is_context_packet_snapshot_object(object: &SchemaObject) -> bool {
     CONTEXT_PACKET_SNAPSHOT_OBJECTS
+        .iter()
+        .any(|(object_type, name)| object.object_type == *object_type && object.name == *name)
+}
+
+fn is_continuation_rotation_object(object: &SchemaObject) -> bool {
+    CONTINUATION_ROTATION_OBJECTS
         .iter()
         .any(|(object_type, name)| object.object_type == *object_type && object.name == *name)
 }

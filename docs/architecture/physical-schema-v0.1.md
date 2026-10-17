@@ -11,10 +11,12 @@ schema in [schema-v0.1.sql](../../schema/schema-v0.1.sql). The install and
 bootstrap validation harness is
 [validate-schema-v0.1.sh](../../scripts/validate-schema-v0.1.sh).
 
-The executable schema contains the confirmed 68 v0.1 tables and correctness
+The executable schema contains the confirmed 73 v0.1 tables and correctness
 indexes only. The count includes the additive
 `context_packet_snapshot` runtime-provenance table accepted in
-[ADR-0434](../decisions/adr/0434-phase-4ls-context-packet-persistence.md). It
+[ADR-0434](../decisions/adr/0434-phase-4ls-context-packet-persistence.md) and
+the five continuation-policy/rotation tables accepted in
+[ADR-0534](../decisions/adr/0534-scoped-continuation-rotation.md). It
 deliberately does not add performance/query indexes, new table families, or
 storage-engine business implementation.
 
@@ -239,6 +241,27 @@ canonical packet JSON, and creation time. It is not a WorkState, Branch, Event,
 Claim, or relation authority. The Engine verifies the packet digest against the
 stored canonical packet JSON when loading a snapshot and rejects rows whose
 denormalized columns disagree with the packet JSON envelope or counts.
+
+ContinuationProjectPolicy stores exact-Project enablement, revision, actor,
+canonical trusted product-control-plane authority envelope, receipt digest,
+and update time.
+ContinuationScopeRuntime stores one exact Task scope's listener and revision,
+carrier, exclusive Claim, owner epoch, and activity time.
+ContinuationRotation stores the immutable initial listener/source, creation
+operation/request, Handoff, typed basis, durable policy reference, and bounded
+packet/message inputs. ContinuationRotationRuntime stores only one non-terminal
+projection per scope, including durable dispatch, immutable initial-unknown
+receipt, success receipt, candidate binding, current target acceptance, and
+prior-acceptance history. Its abort-only fields store the irreversible mode,
+monotonic recovery revision, and canonical recovery provenance without
+rewriting the original currentness. ContinuationRotationResult preserves those
+histories and recovery fields, terminal listener/currentness, candidate,
+resulting Claim, and result provenance. The Engine enforces policy revocation at dispatch, session/thread
+roles, current scope matching, recomputed Handoff/currentness guards, target
+identity single use, target-authored acceptance, and atomic Claim transfer in a
+`BEGIN IMMEDIATE` transaction. These tables are Runtime Coordination and
+runtime provenance, never a second Work-State or Project-wide ownership
+authority.
 
 ## Schema Assembly Review closure
 

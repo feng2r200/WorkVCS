@@ -192,12 +192,12 @@ pub use history::{
 };
 pub use identity::{
     BranchId, CaptureGroupId, CaptureId, ChangeSetId, CheckpointId, ClaimId, CommitId,
-    ContextPacketId, DeliveryId, Digest, EntityId, EntityVersionId, EventId, EvidenceId,
-    ExposureId, ExposureTransitionId, ExternalObjectId, ExternalRefId, ExternalVersionId, ImportId,
-    KnowledgeSpaceId, LineageId, MergeId, MergeItemId, MigrationId, OperationId, ProjectLinkId,
-    ProjectLocatorId, ProjectRefId, RegistryId, RegistryObservationId, RelationId,
-    RelationVersionId, ResourceId, ResourceObservationId, SessionDiffId, SessionId, StoreId,
-    WorkspaceId,
+    ContextPacketId, ContinuationRotationId, ContinuationScopeId, DeliveryId, Digest, EntityId,
+    EntityVersionId, EventId, EvidenceId, ExposureId, ExposureTransitionId, ExternalObjectId,
+    ExternalRefId, ExternalVersionId, ImportId, KnowledgeSpaceId, LineageId, MergeId, MergeItemId,
+    MigrationId, OperationId, ProjectLinkId, ProjectLocatorId, ProjectRefId, RegistryId,
+    RegistryObservationId, RelationId, RelationVersionId, ResourceId, ResourceObservationId,
+    SessionDiffId, SessionId, StoreId, WorkspaceId,
 };
 pub use runtime::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardAction, ClaimGuardOptions,
@@ -211,6 +211,18 @@ pub use runtime::{
     ContextPacket, ContextPacketEnvelope, ContextPacketListOptions, ContextPacketListResult,
     ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot, ContextPriority,
     ContextProfile,
+};
+pub use runtime::{
+    ContinuationAbortOnlyRecoveryOptions, ContinuationAbortOnlyRecoveryPreview,
+    ContinuationAbortOnlyRecoveryPreviewOptions, ContinuationCandidateAcceptOptions,
+    ContinuationCandidateAttachOptions, ContinuationCreationDispatchOptions,
+    ContinuationCreationResultOptions, ContinuationListenerReplaceOptions,
+    ContinuationProjectPolicySetOptions, ContinuationProjectPolicySnapshot,
+    ContinuationRotationAbortOptions, ContinuationRotationBeginOptions,
+    ContinuationRotationCommitOptions, ContinuationRotationCommitResult,
+    ContinuationRotationSnapshot, ContinuationRotationState, ContinuationScopeBindOptions,
+    ContinuationScopeCurrentnessOptions, ContinuationScopeCurrentnessSnapshot,
+    ContinuationScopeSnapshot, ContinuationSessionRole,
 };
 pub use runtime::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
@@ -267,5 +279,6 @@ pub use search::{
     search_item_context_json, search_lexical_terms, search_o200k_ordinary_token_count,
 };
 pub use store::{
-    ContextPacketSnapshotSchemaMigrationResult, StoreInfo, StoreInitOptions, StoreManifest,
+    ContextPacketSnapshotSchemaMigrationResult, ContinuationRotationSchemaMigrationResult,
+    StoreInfo, StoreInitOptions, StoreManifest,
 };

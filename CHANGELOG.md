@@ -15,6 +15,23 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
 
 ### Added
 
+- Exact-scope continuation rotation with revision-fenced listeners,
+  trusted-envelope revisioned exact-Project opt-in, durable pre-call dispatch,
+  operation-correlated visible Project-bound Work candidates, immutable
+  unknown-result reconciliation, bounded clean packets, target-authored
+  acceptance/reacceptance, a digest-validated embedded evaluator receipt with
+  gate summary and bounded evidence references, recomputed currentness,
+  terminal provenance, and atomic transfer of one exclusive Claim.
+- Transaction-time currentness revalidation at creation dispatch and global
+  created-thread reservation across listener and ordinary Work admission, with
+  only exact committed candidate/Claim provenance allowed to continue.
+- Irreversible abort-only listener recovery for an inactive lost listener when
+  normal recovery is unsafe, preserving the original attempt while allowing
+  only original-operation reconciliation and state-specific abort. A read-only
+  authority preview, transaction-time drift check, and append-only receipt
+  digest chain preserve every recovery while keeping routine snapshots bounded.
+- An explicit additive continuation-schema migration whose DDL and immutable
+  migration receipt commit atomically, including fault-injection coverage.
 - An opt-in, disabled-by-default per-user local automation coordinator with
   explicit compare-and-swap registration, dirty-only filesystem watching,
   capacity-one signal coalescing, inspectable watcher faults, bounded
@@ -54,6 +71,10 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
 
 ### Changed
 
+- Ordinary Claim release/transfer/forced takeover and Session end/switch now
+  preserve or retire continuation scopes atomically and cannot bypass an active
+  rotation; unrelated Tasks, Claims, Branches, Sessions, and Git worktrees stay
+  independent.
 - The daemon watcher now ignores read-only filesystem access notifications
   while retaining mutation, rescan, and backend-error signals, preventing
   Linux read-feedback reconciliation loops without hiding incomplete results.

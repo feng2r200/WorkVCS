@@ -89,6 +89,8 @@ pub enum ErrorCode {
     BranchNotFound,
     ClaimInvalid,
     ClaimNotFound,
+    ContinuationInvalid,
+    ContinuationNotFound,
     EntityNotFound,
     EntityTransitionInvalid,
     GoalInvalid,
@@ -154,6 +156,8 @@ impl ErrorCode {
             Self::BranchNotFound => "branch_not_found",
             Self::ClaimInvalid => "claim_invalid",
             Self::ClaimNotFound => "claim_not_found",
+            Self::ContinuationInvalid => "continuation_invalid",
+            Self::ContinuationNotFound => "continuation_not_found",
             Self::EntityNotFound => "entity_not_found",
             Self::EntityTransitionInvalid => "entity_transition_invalid",
             Self::GoalInvalid => "goal_invalid",
@@ -307,6 +311,12 @@ pub enum WorkVcsError {
 
     #[error("claim not found: {0}")]
     ClaimNotFound(String),
+
+    #[error("continuation invalid: {0}")]
+    ContinuationInvalid(String),
+
+    #[error("continuation not found: {0}")]
+    ContinuationNotFound(String),
 
     #[error("entity not found: {0}")]
     EntityNotFound(String),
@@ -464,6 +474,8 @@ impl WorkVcsError {
             Self::BranchNotFound(_) => ErrorCode::BranchNotFound,
             Self::ClaimInvalid(_) => ErrorCode::ClaimInvalid,
             Self::ClaimNotFound(_) => ErrorCode::ClaimNotFound,
+            Self::ContinuationInvalid(_) => ErrorCode::ContinuationInvalid,
+            Self::ContinuationNotFound(_) => ErrorCode::ContinuationNotFound,
             Self::EntityNotFound(_) => ErrorCode::EntityNotFound,
             Self::EntityTransitionInvalid(_) => ErrorCode::EntityTransitionInvalid,
             Self::GoalInvalid(_) => ErrorCode::GoalInvalid,
@@ -558,6 +570,8 @@ impl WorkVcsError {
             }
             Self::ClaimInvalid(_)
             | Self::ClaimNotFound(_)
+            | Self::ContinuationInvalid(_)
+            | Self::ContinuationNotFound(_)
             | Self::SessionInvalid(_)
             | Self::SessionNotFound(_) => ErrorCategory::Runtime,
             Self::StoreAlreadyInitialized(_)

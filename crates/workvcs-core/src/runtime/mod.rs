@@ -1,5 +1,6 @@
 mod claim;
 mod context;
+mod continuation;
 mod merge;
 mod next;
 mod runnable;
@@ -18,6 +19,18 @@ pub use context::{
     ContextPacket, ContextPacketEnvelope, ContextPacketListOptions, ContextPacketListResult,
     ContextPacketOptions, ContextPacketSaveResult, ContextPacketSnapshot, ContextPriority,
     ContextProfile,
+};
+pub use continuation::{
+    ContinuationAbortOnlyRecoveryOptions, ContinuationAbortOnlyRecoveryPreview,
+    ContinuationAbortOnlyRecoveryPreviewOptions, ContinuationCandidateAcceptOptions,
+    ContinuationCandidateAttachOptions, ContinuationCreationDispatchOptions,
+    ContinuationCreationResultOptions, ContinuationListenerReplaceOptions,
+    ContinuationProjectPolicySetOptions, ContinuationProjectPolicySnapshot,
+    ContinuationRotationAbortOptions, ContinuationRotationBeginOptions,
+    ContinuationRotationCommitOptions, ContinuationRotationCommitResult,
+    ContinuationRotationSnapshot, ContinuationRotationState, ContinuationScopeBindOptions,
+    ContinuationScopeCurrentnessOptions, ContinuationScopeCurrentnessSnapshot,
+    ContinuationScopeSnapshot, ContinuationSessionRole,
 };
 pub use merge::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
@@ -47,6 +60,15 @@ pub(crate) use claim::{
 pub(crate) use context::{
     context_overview, context_packet, context_packet_snapshot, context_packet_snapshots,
     save_context_packet,
+};
+pub(crate) use continuation::{
+    abort_continuation_rotation, accept_continuation_candidate, attach_continuation_candidate,
+    begin_continuation_rotation, bind_continuation_scope, commit_continuation_rotation,
+    continuation_project_policy, continuation_rotation, continuation_scope,
+    dispatch_continuation_creation, preview_abort_only_recovery,
+    preview_continuation_scope_currentness, record_continuation_creation_result,
+    recover_continuation_listener_abort_only, replace_continuation_listener,
+    set_continuation_project_policy,
 };
 pub(crate) use merge::{
     abort_merge, continue_merge, freeze_merge_resolutions, merge_attempt, merge_attempts,

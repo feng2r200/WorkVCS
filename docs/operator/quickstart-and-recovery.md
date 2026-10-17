@@ -806,6 +806,60 @@ The command is intentionally narrow. It only adds the context packet snapshot
 table and indexes for a recognized pre-4LS Store and records migration
 provenance. Other schema drift remains a stop condition.
 
+For a Store on the recognized immediate predecessor that has not yet received
+the scoped continuation tables, run the separate explicit additive migration:
+
+```bash
+workvcs store migrate-continuation-rotation "$STORE"
+```
+
+If both additions are missing, migrate context packet snapshots first, then
+continuation rotation. Each command rejects unrelated or mismatched schema
+drift and records its own migration provenance. Continuation schema DDL and its
+migration receipt commit in one transaction, so an interrupted receipt write
+does not leave an unreceipted schema addition. Ordinary Store open never
+migrates silently.
+
+The continuation protocol coordinates a product-created conversation; it does
+not create one. Before admission, require a current enabled exact-Project
+policy backed by a trusted product-control-plane envelope that binds separate
+user-authorization and Project-membership receipt digests. Before the product call, persist
+`creation-dispatch`; it rechecks that policy so revocation fences the effect.
+The decision, request, and dispatch bind a bounded reference packet and exact
+initial-message digest and require `source_transcript_included=false`.
+Dispatch also refreshes the Branch projection and recomputes the admitted
+scope currentness in its transaction; relevant drift is rejected before the
+product adapter may create a conversation.
+
+Before `candidate-attach`, require a resolved stable `thread_id` for a normal
+Work conversation under the exact requested Project, a non-forking
+`create_thread` receipt correlated to the admitted operation, request, and
+dispatch, exact Project-binding provenance, and affirmative user-visible,
+auditable, and interactive evidence. An unresolved `clientThreadId` remains an
+immutable unknown external result and must not be blindly retried; later
+resolution must bind that unknown receipt and identity. The target Session must
+author `candidate-accept` for the exact Handoff/packet before commit. A thread
+already recorded as a created target cannot enter as a listener or ordinary
+Work carrier/source, including after non-authoritative retention; only its
+exact committed candidate and resulting Claim may source another rotation.
+Listener
+normal replacement uses a monotonic revision and may recover an active attempt
+only without rebasing other currentness drift; replacement after acceptance
+archives the old acceptance and requires the target to accept again. If the
+old listener is inactive and currentness has drifted, use the separate
+abort-only recovery preview before constructing authority, then execute the
+recovery command against those exact observed values. Execution rechecks the
+previewed currentness under the mutation transaction. It preserves the original attempt, forbids new
+dispatch/attachment/acceptance/commit, permits only reconciliation of its
+immutable product operation, and requires state-specific abort before a fresh
+rotation. Routine readback remains fixed-size: it exposes the recovery count,
+latest receipt, and digest-chain head, while each full recovery authority and
+evidence document remains in append-only
+`continuation.listener_recovered_abort_only` Events for bounded audit reads.
+See the
+[tool reference continuation pattern](workvcs-tool-reference.md#scoped-conversation-continuation-pattern)
+for the exact command sequence.
+
 ## Minimal Work Loop
 
 Create a Store and Workspace:

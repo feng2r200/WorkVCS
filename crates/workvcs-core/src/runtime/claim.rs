@@ -1,3 +1,4 @@
+use super::continuation;
 use super::runnable::{self, RunnableTaskClaimCoordination, RunnableTasksOptions};
 use super::session::{self, SessionFocus, SessionLifecycleState};
 use crate::canonical::{CanonicalValue, canonical_bytes};
@@ -324,6 +325,16 @@ pub struct ClaimTransferResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClaimTransferTransactionResult {
+    pub(super) previous_claim_id: ClaimId,
+    pub(super) claim_id: ClaimId,
+    pub(super) from_session_id: SessionId,
+    pub(super) to_session_id: SessionId,
+    pub(super) transferred_at_us: i64,
+    pub(super) previous_last_activity_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimForceTakeoverResult {
     pub previous_claim_id: ClaimId,
     pub claim_id: ClaimId,
@@ -609,6 +620,12 @@ pub(crate) fn release_claim(
         )));
     }
     ensure_claim_runtime_exists(&transaction, options.claim_id())?;
+    continuation::retire_scope_for_claim_change(
+        &transaction,
+        options.claim_id(),
+        options.session_id(),
+        now_us,
+    )?;
     release_claim_runtime_for_row(&transaction, options.claim_id(), &claim, now_us)?;
     session::update_session_activity(&transaction, options.session_id(), now_us)?;
     transaction.commit().map_err(storage_error)?;
@@ -626,22 +643,47 @@ pub(crate) fn transfer_claim(
     options: &ClaimTransferOptions,
 ) -> Result<ClaimTransferResult> {
     connection.verify_foreign_keys()?;
+    let now_us = current_epoch_micros()?;
+    let transaction = connection
+        .inner_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    continuation::retire_scope_for_claim_change(
+        &transaction,
+        options.claim_id(),
+        options.from_session_id(),
+        now_us,
+    )?;
+    let transferred = transfer_claim_in_transaction(&transaction, options, now_us)?;
+    transaction.commit().map_err(storage_error)?;
+
+    Ok(ClaimTransferResult {
+        previous_claim_id: transferred.previous_claim_id,
+        claim_id: transferred.claim_id,
+        from_session_id: transferred.from_session_id,
+        to_session_id: transferred.to_session_id,
+        transferred_at_us: transferred.transferred_at_us,
+        previous_last_activity_at_us: transferred.previous_last_activity_at_us,
+        previous_state: claim_snapshot(connection, transferred.previous_claim_id)?,
+        state: claim_snapshot(connection, transferred.claim_id)?,
+    })
+}
+
+pub(super) fn transfer_claim_in_transaction(
+    transaction: &Transaction<'_>,
+    options: &ClaimTransferOptions,
+    now_us: i64,
+) -> Result<ClaimTransferTransactionResult> {
     if options.from_session_id() == options.to_session_id() {
         return Err(WorkVcsError::ClaimInvalid(
             "claim transfer source and target sessions must differ".to_owned(),
         ));
     }
-    let now_us = current_epoch_micros()?;
-
-    let transaction = connection
-        .inner_mut()
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage_error)?;
     let from_active =
-        session::load_active_session_runtime_for_update(&transaction, options.from_session_id())?;
+        session::load_active_session_runtime_for_update(transaction, options.from_session_id())?;
     let to_active =
-        session::load_active_session_runtime_for_update(&transaction, options.to_session_id())?;
-    let previous_claim = load_claim(&transaction, options.claim_id())?;
+        session::load_active_session_runtime_for_update(transaction, options.to_session_id())?;
+    let previous_claim = load_claim(transaction, options.claim_id())?;
     if previous_claim.session_id != options.from_session_id() {
         return Err(WorkVcsError::ClaimInvalid(format!(
             "claim {} is owned by session {}, not transfer source {}",
@@ -665,11 +707,11 @@ pub(crate) fn transfer_claim(
         &previous_claim,
     )?;
     let previous_last_activity_at_us =
-        require_active_claim_runtime(&transaction, options.claim_id())?;
+        require_active_claim_runtime(transaction, options.claim_id())?;
 
-    delete_claim_runtime_row(&transaction, options.claim_id())?;
+    delete_claim_runtime_row(transaction, options.claim_id())?;
     ensure_active_claim_mode_allowed(
-        &transaction,
+        transaction,
         previous_claim.workspace_id,
         previous_claim.branch_id,
         previous_claim.task_entity_id,
@@ -679,7 +721,7 @@ pub(crate) fn transfer_claim(
 
     let claim_id = ClaimId::new_v7();
     insert_claim_occurrence(
-        &transaction,
+        transaction,
         claim_id,
         options.to_session_id(),
         &previous_claim,
@@ -693,26 +735,23 @@ pub(crate) fn transfer_claim(
         options.to_session_id(),
     )?;
     insert_claim_replacement_event(
-        &transaction,
+        transaction,
         options.from_session_id(),
         previous_claim.workspace_id,
         CLAIM_TRANSFERRED_EVENT_KIND,
         now_us,
         event_payload_json,
     )?;
-    session::update_session_activity(&transaction, options.from_session_id(), now_us)?;
-    session::update_session_activity(&transaction, options.to_session_id(), now_us)?;
-    transaction.commit().map_err(storage_error)?;
+    session::update_session_activity(transaction, options.from_session_id(), now_us)?;
+    session::update_session_activity(transaction, options.to_session_id(), now_us)?;
 
-    Ok(ClaimTransferResult {
+    Ok(ClaimTransferTransactionResult {
         previous_claim_id: options.claim_id(),
         claim_id,
         from_session_id: options.from_session_id(),
         to_session_id: options.to_session_id(),
         transferred_at_us: now_us,
         previous_last_activity_at_us,
-        previous_state: claim_snapshot(connection, options.claim_id())?,
-        state: claim_snapshot(connection, claim_id)?,
     })
 }
 
@@ -755,6 +794,13 @@ pub(crate) fn force_takeover_claim(
             previous_claim.session_id
         )));
     }
+
+    continuation::retire_scope_for_claim_change(
+        &transaction,
+        options.claim_id(),
+        options.session_id(),
+        now_us,
+    )?;
 
     delete_claim_runtime_row(&transaction, options.claim_id())?;
     ensure_active_claim_mode_allowed(

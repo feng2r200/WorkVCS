@@ -18,7 +18,7 @@ conversation. WorkVCS covers the missing layer between them: the evolving
 review, and restore work.
 
 > **Project status:** the repository contains a locally validated bounded V1
-> implementation. The current source package version is `1.4.5`, and no public
+> implementation. The current source package version is `1.6.0`, and no public
 > release has been made. The source is licensed under Apache-2.0; selecting a
 > release version, publishing artifacts, and making release commitments remain
 > separate decisions.
@@ -37,6 +37,10 @@ semantic, historical-source and multi-ProjectRef queries remain derived reads:
 canonical lifecycle, currentness and authorization stay separate. See
 [ADR-0524](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md)
 and the [local search architecture](docs/architecture/local-derived-search.md).
+It also adds the opt-in, exact-scope continuation protocol specified by
+[ADR-0534](docs/decisions/adr/0534-scoped-continuation-rotation.md). This local
+candidate does not itself create Codex conversations or establish real-product
+acceptance.
 
 ## What makes it different
 

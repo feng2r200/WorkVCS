@@ -33,7 +33,7 @@ SELECT 'application_id', (application_id = 1465271123)
 FROM pragma_application_id();
 
 INSERT INTO assert_true
-SELECT 'table count', count(*) = 68
+SELECT 'table count', count(*) = 73
 FROM sqlite_schema
 WHERE type = 'table'
   AND name NOT LIKE 'sqlite_%';
@@ -105,6 +105,65 @@ SELECT 'context packet snapshot branch head index exists',
 FROM sqlite_schema
 WHERE type = 'index'
   AND name = 'idx_context_packet_snapshot_branch_head';
+
+INSERT INTO assert_true
+SELECT 'continuation rotation tables exist',
+       count(*) = 5
+FROM sqlite_schema
+WHERE type = 'table'
+  AND name IN (
+      'continuation_project_policy',
+      'continuation_scope_runtime',
+      'continuation_rotation',
+      'continuation_rotation_runtime',
+      'continuation_rotation_result'
+  );
+
+INSERT INTO assert_true
+SELECT 'continuation project policy is exact-project revisioned provenance',
+       count(*) = 1
+FROM sqlite_schema
+WHERE type = 'table'
+  AND name = 'continuation_project_policy'
+  AND sql LIKE '%project_id TEXT NOT NULL PRIMARY KEY%'
+  AND sql LIKE '%revision INTEGER NOT NULL%'
+  AND sql LIKE '%authority_json TEXT NOT NULL%'
+  AND sql LIKE '%receipt_digest BLOB NOT NULL%';
+
+INSERT INTO assert_true
+SELECT 'continuation scope uses exact local epoch and distinct listener',
+       count(*) = 1
+FROM sqlite_schema
+WHERE type = 'table'
+  AND name = 'continuation_scope_runtime'
+  AND sql LIKE '%owner_epoch%owner_epoch >= 1%'
+  AND sql LIKE '%listener_session_id <> carrier_session_id%';
+
+INSERT INTO assert_true
+SELECT 'continuation runtime preserves unknown and attached phases',
+       count(*) = 1
+FROM sqlite_schema
+WHERE type = 'table'
+  AND name = 'continuation_rotation_runtime'
+  AND sql LIKE '%creation_unknown%'
+  AND sql LIKE '%candidate_attached%'
+  AND sql LIKE '%abort_only%'
+  AND sql LIKE '%recovery_revision%'
+  AND sql LIKE '%recovery_json%'
+  AND sql LIKE '%UNIQUE(workspace_id, branch_id, task_entity_id)%';
+
+INSERT INTO assert_true
+SELECT 'continuation result separates committed and aborted',
+       count(*) = 1
+FROM sqlite_schema
+WHERE type = 'table'
+  AND name = 'continuation_rotation_result'
+  AND sql LIKE '%committed%'
+  AND sql LIKE '%aborted%'
+  AND sql LIKE '%abort_only%'
+  AND sql LIKE '%recovery_revision%'
+  AND sql LIKE '%recovery_json%'
+  AND sql LIKE '%resulting_claim_id IS NULL%';
 
 INSERT INTO assert_true
 SELECT 'projection commit digest pair check exists',

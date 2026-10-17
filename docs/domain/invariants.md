@@ -996,3 +996,87 @@ immutable round.
 Catalog membership, ranking and reuse cannot create canonical Knowledge,
 currentness, ownership, authorization, cross-Store mutation or a mutable global
 KnowledgeSpace.
+
+### INV-120 — Continuation ownership is exact-scope, never Project-global
+
+A ContinuationScope coordinates one Workspace, Work Branch, Task, and current
+exclusive Claim. Its listener, carrier, and owner epoch do not create a
+Project owner, Branch-wide writer lock, or restriction on sibling Tasks,
+Claims, Branches, Sessions, or Git worktrees.
+
+### INV-121 — Listener and candidate roles are asymmetric
+
+One ContinuationScope has at most one active listener, fenced by a monotonic
+listener revision. Only that listener may admit a rotation, and it may attach
+only a Work candidate. A listener cannot create or attach another listener.
+SubAgent and side-chat Sessions cannot be a
+rotation actor, source carrier, or candidate. A candidate has no transferred
+Claim and cannot initiate another rotation before commit; commit promotes it
+only to the current carrier of the exact scope. Candidate readiness requires a
+resolved normal Work conversation under the exact specified Project that is
+user-visible, auditable, and interactable; an unresolved client identity,
+hidden/background task, internal candidate identity, or WorkVCS-only record is
+not ready. A Session whose immutable role is `work_candidate` may source a
+later rotation only after a committed result proves it is the exact current
+carrier with the exact resulting exclusive Claim.
+Any thread recorded as a created target is permanently excluded from listener
+and ordinary Work carrier/source admission. Only its exact committed candidate
+Session and resulting Claim may source later work in that exact scope.
+
+The listener may create a replacement Work conversation for the monitored
+scope, but may not create or rotate into another listener. Candidate acceptance
+must be authored by the target Session and bind the current listener revision,
+Handoff/currentness, bounded continuation-packet digest, and initial-message
+digest. Listener replacement after acceptance preserves the prior acceptance
+as history and requires the same target to accept again before commit.
+
+### INV-122 — Rotation commit is fenced and unknown creation is not retried
+
+One scope has at most one active rotation. Admission requires a current enabled
+exact-Project WorkVCS policy backed by a trusted product-control-plane envelope
+binding separate user-authorization and Project-membership receipts, and is
+idempotent. It binds the policy revision/receipt, listener revision, source
+carrier, source Claim, owner epoch, Handoff digest, creation operation/request,
+bounded packet and initial-message digests, typed currentness basis, and a
+canonical evaluator receipt whose digest binds the complete gate summary and
+one to 32 bounded evidence references.
+Dispatch is persisted before product invocation, rereads the policy, refreshes
+the Branch projection, and recomputes admitted currentness so revocation or
+relevant drift prevents the external effect; source transcript injection is
+forbidden. Currentness is
+recomputed from Store projections and Runtime state, not accepted as a caller
+echo. An unknown external creation result and pending identity remain immutable
+until reconciled; reconciliation binds their digest and never authorizes a new
+create identity. A target thread is single-use from its first success receipt,
+including an attempt later aborted before attachment. Commit atomically compare-and-swaps
+the exact scope and transfers exactly one exclusive Claim, then increments the
+scope-local epoch. Claim/Session departure paths cannot bypass an active
+rotation. Compaction and Token pressure are policy signals and cannot mutate
+this runtime state by themselves.
+
+### INV-123 — Abort-only recovery can terminate but never continue a rotation
+
+When an inactive listener cannot normally recover an active rotation, the
+replacement listener may enter irreversible abort-only recovery under exact
+scope, listener revision, recovery revision, and owner-epoch compare-and-swap.
+The recovery preserves the original decision, Handoff, currentness, Claim,
+candidate, receipts, and acceptance, while separately recording observed
+currentness, drift status, authority, and evidence. It may reconcile only the
+already-admitted immutable creation operation, after which state-specific abort
+is required. Dispatch, candidate attachment, acceptance, and commit fail before
+mutation. Replacement of a later lost recovery listener advances both
+monotonic revisions without leaving abort-only mode. The source Claim remains
+authoritative until ordinary post-abort lifecycle operations act on it. Each
+successful recovery appends its complete authority and evidence as an immutable
+Event and advances a digest chain; runtime and terminal projections expose only
+the count, latest receipt, and chain head. Recovery preview is read-only, and
+the apply step must transactionally re-observe exactly the authority-bound
+currentness before mutation.
+
+### INV-124 — Dispatch revalidates the last reversible currentness boundary
+
+Immediately before durable dispatch authorizes the external conversation
+creation call, WorkVCS refreshes the Branch projection and recomputes exact
+admitted scope currentness. Relevant source, Handoff, dependency, Claim, scope,
+or listener drift fails while the rotation remains pending; unrelated work does
+not. No stale pending admission may cross the product-effect boundary.

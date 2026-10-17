@@ -78,9 +78,18 @@ use workvcs_core::{
     CommitSnapshot, ContextItemCategory, ContextOverview, ContextOverviewOptions, ContextPacket,
     ContextPacketId, ContextPacketListOptions, ContextPacketListResult, ContextPacketOptions,
     ContextPacketSaveResult, ContextPacketSnapshot, ContextPacketSnapshotSchemaMigrationResult,
-    ContextProfile, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions, Digest, Engine,
-    EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId, EventId,
-    EventListOptions, EventListResult, EventSnapshot, EvidenceContentInput,
+    ContextProfile, ContinuationAbortOnlyRecoveryOptions,
+    ContinuationAbortOnlyRecoveryPreviewOptions, ContinuationCandidateAcceptOptions,
+    ContinuationCandidateAttachOptions, ContinuationCreationDispatchOptions,
+    ContinuationCreationResultOptions, ContinuationListenerReplaceOptions,
+    ContinuationProjectPolicySetOptions, ContinuationProjectPolicySnapshot,
+    ContinuationRotationAbortOptions, ContinuationRotationBeginOptions,
+    ContinuationRotationCommitOptions, ContinuationRotationId,
+    ContinuationRotationSchemaMigrationResult, ContinuationRotationSnapshot,
+    ContinuationScopeBindOptions, ContinuationScopeCurrentnessOptions, ContinuationScopeId,
+    ContinuationScopeSnapshot, DecisionRecordSupersedeCommit, DecisionRecordSupersedeOptions,
+    Digest, Engine, EntityId, EntityTransitionCommit, EntityTransitionOptions, EntityVersionId,
+    EventId, EventListOptions, EventListResult, EventSnapshot, EvidenceContentInput,
     EvidenceContentReadResult, EvidenceContentSnapshot, EvidenceCreateOptions,
     EvidenceCreateResult, EvidenceId, EvidenceListOptions, EvidenceListResult, EvidenceSnapshot,
     ExposureId, ExposureTransitionId, ExternalObjectId, ExternalObjectRefListOptions,
@@ -216,6 +225,7 @@ Commands:
   session       Manage sessions and focus
   handoff       Author and inspect focused handoffs
   claim         Claim and release runtime work
+  continuation  Coordinate exact-scope Work conversation continuation
   context       Show the current session context
   resume        Show compact read-only recovery context
   capture       Atomically record standalone cognition without requiring a Session or Plan
@@ -761,6 +771,10 @@ enum Command {
     Claim {
         #[command(subcommand)]
         command: ClaimCommand,
+    },
+    Continuation {
+        #[command(subcommand)]
+        command: ContinuationCommand,
     },
     Context {
         #[arg(value_name = "STORE")]
@@ -1514,6 +1528,14 @@ enum StoreCommand {
     },
     #[command(name = "migrate-context-packet-snapshot")]
     MigrateContextPacketSnapshot {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+
+        #[arg(long)]
+        expected_migrated: Option<bool>,
+    },
+    #[command(name = "migrate-continuation-rotation")]
+    MigrateContinuationRotation {
         #[arg(value_name = "STORE")]
         store: PathBuf,
 
@@ -6256,6 +6278,246 @@ enum ClaimCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum ContinuationCommand {
+    ProjectPolicySet {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        project_id: String,
+        #[arg(long)]
+        expected_revision: i64,
+        #[arg(long, action = clap::ArgAction::Set, required = true)]
+        enabled: bool,
+        #[arg(long)]
+        authority_json: String,
+    },
+    ProjectPolicyShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        project_id: String,
+    },
+    ScopeBind {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        workspace: String,
+        #[arg(long)]
+        branch: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long)]
+        listener: String,
+        #[arg(long)]
+        carrier: String,
+        #[arg(long)]
+        claim: String,
+    },
+    ScopeShow {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        workspace: String,
+        #[arg(long)]
+        branch: String,
+        #[arg(long)]
+        task: String,
+    },
+    ScopeCurrentness {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        source: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        expected_scope: String,
+        #[arg(long)]
+        expected_listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        expected_owner_epoch: i64,
+        #[arg(long)]
+        handoff_digest: String,
+        #[arg(long)]
+        basis_json: String,
+    },
+    ListenerReplace {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        workspace: String,
+        #[arg(long)]
+        branch: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long)]
+        expected_scope: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        expected_listener: String,
+        #[arg(long)]
+        replacement_listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        expected_owner_epoch: i64,
+        #[arg(long)]
+        authority_json: String,
+    },
+    ListenerRecoverAbortOnly {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        expected_scope: String,
+        #[arg(long)]
+        actor: String,
+        #[arg(long)]
+        expected_listener: String,
+        #[arg(long)]
+        replacement_listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        expected_recovery_revision: i64,
+        #[arg(long)]
+        expected_owner_epoch: i64,
+        #[arg(long)]
+        authority_json: String,
+    },
+    ListenerRecoverAbortOnlyPreview {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        expected_scope: String,
+        #[arg(long)]
+        expected_listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        expected_recovery_revision: i64,
+        #[arg(long)]
+        expected_owner_epoch: i64,
+    },
+    Begin {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        listener: String,
+        #[arg(long)]
+        source: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        expected_scope: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        expected_owner_epoch: i64,
+        #[arg(long)]
+        idempotency_key: String,
+        #[arg(long)]
+        creation_operation_id: String,
+        #[arg(long)]
+        handoff_digest: String,
+        #[arg(long)]
+        basis_json: String,
+        #[arg(long)]
+        policy_decision_json: String,
+        #[arg(long)]
+        creation_request_json: String,
+    },
+    CreationDispatch {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        dispatch_json: String,
+    },
+    CreationResult {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        receipt_json: String,
+    },
+    CandidateAttach {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        candidate: String,
+        #[arg(long)]
+        binding_json: String,
+    },
+    CandidateAccept {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        candidate: String,
+        #[arg(long)]
+        acceptance_json: String,
+    },
+    Commit {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        expected_owner_epoch: i64,
+        #[arg(long)]
+        expected_handoff_digest: String,
+    },
+    Abort {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+        #[arg(long)]
+        listener: String,
+        #[arg(long)]
+        expected_listener_revision: i64,
+        #[arg(long)]
+        rationale_json: String,
+    },
+    Show {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        rotation: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum RunnableCommand {
     Tasks {
         #[arg(value_name = "STORE")]
@@ -7545,6 +7807,28 @@ fn run(cli: Cli) -> Result<String> {
                             if result.migrated != expected_migrated {
                                 return Err(WorkVcsError::StoreBootstrapInvalid(format!(
                                     "context packet snapshot schema migrated {} does not match expected {}",
+                                    result.migrated, expected_migrated
+                                )));
+                            }
+                            output.push_str("migrated_match_expected=true\n");
+                        }
+                        Ok(())
+                    },
+                )
+            }
+            StoreCommand::MigrateContinuationRotation {
+                store,
+                expected_migrated,
+            } => {
+                let result = Engine::migrate_continuation_rotation_schema(store)?;
+                validate_committed_result(
+                    "store.migrate-continuation-rotation",
+                    render_continuation_rotation_schema_migration(&result)?,
+                    |output| {
+                        if let Some(expected_migrated) = expected_migrated {
+                            if result.migrated != expected_migrated {
+                                return Err(WorkVcsError::StoreBootstrapInvalid(format!(
+                                    "continuation rotation schema migrated {} does not match expected {}",
                                     result.migrated, expected_migrated
                                 )));
                             }
@@ -13076,6 +13360,7 @@ fn run(cli: Cli) -> Result<String> {
             Ok(output)
         }
         Command::Handoff { command } => run_handoff(command),
+        Command::Continuation { command } => run_continuation(command),
         Command::Claim {
             command:
                 ClaimCommand::Show {
@@ -15334,6 +15619,348 @@ struct HandoffScopeFields {
     session_lifecycle_state: SessionLifecycleState,
     session_diff_id: Option<SessionDiffId>,
     focus_entity_id: Option<EntityId>,
+}
+
+fn run_continuation(command: ContinuationCommand) -> Result<String> {
+    match command {
+        ContinuationCommand::ProjectPolicySet {
+            store,
+            actor,
+            project_id,
+            expected_revision,
+            enabled,
+            authority_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let policy = engine.set_continuation_project_policy(
+                ContinuationProjectPolicySetOptions::new(
+                    SessionId::parse_canonical(&actor)?,
+                    project_id,
+                    expected_revision,
+                    enabled,
+                    parse_cli_object("continuation authority_json", &authority_json)?,
+                )?,
+            )?;
+            render_continuation_project_policy(&policy)
+        }
+        ContinuationCommand::ProjectPolicyShow { store, project_id } => {
+            let engine = Engine::open(store)?;
+            render_continuation_project_policy(&engine.continuation_project_policy(&project_id)?)
+        }
+        ContinuationCommand::ScopeBind {
+            store,
+            workspace,
+            branch,
+            task,
+            listener,
+            carrier,
+            claim,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let scope = engine.bind_continuation_scope(ContinuationScopeBindOptions::new(
+                WorkspaceId::parse_canonical(&workspace)?,
+                BranchId::parse_canonical(&branch)?,
+                EntityId::parse_canonical(&task)?,
+                SessionId::parse_canonical(&listener)?,
+                SessionId::parse_canonical(&carrier)?,
+                ClaimId::parse_canonical(&claim)?,
+            ))?;
+            Ok(render_continuation_scope(&scope))
+        }
+        ContinuationCommand::ScopeShow {
+            store,
+            workspace,
+            branch,
+            task,
+        } => {
+            let engine = Engine::open(store)?;
+            let scope = engine.continuation_scope(
+                WorkspaceId::parse_canonical(&workspace)?,
+                BranchId::parse_canonical(&branch)?,
+                EntityId::parse_canonical(&task)?,
+            )?;
+            Ok(render_continuation_scope(&scope))
+        }
+        ContinuationCommand::ScopeCurrentness {
+            store,
+            source,
+            claim,
+            expected_scope,
+            expected_listener,
+            expected_listener_revision,
+            expected_owner_epoch,
+            handoff_digest,
+            basis_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let result = engine.preview_continuation_scope_currentness(
+                ContinuationScopeCurrentnessOptions::new(
+                    SessionId::parse_canonical(&source)?,
+                    ClaimId::parse_canonical(&claim)?,
+                    ContinuationScopeId::parse_canonical(&expected_scope)?,
+                    SessionId::parse_canonical(&expected_listener)?,
+                    expected_listener_revision,
+                    expected_owner_epoch,
+                    Digest::from_hex(&handoff_digest)?,
+                    parse_cli_object("continuation basis_json", &basis_json)?,
+                )?,
+            )?;
+            let mut output = render_continuation_scope(&result.scope);
+            writeln!(
+                output,
+                "scope.scope_currentness_digest={}",
+                result.scope_currentness_digest
+            )
+            .expect("write to String");
+            Ok(output)
+        }
+        ContinuationCommand::ListenerReplace {
+            store,
+            workspace,
+            branch,
+            task,
+            expected_scope,
+            actor,
+            expected_listener,
+            replacement_listener,
+            expected_listener_revision,
+            expected_owner_epoch,
+            authority_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let scope =
+                engine.replace_continuation_listener(ContinuationListenerReplaceOptions::new(
+                    WorkspaceId::parse_canonical(&workspace)?,
+                    BranchId::parse_canonical(&branch)?,
+                    EntityId::parse_canonical(&task)?,
+                    ContinuationScopeId::parse_canonical(&expected_scope)?,
+                    SessionId::parse_canonical(&actor)?,
+                    SessionId::parse_canonical(&expected_listener)?,
+                    SessionId::parse_canonical(&replacement_listener)?,
+                    expected_listener_revision,
+                    expected_owner_epoch,
+                    parse_cli_object("continuation authority_json", &authority_json)?,
+                )?)?;
+            Ok(render_continuation_scope(&scope))
+        }
+        ContinuationCommand::ListenerRecoverAbortOnly {
+            store,
+            rotation,
+            expected_scope,
+            actor,
+            expected_listener,
+            replacement_listener,
+            expected_listener_revision,
+            expected_recovery_revision,
+            expected_owner_epoch,
+            authority_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let rotation = engine.recover_continuation_listener_abort_only(
+                ContinuationAbortOnlyRecoveryOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    ContinuationScopeId::parse_canonical(&expected_scope)?,
+                    SessionId::parse_canonical(&actor)?,
+                    SessionId::parse_canonical(&expected_listener)?,
+                    SessionId::parse_canonical(&replacement_listener)?,
+                    expected_listener_revision,
+                    expected_recovery_revision,
+                    expected_owner_epoch,
+                    parse_cli_object("continuation authority_json", &authority_json)?,
+                )?,
+            )?;
+            render_continuation_rotation(&rotation)
+        }
+        ContinuationCommand::ListenerRecoverAbortOnlyPreview {
+            store,
+            rotation,
+            expected_scope,
+            expected_listener,
+            expected_listener_revision,
+            expected_recovery_revision,
+            expected_owner_epoch,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let preview = engine.preview_abort_only_recovery(
+                ContinuationAbortOnlyRecoveryPreviewOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    ContinuationScopeId::parse_canonical(&expected_scope)?,
+                    SessionId::parse_canonical(&expected_listener)?,
+                    expected_listener_revision,
+                    expected_recovery_revision,
+                    expected_owner_epoch,
+                )?,
+            )?;
+            Ok(format!(
+                "rotation_id={}\nscope_id={}\nlistener_session_id={}\nlistener_revision={}\nlistener_lifecycle_state={}\nrecovery_revision={}\nowner_epoch={}\ncreation_operation_id={}\noriginal_scope_currentness_digest={}\nobserved_scope_currentness_digest={}\ncurrentness_drifted={}\n",
+                preview.rotation_id,
+                preview.scope_id,
+                preview.listener_session_id,
+                preview.listener_revision,
+                session_lifecycle_state(preview.listener_lifecycle_state),
+                preview.recovery_revision,
+                preview.owner_epoch,
+                preview.creation_operation_id,
+                preview.original_scope_currentness_digest,
+                preview.observed_scope_currentness_digest,
+                preview.currentness_drifted,
+            ))
+        }
+        ContinuationCommand::Begin {
+            store,
+            listener,
+            source,
+            claim,
+            expected_scope,
+            expected_listener_revision,
+            expected_owner_epoch,
+            idempotency_key,
+            creation_operation_id,
+            handoff_digest,
+            basis_json,
+            policy_decision_json,
+            creation_request_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let rotation =
+                engine.begin_continuation_rotation(ContinuationRotationBeginOptions::new(
+                    SessionId::parse_canonical(&listener)?,
+                    SessionId::parse_canonical(&source)?,
+                    ClaimId::parse_canonical(&claim)?,
+                    ContinuationScopeId::parse_canonical(&expected_scope)?,
+                    expected_listener_revision,
+                    expected_owner_epoch,
+                    idempotency_key,
+                    creation_operation_id,
+                    Digest::from_hex(&handoff_digest)?,
+                    parse_cli_object("continuation basis_json", &basis_json)?,
+                    parse_cli_object("continuation policy_decision_json", &policy_decision_json)?,
+                    parse_cli_object("continuation creation_request_json", &creation_request_json)?,
+                )?)?;
+            Ok(render_continuation_rotation(&rotation)?)
+        }
+        ContinuationCommand::CreationDispatch {
+            store,
+            rotation,
+            listener,
+            expected_listener_revision,
+            dispatch_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let rotation =
+                engine.dispatch_continuation_creation(ContinuationCreationDispatchOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    SessionId::parse_canonical(&listener)?,
+                    expected_listener_revision,
+                    parse_cli_object("continuation dispatch_json", &dispatch_json)?,
+                )?)?;
+            Ok(render_continuation_rotation(&rotation)?)
+        }
+        ContinuationCommand::CreationResult {
+            store,
+            rotation,
+            listener,
+            expected_listener_revision,
+            receipt_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let rotation = engine.record_continuation_creation_result(
+                ContinuationCreationResultOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    SessionId::parse_canonical(&listener)?,
+                    expected_listener_revision,
+                    parse_cli_object("continuation receipt_json", &receipt_json)?,
+                )?,
+            )?;
+            Ok(render_continuation_rotation(&rotation)?)
+        }
+        ContinuationCommand::CandidateAttach {
+            store,
+            rotation,
+            listener,
+            expected_listener_revision,
+            candidate,
+            binding_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let rotation =
+                engine.attach_continuation_candidate(ContinuationCandidateAttachOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    SessionId::parse_canonical(&listener)?,
+                    expected_listener_revision,
+                    SessionId::parse_canonical(&candidate)?,
+                    parse_cli_object("continuation binding_json", &binding_json)?,
+                )?)?;
+            Ok(render_continuation_rotation(&rotation)?)
+        }
+        ContinuationCommand::CandidateAccept {
+            store,
+            rotation,
+            candidate,
+            acceptance_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let rotation =
+                engine.accept_continuation_candidate(ContinuationCandidateAcceptOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    SessionId::parse_canonical(&candidate)?,
+                    parse_cli_object("continuation acceptance_json", &acceptance_json)?,
+                )?)?;
+            Ok(render_continuation_rotation(&rotation)?)
+        }
+        ContinuationCommand::Commit {
+            store,
+            rotation,
+            listener,
+            expected_listener_revision,
+            expected_owner_epoch,
+            expected_handoff_digest,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let committed =
+                engine.commit_continuation_rotation(ContinuationRotationCommitOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    SessionId::parse_canonical(&listener)?,
+                    expected_listener_revision,
+                    expected_owner_epoch,
+                    Digest::from_hex(&expected_handoff_digest)?,
+                ))?;
+            let mut output = render_continuation_rotation(&committed.rotation)?;
+            output.push_str(&render_continuation_scope(&committed.scope));
+            writeln!(output, "previous_claim_id={}", committed.previous_claim_id)
+                .expect("write to String");
+            writeln!(
+                output,
+                "resulting_claim_id={}",
+                committed.resulting_claim_id
+            )
+            .expect("write to String");
+            Ok(output)
+        }
+        ContinuationCommand::Abort {
+            store,
+            rotation,
+            listener,
+            expected_listener_revision,
+            rationale_json,
+        } => {
+            let mut engine = Engine::open(store)?;
+            let rotation =
+                engine.abort_continuation_rotation(ContinuationRotationAbortOptions::new(
+                    ContinuationRotationId::parse_canonical(&rotation)?,
+                    SessionId::parse_canonical(&listener)?,
+                    expected_listener_revision,
+                    parse_cli_object("continuation rationale_json", &rationale_json)?,
+                )?)?;
+            Ok(render_continuation_rotation(&rotation)?)
+        }
+        ContinuationCommand::Show { store, rotation } => {
+            let engine = Engine::open(store)?;
+            let rotation = engine
+                .continuation_rotation(ContinuationRotationId::parse_canonical(&rotation)?)?;
+            Ok(render_continuation_rotation(&rotation)?)
+        }
+    }
 }
 
 fn run_handoff(command: HandoffCommand) -> Result<String> {
@@ -39442,6 +40069,203 @@ fn render_claim_show(claim: &ClaimSnapshot) -> String {
     )
 }
 
+fn render_continuation_project_policy(
+    policy: &ContinuationProjectPolicySnapshot,
+) -> Result<String> {
+    let authority_json =
+        String::from_utf8(canonical_bytes(&policy.authority)?).map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation project policy authority was not UTF-8: {error}"
+            ))
+        })?;
+    Ok(format!(
+        "project_policy.project_id={}\nproject_policy.enabled={}\nproject_policy.revision={}\nproject_policy.actor_session_id={}\nproject_policy.authority_json={}\nproject_policy.receipt_digest={}\nproject_policy.updated_at_us={}\n",
+        policy.project_id,
+        policy.enabled,
+        policy.revision,
+        policy.actor_session_id,
+        authority_json,
+        policy.receipt_digest,
+        policy.updated_at_us,
+    ))
+}
+
+fn render_continuation_scope(scope: &ContinuationScopeSnapshot) -> String {
+    format!(
+        "scope.scope_id={}\nscope.workspace_id={}\nscope.branch_id={}\nscope.task_entity_id={}\nscope.listener_session_id={}\nscope.listener_revision={}\nscope.carrier_session_id={}\nscope.carrier_claim_id={}\nscope.owner_epoch={}\nscope.updated_at_us={}\n",
+        scope.scope_id,
+        scope.workspace_id,
+        scope.branch_id,
+        scope.task_entity_id,
+        scope.listener_session_id,
+        scope.listener_revision,
+        scope.carrier_session_id,
+        scope.carrier_claim_id,
+        scope.owner_epoch,
+        scope.updated_at_us,
+    )
+}
+
+fn render_continuation_rotation(rotation: &ContinuationRotationSnapshot) -> Result<String> {
+    let basis_json = String::from_utf8(canonical_bytes(&rotation.basis)?).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!("continuation basis was not UTF-8: {error}"))
+    })?;
+    let candidate_binding_json = rotation
+        .candidate_binding
+        .as_ref()
+        .map(canonical_bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation candidate binding was not UTF-8: {error}"
+            ))
+        })?
+        .unwrap_or_else(|| "none".to_owned());
+    let candidate_acceptance_json = rotation
+        .candidate_acceptance
+        .as_ref()
+        .map(canonical_bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation candidate acceptance was not UTF-8: {error}"
+            ))
+        })?
+        .unwrap_or_else(|| "none".to_owned());
+    let dispatch_json = rotation
+        .dispatch
+        .as_ref()
+        .map(canonical_bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation dispatch was not UTF-8: {error}"
+            ))
+        })?
+        .unwrap_or_else(|| "none".to_owned());
+    let policy_decision_json = String::from_utf8(canonical_bytes(&rotation.policy_decision)?)
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation policy decision was not UTF-8: {error}"
+            ))
+        })?;
+    let creation_request_json = String::from_utf8(canonical_bytes(&rotation.creation_request)?)
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation creation request was not UTF-8: {error}"
+            ))
+        })?;
+    let creation_receipt_json = rotation
+        .creation_receipt
+        .as_ref()
+        .map(canonical_bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation creation receipt was not UTF-8: {error}"
+            ))
+        })?
+        .unwrap_or_else(|| "none".to_owned());
+    let initial_unknown_receipt_json = rotation
+        .initial_unknown_receipt
+        .as_ref()
+        .map(canonical_bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation initial unknown receipt was not UTF-8: {error}"
+            ))
+        })?
+        .unwrap_or_else(|| "none".to_owned());
+    let candidate_acceptance_history_json = String::from_utf8(canonical_bytes(
+        &rotation.candidate_acceptance_history,
+    )?)
+    .map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "continuation candidate acceptance history was not UTF-8: {error}"
+        ))
+    })?;
+    let result_json = rotation
+        .result
+        .as_ref()
+        .map(canonical_bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation terminal result was not UTF-8: {error}"
+            ))
+        })?
+        .unwrap_or_else(|| "none".to_owned());
+    let recovery_json = rotation
+        .recovery
+        .as_ref()
+        .map(canonical_bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|error| {
+            WorkVcsError::CanonicalEncodingInvalid(format!(
+                "continuation abort-only recovery was not UTF-8: {error}"
+            ))
+        })?
+        .unwrap_or_else(|| "none".to_owned());
+    Ok(format!(
+        "rotation.rotation_id={}\nrotation.scope_id={}\nrotation.workspace_id={}\nrotation.branch_id={}\nrotation.task_entity_id={}\nrotation.initiating_listener_session_id={}\nrotation.initial_listener_revision={}\nrotation.listener_session_id={}\nrotation.listener_revision={}\nrotation.source_session_id={}\nrotation.source_claim_id={}\nrotation.source_owner_epoch={}\nrotation.idempotency_key={}\nrotation.creation_operation_id={}\nrotation.policy_decision_digest={}\nrotation.policy_decision_json={}\nrotation.creation_request_digest={}\nrotation.creation_request_json={}\nrotation.handoff_digest={}\nrotation.scope_currentness_digest={}\nrotation.basis_json={}\nrotation.state={}\nrotation.abort_only={}\nrotation.recovery_revision={}\nrotation.recovery_receipt_digest={}\nrotation.recovery_history_count={}\nrotation.recovery_history_chain_digest={}\nrotation.recovery_json={}\nrotation.dispatch_json={}\nrotation.creation_receipt_json={}\nrotation.initial_unknown_receipt_json={}\nrotation.candidate_session_id={}\nrotation.candidate_binding_json={}\nrotation.candidate_acceptance_json={}\nrotation.candidate_acceptance_history_json={}\nrotation.resulting_claim_id={}\nrotation.result_json={}\nrotation.created_at_us={}\nrotation.last_activity_at_us={}\nrotation.ended_at_us={}\n",
+        rotation.rotation_id,
+        rotation.scope_id,
+        rotation.workspace_id,
+        rotation.branch_id,
+        rotation.task_entity_id,
+        rotation.initiating_listener_session_id,
+        rotation.initial_listener_revision,
+        rotation.listener_session_id,
+        rotation.listener_revision,
+        rotation.source_session_id,
+        rotation.source_claim_id,
+        rotation.source_owner_epoch,
+        rotation.idempotency_key,
+        rotation.creation_operation_id,
+        rotation.policy_decision_digest,
+        policy_decision_json,
+        rotation.creation_request_digest,
+        creation_request_json,
+        rotation.handoff_digest,
+        rotation.scope_currentness_digest,
+        basis_json,
+        rotation.state.as_str(),
+        rotation.abort_only,
+        rotation.recovery_revision,
+        render_optional_display(rotation.recovery_receipt_digest.as_ref()),
+        rotation.recovery_history_count,
+        rotation.recovery_history_chain_digest,
+        recovery_json,
+        dispatch_json,
+        creation_receipt_json,
+        initial_unknown_receipt_json,
+        render_optional_display(rotation.candidate_session_id.as_ref()),
+        candidate_binding_json,
+        candidate_acceptance_json,
+        candidate_acceptance_history_json,
+        render_optional_display(rotation.resulting_claim_id.as_ref()),
+        result_json,
+        rotation.created_at_us,
+        rotation.last_activity_at_us,
+        render_optional_display(rotation.ended_at_us.as_ref()),
+    ))
+}
+
 fn render_claim_list(result: &ClaimListResult) -> String {
     let mut output = format!(
         "session_id={}\nclaims={}\n",
@@ -42419,6 +43243,26 @@ fn render_context_packet_snapshot_schema_migration(
     Ok(output)
 }
 
+fn render_continuation_rotation_schema_migration(
+    result: &ContinuationRotationSchemaMigrationResult,
+) -> Result<String> {
+    let mut output = format!(
+        "continuation_rotation_schema_migrated={}\nstore_id={}\nschema_version={}\nadded_schema_objects={}\nmigration_recorded={}\n",
+        result.migrated,
+        result.store_info.store_id,
+        result.store_info.manifest.schema_version,
+        result.added_schema_objects.len(),
+        result.migration.is_some()
+    );
+    for (index, object) in result.added_schema_objects.iter().enumerate() {
+        let _ = writeln!(output, "added_schema_object.{index}={object}");
+    }
+    if let Some(migration) = &result.migration {
+        write_store_migration_snapshot_fields(&mut output, Some("migration"), migration)?;
+    }
+    Ok(output)
+}
+
 fn render_bundle_manifest_validation(result: &BundleManifestValidationResult) -> String {
     format!(
         "commit_id={}\nvalid={}\nexpected_manifest_digest={}\nactual_manifest_digest={}\nactual_manifest_size_bytes={}\nproblem={}\n",
@@ -44114,6 +44958,7 @@ mod tests {
                 "session",
                 "handoff",
                 "claim",
+                "continuation",
                 "context",
                 "resume",
                 "capture",
@@ -44195,6 +45040,10 @@ mod tests {
             ("session", "Manage sessions and focus"),
             ("handoff", "Author and inspect focused handoffs"),
             ("claim", "Claim and release runtime work"),
+            (
+                "continuation",
+                "Coordinate exact-scope Work conversation continuation",
+            ),
             ("context", "Show the current session context"),
             ("resume", "Show compact read-only recovery context"),
             (
@@ -93298,6 +94147,341 @@ mod tests {
             .is_err(),
             "explicit read-only and managed derived-write modes are exclusive"
         );
+    }
+
+    #[test]
+    fn cli_parses_scoped_continuation_protocol_commands() {
+        let project_policy = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "project-policy-set",
+            "/tmp/workvcs.sqlite",
+            "--actor",
+            "01900000-0000-7000-8000-000000000004",
+            "--project-id",
+            "g-p-test",
+            "--expected-revision",
+            "0",
+            "--enabled",
+            "true",
+            "--authority-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation project policy set");
+        assert!(matches!(
+            *project_policy.command,
+            Command::Continuation {
+                command: ContinuationCommand::ProjectPolicySet { .. }
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "workvcs",
+                "continuation",
+                "project-policy-set",
+                "/tmp/workvcs.sqlite",
+                "--actor",
+                "01900000-0000-7000-8000-000000000004",
+                "--project-id",
+                "g-p-test",
+                "--expected-revision",
+                "0",
+                "--authority-json",
+                r#"{"schema_version":1}"#,
+            ])
+            .is_err(),
+            "project policy enablement must be explicit"
+        );
+
+        let project_policy_show = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "project-policy-show",
+            "/tmp/workvcs.sqlite",
+            "--project-id",
+            "g-p-test",
+        ])
+        .expect("parse continuation project policy show");
+        assert!(matches!(
+            *project_policy_show.command,
+            Command::Continuation {
+                command: ContinuationCommand::ProjectPolicyShow { .. }
+            }
+        ));
+
+        let scope = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "scope-bind",
+            "/tmp/workvcs.sqlite",
+            "--workspace",
+            "01900000-0000-7000-8000-000000000001",
+            "--branch",
+            "01900000-0000-7000-8000-000000000002",
+            "--task",
+            "01900000-0000-7000-8000-000000000003",
+            "--listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--carrier",
+            "01900000-0000-7000-8000-000000000005",
+            "--claim",
+            "01900000-0000-7000-8000-000000000006",
+        ])
+        .expect("parse continuation scope bind");
+        assert!(matches!(
+            *scope.command,
+            Command::Continuation {
+                command: ContinuationCommand::ScopeBind { .. }
+            }
+        ));
+
+        let begin = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "begin",
+            "/tmp/workvcs.sqlite",
+            "--listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--source",
+            "01900000-0000-7000-8000-000000000005",
+            "--claim",
+            "01900000-0000-7000-8000-000000000006",
+            "--expected-scope",
+            "01900000-0000-7000-8000-000000000009",
+            "--expected-listener-revision",
+            "1",
+            "--expected-owner-epoch",
+            "1",
+            "--idempotency-key",
+            "rotation-1",
+            "--creation-operation-id",
+            "create-thread-operation-1",
+            "--handoff-digest",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--basis-json",
+            r#"{"currentness_entity_ids":[],"handoff_record_id":"01900000-0000-7000-8000-000000000010","project_id":"g-p-test","schema_version":1,"source_thread_id":"01a-source"}"#,
+            "--policy-decision-json",
+            r#"{"schema_version":1}"#,
+            "--creation-request-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation begin");
+        assert!(matches!(
+            *begin.command,
+            Command::Continuation {
+                command: ContinuationCommand::Begin { .. }
+            }
+        ));
+
+        let currentness = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "scope-currentness",
+            "/tmp/workvcs.sqlite",
+            "--source",
+            "01900000-0000-7000-8000-000000000005",
+            "--claim",
+            "01900000-0000-7000-8000-000000000006",
+            "--expected-scope",
+            "01900000-0000-7000-8000-000000000009",
+            "--expected-listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--expected-listener-revision",
+            "1",
+            "--expected-owner-epoch",
+            "1",
+            "--handoff-digest",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--basis-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation currentness");
+        assert!(matches!(
+            *currentness.command,
+            Command::Continuation {
+                command: ContinuationCommand::ScopeCurrentness { .. }
+            }
+        ));
+
+        let listener_replace = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "listener-replace",
+            "/tmp/workvcs.sqlite",
+            "--workspace",
+            "01900000-0000-7000-8000-000000000001",
+            "--branch",
+            "01900000-0000-7000-8000-000000000002",
+            "--task",
+            "01900000-0000-7000-8000-000000000003",
+            "--expected-scope",
+            "01900000-0000-7000-8000-000000000009",
+            "--actor",
+            "01900000-0000-7000-8000-000000000004",
+            "--expected-listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--replacement-listener",
+            "01900000-0000-7000-8000-000000000011",
+            "--expected-listener-revision",
+            "1",
+            "--expected-owner-epoch",
+            "1",
+            "--authority-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation listener replacement");
+        assert!(matches!(
+            *listener_replace.command,
+            Command::Continuation {
+                command: ContinuationCommand::ListenerReplace { .. }
+            }
+        ));
+
+        let abort_only_recovery = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "listener-recover-abort-only",
+            "/tmp/workvcs.sqlite",
+            "--rotation",
+            "01900000-0000-7000-8000-000000000007",
+            "--expected-scope",
+            "01900000-0000-7000-8000-000000000009",
+            "--actor",
+            "01900000-0000-7000-8000-000000000011",
+            "--expected-listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--replacement-listener",
+            "01900000-0000-7000-8000-000000000011",
+            "--expected-listener-revision",
+            "1",
+            "--expected-recovery-revision",
+            "0",
+            "--expected-owner-epoch",
+            "1",
+            "--authority-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation abort-only listener recovery");
+        assert!(matches!(
+            *abort_only_recovery.command,
+            Command::Continuation {
+                command: ContinuationCommand::ListenerRecoverAbortOnly { .. }
+            }
+        ));
+
+        let abort_only_preview = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "listener-recover-abort-only-preview",
+            "/tmp/workvcs.sqlite",
+            "--rotation",
+            "01900000-0000-7000-8000-000000000007",
+            "--expected-scope",
+            "01900000-0000-7000-8000-000000000009",
+            "--expected-listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--expected-listener-revision",
+            "1",
+            "--expected-recovery-revision",
+            "0",
+            "--expected-owner-epoch",
+            "1",
+        ])
+        .expect("parse continuation abort-only recovery preview");
+        assert!(matches!(
+            *abort_only_preview.command,
+            Command::Continuation {
+                command: ContinuationCommand::ListenerRecoverAbortOnlyPreview { .. }
+            }
+        ));
+
+        let dispatch = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "creation-dispatch",
+            "/tmp/workvcs.sqlite",
+            "--rotation",
+            "01900000-0000-7000-8000-000000000007",
+            "--listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--expected-listener-revision",
+            "1",
+            "--dispatch-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation creation dispatch");
+        assert!(matches!(
+            *dispatch.command,
+            Command::Continuation {
+                command: ContinuationCommand::CreationDispatch { .. }
+            }
+        ));
+
+        let creation_result = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "creation-result",
+            "/tmp/workvcs.sqlite",
+            "--rotation",
+            "01900000-0000-7000-8000-000000000007",
+            "--listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--expected-listener-revision",
+            "1",
+            "--receipt-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation creation result");
+        assert!(matches!(
+            *creation_result.command,
+            Command::Continuation {
+                command: ContinuationCommand::CreationResult { .. }
+            }
+        ));
+
+        let accept = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "candidate-accept",
+            "/tmp/workvcs.sqlite",
+            "--rotation",
+            "01900000-0000-7000-8000-000000000007",
+            "--candidate",
+            "01900000-0000-7000-8000-000000000008",
+            "--acceptance-json",
+            r#"{"schema_version":1}"#,
+        ])
+        .expect("parse continuation candidate acceptance");
+        assert!(matches!(
+            *accept.command,
+            Command::Continuation {
+                command: ContinuationCommand::CandidateAccept { .. }
+            }
+        ));
+
+        let attach = Cli::try_parse_from([
+            "workvcs",
+            "continuation",
+            "candidate-attach",
+            "/tmp/workvcs.sqlite",
+            "--rotation",
+            "01900000-0000-7000-8000-000000000007",
+            "--listener",
+            "01900000-0000-7000-8000-000000000004",
+            "--expected-listener-revision",
+            "1",
+            "--candidate",
+            "01900000-0000-7000-8000-000000000008",
+            "--binding-json",
+            r#"{"auditable":true,"conversation_kind":"work","identity_kind":"thread_id","interactive":true,"project_id":"g-p-test","resolution_status":"resolved","schema_version":1,"thread_id":"01a-target","user_visible":true}"#,
+        ])
+        .expect("parse continuation candidate attach");
+        assert!(matches!(
+            *attach.command,
+            Command::Continuation {
+                command: ContinuationCommand::CandidateAttach { .. }
+            }
+        ));
     }
 
     fn value(output: &str, key: &str) -> String {

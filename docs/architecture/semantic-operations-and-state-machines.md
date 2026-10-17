@@ -188,6 +188,83 @@ change or takeover ends the old occurrence and creates a new one.
 Claiming a Task never changes its Work-State status. Atomic claim-next may
 select, claim, focus, and return Context, but it does not imply TaskStart.
 
+## Continuation Rotation Runtime
+
+Continuation rotation is scoped to one Workspace, Work Branch, Task, and
+exclusive Claim. The scope projection holds one listener and monotonically
+increasing listener revision, one current carrier, one current Claim, and a
+strictly increasing owner epoch. It is not a Project-global owner or a
+Branch-wide write lock.
+
+```text
+pending_creation -> creation_dispatched -> creation_unknown
+                               |              |
+                               |              +-> creation_succeeded
+                               +-----------------> creation_succeeded
+                                                    |
+                                                    v
+                                            candidate_attached
+                                                    |
+                                                    v
+                                            candidate_accepted
+                                                    |
+                                                    v
+                                                committed
+```
+
+An exact Project first requires a current, enabled, revisioned WorkVCS
+continuation policy backed by a trusted product-control-plane envelope that
+binds separate user-authorization and Project-membership receipts. Only the
+bound listener may admit the attempt. Admission is idempotent and one scope
+has at most one active rotation. The occurrence binds its listener
+revision, source epoch and Claim, Handoff digest, creation operation/request,
+typed currentness basis, current Project-policy receipt, bounded continuation
+packet, initial-message digest, and the embedded deterministic evaluator
+receipt with complete gate summary and bounded evidence references. The source
+transcript is explicitly absent.
+Before the product call, dispatch is durably recorded, the Project policy is
+reread, the Branch projection is refreshed, and admitted scope currentness is
+recomputed so revocation or relevant drift fences the effect. The resulting receipt then records
+`unknown` or `created`; unknown-to-created reconciliation binds the immutable
+unknown receipt and client identity rather than retrying creation.
+
+Candidate attachment records a `work_candidate` Session and destination-binding
+evidence but does not move the Claim. The
+binding must prove a non-forking `create_thread` result correlated to the
+admitted operation/request, a product receipt, exact Project provenance, and a
+stable normal Work thread that is user-visible, auditable, and interactable. A
+pending client ID, fork, hidden/background task, SubAgent, side chat, or
+WorkVCS-only identity cannot advance the state. The target Session must then
+author an acceptance bound to the current listener revision, Handoff,
+currentness, packet digest, and initial-message digest.
+
+Commit is one `BEGIN IMMEDIATE` transaction. It validates the active rotation
+and accepted candidate, compare-and-swaps the exact scope inputs, replaces the exclusive
+Claim occurrence for the candidate, increments the scope epoch, writes terminal
+provenance, and removes the active attempt projection. Abort leaves the source
+Claim and epoch unchanged. A created target thread is reserved from the first
+successful receipt even when its attempt later aborts; it cannot become a
+listener or ordinary Work carrier/source. Only its exact committed candidate
+Session and resulting Claim may source later work in the exact scope.
+
+Normal listener replacement is explicit, revision-fenced, and can recover an
+active attempt only when the non-listener currentness basis has not drifted. If
+the target had accepted, its prior acceptance is archived and it must accept
+again under the replacement listener revision. If the old listener is inactive
+and normal recovery is unsafe, abort-only recovery preserves the original
+decision/currentness and all receipts, records observed currentness under a
+monotonic recovery revision, and permits only original-operation
+reconciliation plus state-specific abort. It can never dispatch, attach,
+accept, or commit, and a replacement recovery listener cannot leave that mode.
+Preview supplies authority-bound observed currentness; apply rechecks it in the
+same transaction. Full recovery receipts form an append-only Event digest
+chain, while normal snapshots expose a fixed-size count and chain head.
+Listener loss does not affect the carrier's Claim or ordinary work. A pre-commit
+candidate has no transferred Claim and cannot initiate a new rotation; after
+commit it may source a later rotation only through its exact committed Claim
+provenance. Ordinary Claim and Session departure paths cannot bypass an active
+attempt.
+
 ## Merge Runtime
 
 ```text

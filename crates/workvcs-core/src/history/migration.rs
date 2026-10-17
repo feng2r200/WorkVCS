@@ -4,7 +4,7 @@ use crate::canonical::{
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::identity::{Digest, MigrationId};
 use crate::store::{StoreConnection, current_epoch_micros};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreMigrationRecordOptions {
@@ -172,17 +172,26 @@ pub(crate) fn record_store_migration(
     options: StoreMigrationRecordOptions,
 ) -> Result<StoreMigrationRecordResult> {
     connection.verify_foreign_keys()?;
-    let migration_id = MigrationId::new_v7();
     let now_us = current_epoch_micros()?;
-    let detail_json = canonical_object_json("store migration detail", options.detail())?;
-    let detail_digest = content_object_digest(detail_json.as_bytes());
-    let detail_size_bytes = usize_to_i64("store migration detail_json size", detail_json.len())?;
-
-    let migration_id_bytes = migration_id.raw_bytes();
     let transaction = connection
         .inner_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage_error)?;
+    let result = record_store_migration_in_transaction(&transaction, options, now_us)?;
+    transaction.commit().map_err(storage_error)?;
+    Ok(result)
+}
+
+pub(crate) fn record_store_migration_in_transaction(
+    transaction: &Transaction<'_>,
+    options: StoreMigrationRecordOptions,
+    now_us: i64,
+) -> Result<StoreMigrationRecordResult> {
+    let migration_id = MigrationId::new_v7();
+    let detail_json = canonical_object_json("store migration detail", options.detail())?;
+    let detail_digest = content_object_digest(detail_json.as_bytes());
+    let detail_size_bytes = usize_to_i64("store migration detail_json size", detail_json.len())?;
+    let migration_id_bytes = migration_id.raw_bytes();
     transaction
         .execute(
             "INSERT INTO store_migration_attempt(
@@ -223,8 +232,6 @@ pub(crate) fn record_store_migration(
             ],
         )
         .map_err(storage_error)?;
-    transaction.commit().map_err(storage_error)?;
-
     Ok(StoreMigrationRecordResult {
         migration: StoreMigrationAttemptSnapshot {
             migration_id,

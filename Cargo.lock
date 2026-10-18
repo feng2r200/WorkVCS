@@ -630,15 +630,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cedarwood"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0524a528a6a0288df1863c3c20fe92c301875b4941e7b6c4b394ab08c5a4c55"
-dependencies = [
- "smallvec",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2181,12 +2172,9 @@ dependencies = [
 
 [[package]]
 name = "jieba-macros"
-version = "0.10.4"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "455f837e9d0255b68a712200db247c68fdad4941b72471b76bfa61c3b0c1f79f"
-dependencies = [
- "phf_codegen",
-]
+checksum = "2987cf45b1bfdb4ff1f6a814b1aa2ad6361f4ff43bf353a9bd29f391a9568f70"
 
 [[package]]
 name = "jieba-rs"
@@ -2194,7 +2182,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "766bd7012aa5ba49411ebdf4e93bddd59b182d2918e085d58dec5bb9b54b7105"
 dependencies = [
- "cedarwood 0.4.6",
+ "cedarwood",
  "include-flate",
  "jieba-macros 0.8.1",
  "phf",
@@ -2204,15 +2192,13 @@ dependencies = [
 
 [[package]]
 name = "jieba-rs"
-version = "0.10.4"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6a8bbb0f77ee810f0689a30b7cec56b875751ef4ec2e74fd995613dc52b3ae1"
+checksum = "0a3a7d02ea31e6fc6f2fe10495dc7c5efcf381e1f21d7172f58ba792efa1c2fd"
 dependencies = [
  "bytecount",
- "cedarwood 0.5.0",
  "include-flate",
- "jieba-macros 0.10.4",
- "phf",
+ "jieba-macros 0.11.0",
  "rustc-hash",
 ]
 
@@ -5179,7 +5165,7 @@ dependencies = [
  "fastembed",
  "fs4",
  "hex",
- "jieba-rs 0.10.4",
+ "jieba-rs 0.11.0",
  "libc",
  "onnx-protobuf",
  "proptest",

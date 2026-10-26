@@ -185,6 +185,46 @@ pub struct SessionSwitchOptions {
     focus: Option<SessionFocus>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionWorkGuard {
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    focus_entity_id: Option<EntityId>,
+}
+
+impl SessionWorkGuard {
+    pub fn new(
+        session_id: SessionId,
+        workspace_id: WorkspaceId,
+        branch_id: BranchId,
+        focus_entity_id: Option<EntityId>,
+    ) -> Self {
+        Self {
+            session_id,
+            workspace_id,
+            branch_id,
+            focus_entity_id,
+        }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+
+    pub fn branch_id(&self) -> BranchId {
+        self.branch_id
+    }
+
+    pub fn focus_entity_id(&self) -> Option<EntityId> {
+        self.focus_entity_id
+    }
+}
+
 impl SessionSwitchOptions {
     pub fn new(
         session_id: SessionId,
@@ -1094,6 +1134,64 @@ fn session_snapshot_from_connection(
             "session {session_id} has no live runtime or final session diff"
         ))),
     }
+}
+
+pub(crate) fn verify_session_work_guard(
+    connection: &Connection,
+    guard: &SessionWorkGuard,
+) -> Result<()> {
+    let snapshot = session_snapshot_from_connection(connection, guard.session_id)?;
+    if snapshot.lifecycle_state != SessionLifecycleState::Active {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} work guard requires lifecycle active, found {}",
+            guard.session_id,
+            session_lifecycle_state_label(snapshot.lifecycle_state)
+        )));
+    }
+    if snapshot.active_workspace_id != Some(guard.workspace_id) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} work guard requires workspace {}, found {}",
+            guard.session_id,
+            guard.workspace_id,
+            optional_workspace_id(snapshot.active_workspace_id)
+        )));
+    }
+    if snapshot.active_branch_id != Some(guard.branch_id) {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} work guard requires branch {}, found {}",
+            guard.session_id,
+            guard.branch_id,
+            optional_branch_id(snapshot.active_branch_id)
+        )));
+    }
+    let actual_focus = snapshot.focus.map(|focus| focus.focus_entity_id);
+    if actual_focus != guard.focus_entity_id {
+        return Err(WorkVcsError::SessionInvalid(format!(
+            "session {} work guard requires focus {}, found {}",
+            guard.session_id,
+            optional_entity_id(guard.focus_entity_id),
+            optional_entity_id(actual_focus)
+        )));
+    }
+    Ok(())
+}
+
+fn optional_workspace_id(value: Option<WorkspaceId>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+fn optional_branch_id(value: Option<BranchId>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+fn optional_entity_id(value: Option<EntityId>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_owned())
 }
 
 struct BranchRuntimeRow {

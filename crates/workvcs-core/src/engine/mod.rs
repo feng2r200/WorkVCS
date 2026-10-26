@@ -142,19 +142,20 @@ use crate::{
     ContinuationCandidateAcceptOptions, ContinuationCandidateAttachOptions,
     ContinuationCreationDispatchOptions, ContinuationCreationResultOptions,
     ContinuationListenerReplaceOptions, ContinuationProjectPolicySetOptions,
-    ContinuationProjectPolicySnapshot, ContinuationRotationAbortOptions,
-    ContinuationRotationBeginOptions, ContinuationRotationCommitOptions,
-    ContinuationRotationCommitResult, ContinuationRotationId, ContinuationRotationSnapshot,
-    ContinuationScopeBindOptions, ContinuationScopeCurrentnessOptions,
-    ContinuationScopeCurrentnessSnapshot, ContinuationScopeSnapshot, MergeAbortOptions,
-    MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions, MergeContinueResult,
-    MergeFreezeResolutionsOptions, MergeFreezeResolutionsResult, MergeListOptions, MergeListResult,
-    MergeResolveOptions, MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions,
-    NextWorkResult, RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot,
-    SessionEndOptions, SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult,
-    SessionListOptions, SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult,
-    SessionSnapshot, SessionStartOptions, SessionStartResult, SessionSwitchOptions,
-    SessionSwitchResult, VerifyOptions, VerifyResult,
+    ContinuationProjectPolicySnapshot, ContinuationReadinessSnapshot,
+    ContinuationRotationAbortOptions, ContinuationRotationBeginOptions,
+    ContinuationRotationCommitOptions, ContinuationRotationCommitResult, ContinuationRotationId,
+    ContinuationRotationSnapshot, ContinuationScopeBindOptions,
+    ContinuationScopeCurrentnessOptions, ContinuationScopeCurrentnessSnapshot, ContinuationScopeId,
+    ContinuationScopeSnapshot, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
+    MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
+    MergeFreezeResolutionsResult, MergeListOptions, MergeListResult, MergeResolveOptions,
+    MergeResolveResult, MergeStartOptions, MergeStartResult, NextWorkOptions, NextWorkResult,
+    RunnableTasksOptions, RunnableTasksProjection, SessionDiffSnapshot, SessionEndOptions,
+    SessionEndResult, SessionFocusOptions, SessionFocusUpdateResult, SessionListOptions,
+    SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
+    SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    VerifyOptions, VerifyResult,
 };
 use std::path::Path;
 
@@ -221,6 +222,13 @@ impl Engine {
         options: CognitionCaptureOptions,
     ) -> Result<CognitionCaptureResult> {
         self.store.capture_cognition(&options)
+    }
+
+    pub fn find_cognition_capture_result(
+        &self,
+        options: CognitionCaptureOptions,
+    ) -> Result<Option<CognitionCaptureResult>> {
+        self.store.find_cognition_capture_result(&options)
     }
 
     pub fn evolve_plan(&mut self, options: PlanEvolutionOptions) -> Result<PlanEvolutionResult> {
@@ -664,6 +672,11 @@ impl Engine {
 
     pub fn evidences(&self, options: EvidenceListOptions) -> Result<EvidenceListResult> {
         self.store.evidences(&options)
+    }
+
+    /// Immutable introducing commits distinguish captured evidence from standalone evidence.
+    pub fn evidence_introductions(&self) -> Result<Vec<(EvidenceId, CommitId)>> {
+        self.store.evidence_introductions()
     }
 
     pub fn validate_local_content_storage(&self) -> Result<usize> {
@@ -1299,6 +1312,13 @@ impl Engine {
     ) -> Result<ContinuationScopeSnapshot> {
         self.store
             .continuation_scope(workspace_id, branch_id, task_entity_id)
+    }
+
+    pub fn continuation_readiness(
+        &self,
+        scope_id: ContinuationScopeId,
+    ) -> Result<ContinuationReadinessSnapshot> {
+        self.store.continuation_readiness(scope_id)
     }
 
     pub fn continuation_rotation(

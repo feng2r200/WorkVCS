@@ -92,8 +92,8 @@ use crate::history::{
     StoreMigrationRecordOptions, StoreMigrationRecordResult,
 };
 use crate::identity::{
-    ChangeSetId, CheckpointId, ContextPacketId, ExposureId, ExternalRefId, KnowledgeSpaceId,
-    LineageId, MigrationId, RelationId,
+    ChangeSetId, CheckpointId, ContextPacketId, ContinuationScopeId, ExposureId, ExternalRefId,
+    KnowledgeSpaceId, LineageId, MigrationId, RelationId,
 };
 use crate::runtime::{
     ClaimForceTakeoverOptions, ClaimForceTakeoverResult, ClaimGuardOptions, ClaimGuardResult,
@@ -106,9 +106,10 @@ use crate::runtime::{
     ContinuationCandidateAcceptOptions, ContinuationCandidateAttachOptions,
     ContinuationCreationDispatchOptions, ContinuationCreationResultOptions,
     ContinuationListenerReplaceOptions, ContinuationProjectPolicySetOptions,
-    ContinuationProjectPolicySnapshot, ContinuationRotationAbortOptions,
-    ContinuationRotationBeginOptions, ContinuationRotationCommitOptions,
-    ContinuationRotationCommitResult, ContinuationRotationSnapshot, ContinuationScopeBindOptions,
+    ContinuationProjectPolicySnapshot, ContinuationReadinessSnapshot,
+    ContinuationRotationAbortOptions, ContinuationRotationBeginOptions,
+    ContinuationRotationCommitOptions, ContinuationRotationCommitResult,
+    ContinuationRotationSnapshot, ContinuationScopeBindOptions,
     ContinuationScopeCurrentnessOptions, ContinuationScopeCurrentnessSnapshot,
     ContinuationScopeSnapshot, MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot,
     MergeContinueOptions, MergeContinueResult, MergeFreezeResolutionsOptions,
@@ -530,6 +531,15 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::capture_cognition(&mut self.connection, options)
+    }
+
+    pub(crate) fn find_cognition_capture_result(
+        &self,
+        options: &CognitionCaptureOptions,
+    ) -> Result<Option<CognitionCaptureResult>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::find_cognition_capture_result(&self.connection, options)
     }
 
     pub(crate) fn evolve_plan(
@@ -1131,6 +1141,12 @@ impl Store {
         let current = validate_bootstrap(&self.connection)?;
         debug_assert_eq!(current, self.info);
         history::evidences(&self.connection, options)
+    }
+
+    pub(crate) fn evidence_introductions(&self) -> Result<Vec<(EvidenceId, CommitId)>> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        history::evidence_introductions(&self.connection)
     }
 
     pub(crate) fn validate_local_content_storage(&self) -> Result<usize> {
@@ -2228,6 +2244,15 @@ impl Store {
             branch_id,
             task_entity_id,
         )
+    }
+
+    pub(crate) fn continuation_readiness(
+        &self,
+        scope_id: ContinuationScopeId,
+    ) -> Result<ContinuationReadinessSnapshot> {
+        let current = validate_bootstrap(&self.connection)?;
+        debug_assert_eq!(current, self.info);
+        runtime::continuation_readiness(&self.connection, scope_id)
     }
 
     pub(crate) fn continuation_rotation(

@@ -26,11 +26,15 @@ pub use continuation::{
     ContinuationCandidateAttachOptions, ContinuationCreationDispatchOptions,
     ContinuationCreationResultOptions, ContinuationListenerReplaceOptions,
     ContinuationProjectPolicySetOptions, ContinuationProjectPolicySnapshot,
-    ContinuationRotationAbortOptions, ContinuationRotationBeginOptions,
-    ContinuationRotationCommitOptions, ContinuationRotationCommitResult,
-    ContinuationRotationSnapshot, ContinuationRotationState, ContinuationScopeBindOptions,
-    ContinuationScopeCurrentnessOptions, ContinuationScopeCurrentnessSnapshot,
-    ContinuationScopeSnapshot, ContinuationSessionRole,
+    ContinuationReadinessBranchFacts, ContinuationReadinessCarrierFacts,
+    ContinuationReadinessClaimFacts, ContinuationReadinessGap, ContinuationReadinessPolicyFacts,
+    ContinuationReadinessRotationFacts, ContinuationReadinessScopeFacts,
+    ContinuationReadinessSessionFacts, ContinuationReadinessSnapshot,
+    ContinuationReadinessTaskFacts, ContinuationRotationAbortOptions,
+    ContinuationRotationBeginOptions, ContinuationRotationCommitOptions,
+    ContinuationRotationCommitResult, ContinuationRotationSnapshot, ContinuationRotationState,
+    ContinuationScopeBindOptions, ContinuationScopeCurrentnessOptions,
+    ContinuationScopeCurrentnessSnapshot, ContinuationScopeSnapshot, ContinuationSessionRole,
 };
 pub use merge::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
@@ -50,6 +54,7 @@ pub use session::{
     SessionFocusPathEntry, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
     SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    SessionWorkGuard,
 };
 pub use verify::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 
@@ -64,7 +69,7 @@ pub(crate) use context::{
 pub(crate) use continuation::{
     abort_continuation_rotation, accept_continuation_candidate, attach_continuation_candidate,
     begin_continuation_rotation, bind_continuation_scope, commit_continuation_rotation,
-    continuation_project_policy, continuation_rotation, continuation_scope,
+    continuation_project_policy, continuation_readiness, continuation_rotation, continuation_scope,
     dispatch_continuation_creation, preview_abort_only_recovery,
     preview_continuation_scope_currentness, record_continuation_creation_result,
     recover_continuation_listener_abort_only, replace_continuation_listener,
@@ -79,5 +84,6 @@ pub(crate) use runnable::runnable_tasks;
 pub(crate) use session::{
     clear_session_focus, end_session, mark_session_potentially_stale, session_diff,
     session_snapshot, sessions, set_session_focus, start_session, switch_session,
+    verify_session_work_guard,
 };
 pub(crate) use verify::{preflight_verify, verify};

@@ -1,7 +1,17 @@
 mod automation_cli;
 mod locator_adapter;
+mod project_health_layers;
+mod work_context;
 
 use automation_cli::{AutomationCommand, run_automation};
+use project_health_layers::{
+    ActivationHealthObservation, BindingHealthObservation, CapabilityHealthObservation,
+    ControlPlaneHealthLayer, CurrentSearchRequest, CurrentStoreHealthLayer, HealthIssue,
+    HistoricalArchiveRequest, LayerHealth, RecoveryAction, RegistryHealthObservation,
+    ResolutionHealthObservation, inspect_layered_project_health,
+    render_layered_project_health_json,
+};
+use work_context::WorkSelectionArgs;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::{MatchOptions, Pattern, glob_with};
@@ -860,6 +870,9 @@ enum Command {
         #[command(flatten)]
         locator: ProjectLocatorArgs,
 
+        #[command(flatten)]
+        work: WorkSelectionArgs,
+
         #[arg(
             long,
             value_name = "TEXT",
@@ -888,6 +901,13 @@ enum Command {
         deliver_existing_binding: bool,
     },
     #[command(
+        about = "Validate standalone cognition without opening a project, registry, journal, or Store"
+    )]
+    CaptureValidate {
+        #[arg(long, value_name = "FILE")]
+        manifest: PathBuf,
+    },
+    #[command(
         about = "Read bounded project context without requiring a Session or Plan",
         long_about = "Read a verified project binding and bounded WorkVCS context without writing the registry or Store. brief shows active context, handoff adds semantic relations, and retrospective samples the newest items across Records, Knowledge, relations, and Evidence metadata before remaining semantic history and terminal work inventory."
     )]
@@ -908,6 +928,15 @@ enum Command {
 
         #[command(flatten)]
         locator: ProjectLocatorArgs,
+
+        #[command(flatten)]
+        work: WorkSelectionArgs,
+
+        #[arg(long, requires = "expected_context_digest")]
+        since_commit: Option<String>,
+
+        #[arg(long, requires = "since_commit")]
+        expected_context_digest: Option<String>,
 
         #[arg(long, value_enum, default_value_t = RecallProfileArg::Brief, help = "Projection purpose: active work, Agent handoff, or reasoning-first retrospective")]
         profile: RecallProfileArg,
@@ -2177,9 +2206,8 @@ enum ProjectCommand {
 
         #[arg(
             long,
-            requires = "cwd",
             value_name = "PROJECT_REF",
-            help = "Optional explicit ProjectRef owner for the CWD resolution probe"
+            help = "Optional explicit ProjectRef owner; JSON health may select it without a CWD"
         )]
         project_ref: Option<String>,
 
@@ -2197,6 +2225,23 @@ enum ProjectCommand {
             help = "Include diagnostic phase timings in microseconds; timings are observational, not acceptance thresholds"
         )]
         timings: bool,
+
+        #[arg(long, value_enum, default_value_t = SearchOutputFormatArg::KeyValue)]
+        format: SearchOutputFormatArg,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Immutable source archive to inspect in the typed JSON report"
+        )]
+        source_archive: Vec<PathBuf>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Current Store lexical search index to inspect in the typed JSON report"
+        )]
+        search_index: Option<PathBuf>,
     },
     #[command(about = "List and verify every project binding in the selected registry")]
     List {
@@ -4107,8 +4152,11 @@ enum PlanCommand {
         )]
         registry: Option<PathBuf>,
 
-        #[arg(long, help = "Required Work Branch for an explicit Store target")]
-        branch: Option<String>,
+        #[command(flatten)]
+        work: WorkSelectionArgs,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
 
         #[arg(
             long,
@@ -4145,8 +4193,11 @@ enum PlanCommand {
         )]
         registry: Option<PathBuf>,
 
-        #[arg(long, help = "Required Work Branch for an explicit Store target")]
-        branch: Option<String>,
+        #[command(flatten)]
+        work: WorkSelectionArgs,
+
+        #[command(flatten)]
+        locator: ProjectLocatorArgs,
 
         #[arg(
             long,
@@ -6279,6 +6330,15 @@ enum ClaimCommand {
 
 #[derive(Debug, Subcommand)]
 enum ContinuationCommand {
+    #[command(
+        about = "Inspect current continuation prerequisites in one SQLite read-only snapshot"
+    )]
+    Readiness {
+        #[arg(value_name = "STORE")]
+        store: PathBuf,
+        #[arg(long)]
+        scope_id: String,
+    },
     ProjectPolicySet {
         #[arg(value_name = "STORE")]
         store: PathBuf,
@@ -6314,6 +6374,11 @@ enum ContinuationCommand {
         carrier: String,
         #[arg(long)]
         claim: String,
+        #[arg(
+            long,
+            help = "Explicit enrolled Project identity persisted with this scope binding"
+        )]
+        project_id: Option<String>,
     },
     ScopeShow {
         #[arg(value_name = "STORE")]
@@ -8386,7 +8451,19 @@ fn run(cli: Cli) -> Result<String> {
                 registry,
                 require_healthy,
                 timings,
-            } => inspect_project_health(cwd, project_ref, registry, require_healthy, timings),
+                format,
+                source_archive,
+                search_index,
+            } => inspect_project_health(
+                cwd,
+                project_ref,
+                registry,
+                require_healthy,
+                timings,
+                format,
+                source_archive,
+                search_index,
+            ),
             ProjectCommand::List {
                 registry,
                 require_valid,
@@ -10917,16 +10994,18 @@ fn run(cli: Cli) -> Result<String> {
                 store,
                 cwd,
                 registry,
-                branch,
+                work,
+                locator,
                 manifest,
-            } => run_plan_admit(store, cwd, registry, branch, manifest),
+            } => run_plan_admit(store, cwd, registry, work, locator, manifest),
             PlanCommand::Evolve {
                 store,
                 cwd,
                 registry,
-                branch,
+                work,
+                locator,
                 manifest,
-            } => run_plan_evolve(store, cwd, registry, branch, manifest),
+            } => run_plan_evolve(store, cwd, registry, work, locator, manifest),
             PlanCommand::TaskDispositionAudit {
                 store,
                 cwd,
@@ -13950,6 +14029,7 @@ fn run(cli: Cli) -> Result<String> {
             cwd,
             registry,
             locator,
+            work,
             value_reason,
             manifest,
             capture_group,
@@ -13958,18 +14038,48 @@ fn run(cli: Cli) -> Result<String> {
             cwd,
             registry,
             locator,
+            work,
             value_reason,
             manifest,
             capture_group,
             deliver_existing_binding,
         ),
+        Command::CaptureValidate { manifest } => {
+            let bytes = fs::read(&manifest).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "cannot read cognition manifest {}: {error}",
+                    manifest.display()
+                ))
+            })?;
+            let manifest = CognitionCaptureManifest::from_json_bytes(&bytes)?;
+            manifest.validate_semantics()?;
+            Ok(format!(
+                "action=capture_validate\nvalid=true\nread_only=true\nrecords={}\nknowledge={}\nevidence={}\nrelations={}\nregistry_read=false\njournal_written=false\nstore_opened=false\n",
+                manifest.records.len(),
+                manifest.knowledge.len(),
+                manifest.evidence.len(),
+                manifest.relations.len()
+            ))
+        }
         Command::Recall {
             cwd,
             registry,
             locator,
+            work,
+            since_commit,
+            expected_context_digest,
             profile,
             budget_items,
-        } => run_recall(cwd, registry, locator, profile, budget_items),
+        } => run_recall(
+            cwd,
+            registry,
+            locator,
+            work,
+            profile,
+            budget_items,
+            since_commit,
+            expected_context_digest,
+        ),
         Command::Search { command } => run_search(command),
         Command::Automation { command } => run_automation(command),
         Command::ContextPacket { command } => match command {
@@ -15621,8 +15731,23 @@ struct HandoffScopeFields {
     focus_entity_id: Option<EntityId>,
 }
 
+fn run_continuation_readiness(store: &Path, scope_id: &str) -> Result<String> {
+    let scope_id = ContinuationScopeId::parse_canonical(scope_id)?;
+    let snapshot = Engine::open_readonly(store)?.continuation_readiness(scope_id)?;
+    let mut output = serde_json::to_string_pretty(&snapshot).map_err(|error| {
+        WorkVcsError::CanonicalEncodingInvalid(format!(
+            "cannot encode continuation readiness: {error}"
+        ))
+    })?;
+    output.push('\n');
+    Ok(output)
+}
+
 fn run_continuation(command: ContinuationCommand) -> Result<String> {
     match command {
+        ContinuationCommand::Readiness { store, scope_id } => {
+            run_continuation_readiness(&store, &scope_id)
+        }
         ContinuationCommand::ProjectPolicySet {
             store,
             actor,
@@ -15655,16 +15780,21 @@ fn run_continuation(command: ContinuationCommand) -> Result<String> {
             listener,
             carrier,
             claim,
+            project_id,
         } => {
             let mut engine = Engine::open(store)?;
-            let scope = engine.bind_continuation_scope(ContinuationScopeBindOptions::new(
+            let mut options = ContinuationScopeBindOptions::new(
                 WorkspaceId::parse_canonical(&workspace)?,
                 BranchId::parse_canonical(&branch)?,
                 EntityId::parse_canonical(&task)?,
                 SessionId::parse_canonical(&listener)?,
                 SessionId::parse_canonical(&carrier)?,
                 ClaimId::parse_canonical(&claim)?,
-            ))?;
+            );
+            if let Some(project_id) = project_id {
+                options = options.with_project_id(project_id)?;
+            }
+            let scope = engine.bind_continuation_scope(options)?;
             Ok(render_continuation_scope(&scope))
         }
         ContinuationCommand::ScopeShow {
@@ -17628,6 +17758,26 @@ impl ProjectBindingHealth {
     }
 }
 
+struct VerifiedRegistryBindingReadonly {
+    engine: Engine,
+    store_path: PathBuf,
+    integrity: IntegrityReport,
+    branch_head: BranchHead,
+    local_content_objects_verified: usize,
+}
+
+struct ProjectBindingHealthInspection<P> {
+    health: ProjectBindingHealth,
+    proof: Option<P>,
+    error_code: Option<String>,
+}
+
+impl<P> ProjectBindingHealthInspection<P> {
+    fn is_verified(&self) -> bool {
+        self.proof.is_some()
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ProjectBootstrapSpec {
     store_path: PathBuf,
@@ -19176,29 +19326,56 @@ fn render_project_discovery(discovery: &ProjectDiscovery) -> String {
     output
 }
 
-fn inspect_project_binding_health_with<T>(
+fn inspect_project_binding_health_with<T, P>(
     bindings: &[T],
-    mut verify: impl FnMut(usize, &T) -> Result<usize>,
-) -> Vec<ProjectBindingHealth> {
+    mut verify: impl FnMut(usize, &T) -> Result<(P, usize)>,
+) -> Vec<ProjectBindingHealthInspection<P>> {
     bindings
         .iter()
         .enumerate()
         .map(|(index, binding)| match verify(index, binding) {
-            Ok(local_content_objects_verified) => {
-                ProjectBindingHealth::verified(local_content_objects_verified)
-            }
-            Err(error) => ProjectBindingHealth::invalid(&error),
+            Ok((proof, local_content_objects_verified)) => ProjectBindingHealthInspection {
+                health: ProjectBindingHealth::verified(local_content_objects_verified),
+                proof: Some(proof),
+                error_code: None,
+            },
+            Err(error) => ProjectBindingHealthInspection {
+                health: ProjectBindingHealth::invalid(&error),
+                proof: None,
+                error_code: Some(error.code().to_string()),
+            },
         })
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn inspect_project_health(
     cwd: Option<PathBuf>,
     project_ref: Option<String>,
     registry: Option<PathBuf>,
     require_healthy: bool,
     timings: bool,
+    format: SearchOutputFormatArg,
+    source_archives: Vec<PathBuf>,
+    search_index: Option<PathBuf>,
 ) -> Result<String> {
+    if format == SearchOutputFormatArg::KeyValue
+        && (!source_archives.is_empty() || search_index.is_some())
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "project health --source-archive and --search-index require --format json".to_owned(),
+        ));
+    }
+    if format == SearchOutputFormatArg::KeyValue && project_ref.is_some() && cwd.is_none() {
+        return Err(WorkVcsError::QueryInvalid(
+            "project health --project-ref without --cwd requires --format json".to_owned(),
+        ));
+    }
+    if format == SearchOutputFormatArg::Json && timings {
+        return Err(WorkVcsError::QueryInvalid(
+            "project health --timings is available only with --format key-value".to_owned(),
+        ));
+    }
     let total_started = Instant::now();
     let effective = effective_registry_config(registry)?;
     let registry_path = canonical_registry_path(
@@ -19220,6 +19397,9 @@ fn inspect_project_health(
             timings,
             registry_load_us,
             total_started,
+            format,
+            source_archives,
+            search_index,
         ),
         LoadedProjectRegistry::V2 { registry, digest } => inspect_project_health_v2(
             &effective,
@@ -19232,6 +19412,9 @@ fn inspect_project_health(
             timings,
             registry_load_us,
             total_started,
+            format,
+            source_archives,
+            search_index,
         ),
     }
 }
@@ -19248,9 +19431,12 @@ fn inspect_project_health_v1(
     timings: bool,
     registry_load_us: u128,
     total_started: Instant,
+    format: SearchOutputFormatArg,
+    source_archives: Vec<PathBuf>,
+    search_index: Option<PathBuf>,
 ) -> Result<String> {
     let binding_validation_started = Instant::now();
-    let binding_health = inspect_project_binding_health_with(bindings, |index, binding| {
+    let binding_inspections = inspect_project_binding_health_with(bindings, |index, binding| {
         let duplicate_identity = bindings.iter().enumerate().any(|(other_index, other)| {
             other_index != index
                 && other.identity_kind == binding.identity_kind
@@ -19262,21 +19448,24 @@ fn inspect_project_health_v1(
                 binding.identity_kind, binding.identity
             )))
         } else {
-            verify_registry_binding_readonly(binding)
+            inspect_verified_registry_binding_readonly(binding).map(|proof| {
+                let local_content_objects_verified = proof.local_content_objects_verified;
+                (proof, local_content_objects_verified)
+            })
         }
     });
     let binding_validation_us = binding_validation_started.elapsed().as_micros();
-    let invalid_bindings = binding_health
+    let invalid_bindings = binding_inspections
         .iter()
-        .filter(|health| !health.is_verified())
+        .filter(|inspection| !inspection.is_verified())
         .count();
-    let local_content_objects_verified = binding_health
+    let local_content_objects_verified = binding_inspections
         .iter()
-        .filter_map(|health| health.local_content_objects_verified)
+        .filter_map(|inspection| inspection.health.local_content_objects_verified)
         .sum::<usize>();
 
     let resolution_started = Instant::now();
-    let resolution_requested = cwd.is_some();
+    let resolution_requested = cwd.is_some() || project_ref.is_some();
     let mut resolution_status = if resolution_requested {
         "unresolved".to_owned()
     } else {
@@ -19298,7 +19487,7 @@ fn inspect_project_health_v1(
             })
             .collect::<Vec<_>>();
         match matches.as_slice() {
-            [(index, binding)] if binding_health[*index].is_verified() => {
+            [(index, binding)] if binding_inspections[*index].is_verified() => {
                 let store_path = canonical_existing_path(
                     "project binding store",
                     Path::new(&binding.store_path),
@@ -19309,7 +19498,7 @@ fn inspect_project_health_v1(
                 }
             }
             [(index, _)] => {
-                resolution_issue = binding_health[*index].issue.clone();
+                resolution_issue = binding_inspections[*index].health.issue.clone();
             }
             [] => {
                 resolution_issue = Some(format!(
@@ -19340,6 +19529,35 @@ fn inspect_project_health_v1(
         )));
     }
 
+    if format == SearchOutputFormatArg::Json {
+        if !source_archives.is_empty() || search_index.is_some() {
+            return Err(WorkVcsError::QueryInvalid(
+                "project health cannot inspect archives or search without an exact verified registry-v2 ProjectRef binding"
+                    .to_owned(),
+            ));
+        }
+        let control_plane = control_plane_health_v1(
+            effective,
+            registry_path,
+            bindings,
+            digest,
+            &binding_inspections,
+            health,
+            resolution_requested,
+            &resolution_status,
+            resolution_issue.as_deref(),
+        );
+        let current_store = CurrentStoreHealthLayer::not_checked(
+            "registry v1 does not provide an exact verified ProjectRef identity for the current Store",
+        );
+        return render_layered_project_health_json(&inspect_layered_project_health(
+            control_plane,
+            current_store,
+            Vec::new(),
+            None,
+        ));
+    }
+
     let mut output = format!(
         "health={}\nread_only=true\nregistry_path={}\nregistry_source={}\nregistry_version=1\nregistry_revision=none\nregistry_digest={}\nmigration_required=true\nbindings={}\nvalid_bindings={}\ninvalid_bindings={}\nlocal_content_objects_verified={}\nrouting_activation_state=not_applicable\nrouting_activation_path=none\nrouting_activation_issue=none\njournal_admission_activation_state=not_applicable\njournal_admission_activation_path=none\njournal_admission_activation_issue=none\njournal_admission_activation_version=none\ncapability.cognition_capture=false\ncapability.plan_admit=false\ncapability.plan_evolve=false\nresolution_requested={}\nresolution_status={}\nresolution_project_ref=none\nresolution_issue={}\nregistry_written=false\nactivation_written=false\njournal_written=false\nstore_written=false\n",
         health.as_str(),
@@ -19357,7 +19575,13 @@ fn inspect_project_health_v1(
             .map(escape_key_value)
             .unwrap_or_else(|| "none".to_owned()),
     );
-    render_project_binding_health(&mut output, &binding_health);
+    render_project_binding_health(
+        &mut output,
+        &binding_inspections
+            .iter()
+            .map(|inspection| inspection.health.clone())
+            .collect::<Vec<_>>(),
+    );
     if timings {
         writeln!(output, "timing.registry_load_us={registry_load_us}").expect("write to String");
         writeln!(
@@ -19389,19 +19613,26 @@ fn inspect_project_health_v2(
     timings: bool,
     registry_load_us: u128,
     total_started: Instant,
+    format: SearchOutputFormatArg,
+    source_archives: Vec<PathBuf>,
+    search_index: Option<PathBuf>,
 ) -> Result<String> {
     let binding_validation_started = Instant::now();
-    let binding_health = inspect_project_binding_health_with(registry.bindings(), |_, binding| {
-        verify_v2_registry_binding_readonly(binding)
-    });
+    let binding_inspections =
+        inspect_project_binding_health_with(registry.bindings(), |_, binding| {
+            inspect_verified_v2_registry_binding_readonly(binding).map(|proof| {
+                let local_content_objects_verified = proof.local_content_objects_verified;
+                (proof, local_content_objects_verified)
+            })
+        });
     let binding_validation_us = binding_validation_started.elapsed().as_micros();
-    let invalid_bindings = binding_health
+    let invalid_bindings = binding_inspections
         .iter()
-        .filter(|health| !health.is_verified())
+        .filter(|inspection| !inspection.is_verified())
         .count();
-    let local_content_objects_verified = binding_health
+    let local_content_objects_verified = binding_inspections
         .iter()
-        .filter_map(|health| health.local_content_objects_verified)
+        .filter_map(|inspection| inspection.health.local_content_objects_verified)
         .sum::<usize>();
 
     let activation_started = Instant::now();
@@ -19449,10 +19680,12 @@ fn inspect_project_health_v2(
     let mut resolution_project_ref = None;
     let mut resolution_issue = None;
     let mut unbound_resolution = None;
+    let mut selected_binding_index = None;
     if let Some(cwd) = cwd {
         let identity = resolve_project_identity(&cwd)?;
         let explicit_project_ref = project_ref
-            .map(|value| ProjectRefId::parse_canonical(&value))
+            .as_deref()
+            .map(ProjectRefId::parse_canonical)
             .transpose()?;
         let locator_input =
             unified_locator_input_for_identity(explicit_project_ref, Vec::new(), None, &identity)?;
@@ -19467,7 +19700,8 @@ fn inspect_project_health_v2(
                     .enumerate()
                     .find(|(_, binding)| binding.project_ref_id() == resolved_project_ref)
                 {
-                    Some((index, binding)) if binding_health[index].is_verified() => {
+                    Some((index, binding)) if binding_inspections[index].is_verified() => {
+                        selected_binding_index = Some(index);
                         let store_path = canonical_existing_path(
                             "project binding store",
                             Path::new(binding.store_path().as_str()),
@@ -19480,7 +19714,10 @@ fn inspect_project_health_v2(
                             resolution_issue = Some(error.to_string());
                         }
                     }
-                    Some((index, _)) => resolution_issue = binding_health[index].issue.clone(),
+                    Some((index, _)) => {
+                        selected_binding_index = Some(index);
+                        resolution_issue = binding_inspections[index].health.issue.clone();
+                    }
                     None => {
                         resolution_issue = Some(format!(
                             "resolved ProjectRef {resolved_project_ref} has no registry binding"
@@ -19508,6 +19745,29 @@ fn inspect_project_health_v2(
                 "ProjectRef resolution ended with status {} and {} diagnostic(s)",
                 resolution_status,
                 resolution.diagnostics().len()
+            ));
+        }
+    } else if let Some(explicit_project_ref) = project_ref.as_deref() {
+        let explicit_project_ref = ProjectRefId::parse_canonical(explicit_project_ref)?;
+        if registry.project(explicit_project_ref).is_none() {
+            resolution_issue = Some(format!(
+                "explicit ProjectRef {explicit_project_ref} does not exist in the selected registry"
+            ));
+        } else if let Some((index, _)) = registry
+            .bindings()
+            .iter()
+            .enumerate()
+            .find(|(_, binding)| binding.project_ref_id() == explicit_project_ref)
+        {
+            resolution_status = "resolved".to_owned();
+            resolution_project_ref = Some(explicit_project_ref);
+            selected_binding_index = Some(index);
+            if !binding_inspections[index].is_verified() {
+                resolution_issue = binding_inspections[index].health.issue.clone();
+            }
+        } else {
+            resolution_issue = Some(format!(
+                "explicit ProjectRef {explicit_project_ref} has no registry binding"
             ));
         }
     }
@@ -19556,6 +19816,111 @@ fn inspect_project_health_v2(
         unreachable!("non-healthy ProjectRef v2 health must fail closed");
     }
 
+    if format == SearchOutputFormatArg::Json {
+        let control_plane = control_plane_health_v2(
+            effective,
+            registry_path,
+            registry,
+            digest,
+            &binding_inspections,
+            health,
+            &routing,
+            &journal,
+            journal_activation_version,
+            cognition_capture,
+            plan_admit,
+            plan_evolve,
+            capability_issue.as_deref(),
+            resolution_requested,
+            &resolution_status,
+            resolution_project_ref,
+            resolution_issue.as_deref(),
+            unbound_resolution.as_ref(),
+            selected_binding_index,
+        );
+        let mut verified_identity = None;
+        let current_store = match selected_binding_index {
+            Some(index) => {
+                let binding = &registry.bindings()[index];
+                let inspection = &binding_inspections[index];
+                match inspection.proof.as_ref() {
+                    Some(proof) => {
+                        let identity = SearchSourceIdentity::new(
+                            binding.project_ref_id(),
+                            binding.store_id(),
+                            binding.workspace_id(),
+                            binding.branch_id(),
+                        );
+                        verified_identity = Some((proof.store_path.clone(), identity));
+                        CurrentStoreHealthLayer::verified(
+                            proof.store_path.clone(),
+                            binding.project_ref_id(),
+                            binding.store_id(),
+                            binding.workspace_id(),
+                            binding.branch_id(),
+                            proof.branch_head.head_commit_id,
+                            proof.branch_head.state_digest,
+                            proof.integrity.clone(),
+                            proof.local_content_objects_verified,
+                        )
+                    }
+                    None => {
+                        CurrentStoreHealthLayer::failed_selection(
+                            PathBuf::from(binding.store_path().as_str()),
+                            binding.project_ref_id(),
+                            binding.store_id(),
+                            binding.workspace_id(),
+                            binding.branch_id(),
+                            inspection
+                                .error_code
+                                .as_deref()
+                                .unwrap_or("control_plane_invalid"),
+                            inspection.health.issue.as_deref().unwrap_or(
+                                "selected binding verification failed without diagnostic",
+                            ),
+                        )
+                    }
+                }
+            }
+            None => CurrentStoreHealthLayer::not_checked(
+                "no exact registry-v2 ProjectRef binding was selected by --cwd or --project-ref",
+            ),
+        };
+        let optional_requested = !source_archives.is_empty() || search_index.is_some();
+        if optional_requested && verified_identity.is_none() {
+            return Err(WorkVcsError::QueryInvalid(
+                "project health cannot inspect archives or search without an exact verified registry-v2 ProjectRef binding"
+                    .to_owned(),
+            ));
+        }
+        let historical_requests = verified_identity
+            .as_ref()
+            .map(|(_, identity)| {
+                source_archives
+                    .into_iter()
+                    .map(|archive_path| HistoricalArchiveRequest {
+                        identity: *identity,
+                        archive_path,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let current_search = match (verified_identity, search_index) {
+            (Some((store_path, identity)), Some(index_path)) => Some(CurrentSearchRequest {
+                store_path,
+                identity,
+                index_path,
+            }),
+            _ => None,
+        };
+        return render_layered_project_health_json(&inspect_layered_project_health(
+            control_plane,
+            current_store,
+            historical_requests,
+            current_search,
+        ));
+    }
+
     let mut output = format!(
         "health={}\nread_only=true\nregistry_path={}\nregistry_source={}\nregistry_version=2\nregistry_revision={}\nregistry_digest={}\nmigration_required=false\nbindings={}\nvalid_bindings={}\ninvalid_bindings={}\nlocal_content_objects_verified={}\nrouting_activation_state={}\nrouting_activation_path={}\nrouting_activation_issue={}\njournal_admission_activation_state={}\njournal_admission_activation_path={}\njournal_admission_activation_issue={}\njournal_admission_activation_version={}\ncapability.cognition_capture={}\ncapability.plan_admit={}\ncapability.plan_evolve={}\nresolution_requested={}\nresolution_status={}\nresolution_project_ref={}\nresolution_issue={}\nregistry_written=false\nactivation_written=false\njournal_written=false\nstore_written=false\n",
         health.as_str(),
@@ -19598,7 +19963,13 @@ fn inspect_project_health_v2(
             .map(escape_key_value)
             .unwrap_or_else(|| "none".to_owned()),
     );
-    render_project_binding_health(&mut output, &binding_health);
+    render_project_binding_health(
+        &mut output,
+        &binding_inspections
+            .iter()
+            .map(|inspection| inspection.health.clone())
+            .collect::<Vec<_>>(),
+    );
     if timings {
         writeln!(output, "timing.registry_load_us={registry_load_us}").expect("write to String");
         writeln!(
@@ -19620,6 +19991,320 @@ fn inspect_project_health_v2(
         .expect("write to String");
     }
     Ok(output)
+}
+
+fn layered_health_from_project_health(health: ProjectHealthState) -> LayerHealth {
+    match health {
+        ProjectHealthState::Healthy => LayerHealth::Healthy,
+        ProjectHealthState::Degraded => LayerHealth::Degraded,
+        ProjectHealthState::Blocked => LayerHealth::Blocked,
+    }
+}
+
+fn binding_health_issue<P>(
+    index: usize,
+    inspection: &ProjectBindingHealthInspection<P>,
+) -> Option<HealthIssue> {
+    inspection.health.issue.as_deref().map(|message| {
+        HealthIssue::new(
+            "control_plane.bindings",
+            inspection
+                .error_code
+                .as_deref()
+                .unwrap_or("control_plane_invalid"),
+            format!("binding {index} verification failed: {message}"),
+            true,
+            Some(RecoveryAction::manual(
+                "inspect the exact registry binding and Store evidence before changing either authority",
+                true,
+            )),
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn control_plane_health_v1(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    bindings: &[ProjectBinding],
+    digest: &ControlPlaneDigest,
+    binding_inspections: &[ProjectBindingHealthInspection<VerifiedRegistryBindingReadonly>],
+    health: ProjectHealthState,
+    resolution_requested: bool,
+    resolution_status: &str,
+    resolution_issue: Option<&str>,
+) -> ControlPlaneHealthLayer {
+    let mut issues = vec![HealthIssue::new(
+        "control_plane",
+        "registry_migration_required",
+        "registry v1 cannot authorize the ProjectRef-v2 control plane",
+        true,
+        Some(RecoveryAction::manual(
+            "preview and explicitly authorize the exact registry-v2 migration candidate",
+            true,
+        )),
+    )];
+    issues.extend(
+        binding_inspections
+            .iter()
+            .enumerate()
+            .filter_map(|(index, inspection)| binding_health_issue(index, inspection)),
+    );
+    if let Some(message) = resolution_issue {
+        issues.push(HealthIssue::new(
+            "control_plane.resolution",
+            "control_plane_invalid",
+            message,
+            true,
+            Some(RecoveryAction::manual(
+                "inspect the exact legacy binding and migrate only after its owner is established",
+                true,
+            )),
+        ));
+    }
+    ControlPlaneHealthLayer {
+        health: layered_health_from_project_health(health),
+        checked: true,
+        required_for_normal_work: true,
+        registry: RegistryHealthObservation {
+            path: registry_path.to_path_buf(),
+            source: effective.source.to_string(),
+            version: 1,
+            revision: None,
+            digest: digest.to_string(),
+            migration_required: true,
+        },
+        bindings: bindings
+            .iter()
+            .zip(binding_inspections)
+            .enumerate()
+            .map(|(index, (_, inspection))| BindingHealthObservation {
+                index,
+                project_ref_id: None,
+                verified: inspection.is_verified(),
+                local_content_objects_verified: inspection.health.local_content_objects_verified,
+                issue: inspection.health.issue.clone(),
+            })
+            .collect(),
+        routing: ActivationHealthObservation {
+            state: "not_applicable".to_owned(),
+            path: None,
+            issue: None,
+            version: None,
+        },
+        journal_admission: ActivationHealthObservation {
+            state: "not_applicable".to_owned(),
+            path: None,
+            issue: None,
+            version: None,
+        },
+        capabilities: ["cognition_capture", "plan_admit", "plan_evolve"]
+            .into_iter()
+            .map(|name| CapabilityHealthObservation {
+                name: name.to_owned(),
+                active: false,
+            })
+            .collect(),
+        resolution: ResolutionHealthObservation {
+            requested: resolution_requested,
+            status: resolution_status.to_owned(),
+            project_ref_id: None,
+            issue: resolution_issue.map(str::to_owned),
+        },
+        issues,
+    }
+}
+
+fn activation_health_observation(
+    inspection: &RoutingActivationInspection,
+    version: Option<u64>,
+) -> ActivationHealthObservation {
+    ActivationHealthObservation {
+        state: inspection.state.as_str().to_owned(),
+        path: Some(inspection.path.clone()),
+        issue: inspection.issue.clone(),
+        version,
+    }
+}
+
+fn activation_health_issue(
+    layer: &'static str,
+    state: RoutingActivationState,
+    path: &Path,
+    issue: Option<&str>,
+) -> Option<HealthIssue> {
+    if state == RoutingActivationState::Active {
+        return None;
+    }
+    let (code, message) = match state {
+        RoutingActivationState::Absent => (
+            if layer == "control_plane.routing" {
+                "routing_activation_inactive"
+            } else {
+                "journal_admission_activation_inactive"
+            },
+            format!("{layer} activation is absent at {}", path.display()),
+        ),
+        RoutingActivationState::Stale | RoutingActivationState::Invalid => (
+            "control_plane_invalid",
+            format!(
+                "{layer} activation is {} at {}{}",
+                state.as_str(),
+                path.display(),
+                issue
+                    .map(|detail| format!(" ({detail})"))
+                    .unwrap_or_default()
+            ),
+        ),
+        RoutingActivationState::Active => unreachable!("active state returned above"),
+    };
+    Some(HealthIssue::new(
+        layer,
+        code,
+        message,
+        true,
+        Some(RecoveryAction::manual(
+            "inspect and explicitly activate the exact digest-bound control-plane candidate",
+            true,
+        )),
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn control_plane_health_v2(
+    effective: &EffectiveRegistryConfig,
+    registry_path: &Path,
+    registry: &ProjectRegistryV2,
+    digest: &ControlPlaneDigest,
+    binding_inspections: &[ProjectBindingHealthInspection<VerifiedRegistryBindingReadonly>],
+    health: ProjectHealthState,
+    routing: &RoutingActivationInspection,
+    journal: &RoutingActivationInspection,
+    journal_activation_version: Option<u64>,
+    cognition_capture: bool,
+    plan_admit: bool,
+    plan_evolve: bool,
+    capability_issue: Option<&str>,
+    resolution_requested: bool,
+    resolution_status: &str,
+    resolution_project_ref: Option<ProjectRefId>,
+    resolution_issue: Option<&str>,
+    unbound_resolution: Option<&(String, usize, usize)>,
+    selected_binding_index: Option<usize>,
+) -> ControlPlaneHealthLayer {
+    let mut issues = binding_inspections
+        .iter()
+        .enumerate()
+        .filter_map(|(index, inspection)| binding_health_issue(index, inspection))
+        .collect::<Vec<_>>();
+    issues.extend(activation_health_issue(
+        "control_plane.routing",
+        routing.state,
+        &routing.path,
+        routing.issue.as_deref(),
+    ));
+    issues.extend(activation_health_issue(
+        "control_plane.journal_admission",
+        journal.state,
+        &journal.path,
+        journal.issue.as_deref(),
+    ));
+    if let Some(message) = capability_issue {
+        issues.push(HealthIssue::new(
+            "control_plane.journal_admission",
+            "control_plane_invalid",
+            message,
+            true,
+            Some(RecoveryAction::manual(
+                "inspect the exact journal-admission marker before replacing or reactivating it",
+                true,
+            )),
+        ));
+    } else if journal.state == RoutingActivationState::Active {
+        for (name, active) in [
+            ("cognition_capture", cognition_capture),
+            ("plan_admit", plan_admit),
+            ("plan_evolve", plan_evolve),
+        ] {
+            if !active {
+                issues.push(HealthIssue::new(
+                    "control_plane.capabilities",
+                    "journal_admission_capability_inactive",
+                    format!("journal-admission capability {name} is inactive"),
+                    true,
+                    Some(RecoveryAction::manual(
+                        "inspect and explicitly activate a marker that declares the required capability",
+                        true,
+                    )),
+                ));
+            }
+        }
+    }
+    if let Some(message) = resolution_issue {
+        let code = if unbound_resolution.is_some() {
+            "project_owner_unbound"
+        } else {
+            selected_binding_index
+                .and_then(|index| binding_inspections[index].error_code.as_deref())
+                .unwrap_or("control_plane_invalid")
+        };
+        issues.push(HealthIssue::new(
+            "control_plane.resolution",
+            code,
+            message,
+            true,
+            Some(RecoveryAction::manual(
+                "inspect the exact ProjectRef resolution evidence before changing project ownership or routing",
+                true,
+            )),
+        ));
+    }
+    ControlPlaneHealthLayer {
+        health: layered_health_from_project_health(health),
+        checked: true,
+        required_for_normal_work: true,
+        registry: RegistryHealthObservation {
+            path: registry_path.to_path_buf(),
+            source: effective.source.to_string(),
+            version: 2,
+            revision: Some(registry.revision()),
+            digest: digest.to_string(),
+            migration_required: false,
+        },
+        bindings: registry
+            .bindings()
+            .iter()
+            .zip(binding_inspections)
+            .enumerate()
+            .map(|(index, (binding, inspection))| BindingHealthObservation {
+                index,
+                project_ref_id: Some(binding.project_ref_id().to_string()),
+                verified: inspection.is_verified(),
+                local_content_objects_verified: inspection.health.local_content_objects_verified,
+                issue: inspection.health.issue.clone(),
+            })
+            .collect(),
+        routing: activation_health_observation(routing, None),
+        journal_admission: activation_health_observation(journal, journal_activation_version),
+        capabilities: [
+            ("cognition_capture", cognition_capture),
+            ("plan_admit", plan_admit),
+            ("plan_evolve", plan_evolve),
+        ]
+        .into_iter()
+        .map(|(name, active)| CapabilityHealthObservation {
+            name: name.to_owned(),
+            active,
+        })
+        .collect(),
+        resolution: ResolutionHealthObservation {
+            requested: resolution_requested,
+            status: resolution_status.to_owned(),
+            project_ref_id: resolution_project_ref.map(|value| value.to_string()),
+            issue: resolution_issue.map(str::to_owned),
+        },
+        issues,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -20060,6 +20745,13 @@ fn verify_registry_binding_readonly(binding: &ProjectBinding) -> Result<usize> {
 }
 
 fn open_verified_registry_binding_readonly(binding: &ProjectBinding) -> Result<(Engine, usize)> {
+    let proof = inspect_verified_registry_binding_readonly(binding)?;
+    Ok((proof.engine, proof.local_content_objects_verified))
+}
+
+fn inspect_verified_registry_binding_readonly(
+    binding: &ProjectBinding,
+) -> Result<VerifiedRegistryBindingReadonly> {
     let store_path =
         canonical_existing_path("project binding store", Path::new(&binding.store_path))?;
     let canonical_store_path = store_path.display().to_string();
@@ -20069,7 +20761,9 @@ fn open_verified_registry_binding_readonly(binding: &ProjectBinding) -> Result<(
             binding.store_path, canonical_store_path
         )));
     }
-    let engine = open_verified_store_readonly(&store_path)?;
+    let engine = Engine::open_readonly(&store_path)?;
+    let integrity = engine.validate_integrity()?;
+    require_integrity_report_valid(&integrity)?;
     let store_info = engine.store_info()?;
     if store_info.store_id != binding.store_id {
         return Err(WorkVcsError::QueryInvalid(format!(
@@ -20086,7 +20780,13 @@ fn open_verified_registry_binding_readonly(binding: &ProjectBinding) -> Result<(
         )));
     }
     let local_content_objects_verified = engine.validate_local_content_storage()?;
-    Ok((engine, local_content_objects_verified))
+    Ok(VerifiedRegistryBindingReadonly {
+        engine,
+        store_path,
+        integrity,
+        branch_head,
+        local_content_objects_verified,
+    })
 }
 
 const WORKVCS_BUILD_GIT_COMMIT: &str = env!("WORKVCS_BUILD_GIT_COMMIT");
@@ -21061,8 +21761,15 @@ fn verify_v2_registry_binding_readonly(binding: &ProjectBindingV2) -> Result<usi
 fn open_verified_v2_registry_binding_readonly(
     binding: &ProjectBindingV2,
 ) -> Result<(Engine, usize)> {
+    let proof = inspect_verified_v2_registry_binding_readonly(binding)?;
+    Ok((proof.engine, proof.local_content_objects_verified))
+}
+
+fn inspect_verified_v2_registry_binding_readonly(
+    binding: &ProjectBindingV2,
+) -> Result<VerifiedRegistryBindingReadonly> {
     let project_ref = binding.project_ref_id().to_string();
-    open_verified_registry_binding_readonly(&ProjectBinding {
+    inspect_verified_registry_binding_readonly(&ProjectBinding {
         identity_kind: "project-ref".to_owned(),
         identity: project_ref.clone(),
         root: project_ref,
@@ -25430,10 +26137,44 @@ fn verify_opened_recovery_target(engine: &Engine, binding: &ProjectBindingV2) ->
     Ok(())
 }
 
+fn admitted_work_branch(
+    engine: &Engine,
+    binding: &ProjectBindingV2,
+    intent: &CaptureIntent,
+) -> Result<BranchId> {
+    let Some(context) = intent.work_context() else {
+        return Ok(binding.branch_id());
+    };
+    if context.workspace_id != binding.workspace_id() {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "admitted work Workspace differs from the resolved Project binding".to_owned(),
+        ));
+    }
+    let branch = engine.branch_head(context.branch_id)?;
+    if branch.workspace_id != binding.workspace_id() || branch.lifecycle_state != "active" {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "admitted work Branch must remain active in the resolved Project Workspace".to_owned(),
+        ));
+    }
+    Ok(context.branch_id)
+}
+
+fn admitted_session_work_guard(intent: &CaptureIntent) -> Option<workvcs_core::SessionWorkGuard> {
+    let context = intent.work_context()?;
+    Some(workvcs_core::SessionWorkGuard::new(
+        context.session_id?,
+        context.workspace_id,
+        context.branch_id,
+        context.focus_entity_id,
+    ))
+}
+
 fn event_target_matches_binding(
     payload: &CaptureEventPayload,
     binding: &ProjectBindingV2,
+    work_context: Option<&workvcs_core::control_plane::CaptureWorkContext>,
 ) -> Option<bool> {
+    let delivery_branch = work_context.map_or(binding.branch_id(), |context| context.branch_id);
     let matches = match payload {
         CaptureEventPayload::ProjectBindingReady(value) => {
             value.project_ref_id() == binding.project_ref_id()
@@ -25446,19 +26187,19 @@ fn event_target_matches_binding(
             value.project_ref_id() == binding.project_ref_id()
                 && value.store_id() == binding.store_id()
                 && value.workspace_id() == binding.workspace_id()
-                && value.branch_id() == binding.branch_id()
+                && value.branch_id() == delivery_branch
         }
         CaptureEventPayload::DeliveryApplied(value) => {
             value.project_ref_id() == binding.project_ref_id()
                 && value.store_id() == binding.store_id()
                 && value.workspace_id() == binding.workspace_id()
-                && value.branch_id() == binding.branch_id()
+                && value.branch_id() == delivery_branch
         }
         CaptureEventPayload::DeliveryFailed(value) => {
             value.project_ref_id() == binding.project_ref_id()
                 && value.store_id() == binding.store_id()
                 && value.workspace_id() == binding.workspace_id()
-                && value.branch_id() == binding.branch_id()
+                && value.branch_id() == delivery_branch
         }
         _ => return None,
     };
@@ -25567,7 +26308,8 @@ fn validate_existing_binding_delivery_preflight(
     }
 
     for (index, event) in events.iter().enumerate() {
-        if let Some(matches) = event_target_matches_binding(event.payload(), binding)
+        if let Some(matches) =
+            event_target_matches_binding(event.payload(), binding, intent.work_context())
             && !matches
         {
             return Err(WorkVcsError::ControlPlaneInvalid(
@@ -25587,7 +26329,8 @@ fn validate_existing_binding_delivery_preflight(
             }
             if recorded.registry_digest() != registry_digest
                 && !events[index + 1..].iter().any(|later| {
-                    event_target_matches_binding(later.payload(), binding) == Some(true)
+                    event_target_matches_binding(later.payload(), binding, intent.work_context())
+                        == Some(true)
                 })
             {
                 return Err(WorkVcsError::ControlPlaneInvalid(
@@ -26300,14 +27043,15 @@ fn apply_project_capture_recovery_with_fault_and_mode(
             delivery_failure_snapshot = Some(failure.clone());
         } else {
             verify_opened_recovery_target(&readonly_engine, binding)?;
-            let head = readonly_engine.branch_head(binding.branch_id())?;
+            let selected_branch = admitted_work_branch(&readonly_engine, binding, &intent)?;
+            let head = readonly_engine.branch_head(selected_branch)?;
             let prepared = prepare_primary_delivery_from_projection(
                 &intent,
                 delivery_projection.projection().capture_group(),
                 project_ref_id,
                 binding.store_id(),
                 binding.workspace_id(),
-                binding.branch_id(),
+                selected_branch,
                 head.head_commit_id,
                 head.state_digest,
                 delivery_projection.projection().delivery_started(),
@@ -26383,7 +27127,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                     project_ref_id,
                     binding.store_id(),
                     binding.workspace_id(),
-                    binding.branch_id(),
+                    selected_branch,
                     DeliveryFailureCode::LegacyManifestUpgradeRequired,
                     "upgrade_legacy_manifest",
                 )?;
@@ -26401,7 +27145,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                     project_ref_id,
                     binding.store_id(),
                     binding.workspace_id(),
-                    binding.branch_id(),
+                    selected_branch,
                     DeliveryFailureCode::SemanticManifestInvalid,
                     "start_new_capture_with_corrected_payload",
                 )?;
@@ -26421,7 +27165,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                     project_ref_id,
                     binding.store_id(),
                     binding.workspace_id(),
-                    binding.branch_id(),
+                    selected_branch,
                     failure_code,
                     recovery_action,
                 )?;
@@ -26440,7 +27184,7 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                     project_ref_id,
                     binding.store_id(),
                     binding.workspace_id(),
-                    binding.branch_id(),
+                    selected_branch,
                     DeliveryFailureCode::PlanReceiptTooLarge,
                     "start_new_plan_operation_with_smaller_manifest",
                 )?;
@@ -26459,12 +27203,16 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                 let delivery_result = (|| -> Result<_> {
                     Ok(match prepared.into_operation() {
                         PreparedPrimaryOperation::Cognition(manifest) => {
-                            let result = engine.capture_cognition(CognitionCaptureOptions::new(
-                                binding.branch_id(),
+                            let mut options = CognitionCaptureOptions::new(
+                                selected_branch,
                                 started.expected_head_commit_id(),
                                 started.expected_state_digest(),
                                 manifest,
-                            ))?;
+                            );
+                            if let Some(guard) = admitted_session_work_guard(&intent) {
+                                options = options.with_session_work_guard(guard);
+                            }
+                            let result = engine.capture_cognition(options)?;
                             let receipt =
                                 build_primary_delivery_receipt(&intent, &started, &result)?;
                             (
@@ -26474,10 +27222,11 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                             )
                         }
                         PreparedPrimaryOperation::PlanAdmission(manifest) => {
-                            let result = engine.admit_plan(PlanAdmissionOptions::new(
-                                binding.branch_id(),
-                                manifest,
-                            ))?;
+                            let mut options = PlanAdmissionOptions::new(selected_branch, manifest);
+                            if let Some(guard) = admitted_session_work_guard(&intent) {
+                                options = options.with_session_work_guard(guard);
+                            }
+                            let result = engine.admit_plan(options)?;
                             let receipt =
                                 build_plan_admission_delivery_receipt(&intent, &started, &result)?;
                             (
@@ -26492,15 +27241,18 @@ fn apply_project_capture_recovery_with_fault_and_mode(
                                 PlanEvolutionManifest::Supersede(value)
                                     if value.schema_version == 1
                             );
-                            let options = if legacy_recovery {
+                            let mut options = if legacy_recovery {
                                 admitted_legacy_plan_evolution_options(
                                     &locked_authority,
-                                    binding.branch_id(),
+                                    selected_branch,
                                     manifest,
                                 )?
                             } else {
-                                PlanEvolutionOptions::new(binding.branch_id(), manifest)
+                                PlanEvolutionOptions::new(selected_branch, manifest)
                             };
+                            if let Some(guard) = admitted_session_work_guard(&intent) {
+                                options = options.with_session_work_guard(guard);
+                            }
                             let result = engine.evolve_plan(options)?;
                             let receipt =
                                 build_plan_evolution_delivery_receipt(&intent, &started, &result)?;
@@ -28466,12 +29218,16 @@ fn run_resume(
     Ok(output)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_recall(
     cwd: PathBuf,
     registry: Option<PathBuf>,
     locator: ProjectLocatorArgs,
+    work: WorkSelectionArgs,
     profile: RecallProfileArg,
     budget_items: usize,
+    since_commit: Option<String>,
+    expected_context_digest: Option<String>,
 ) -> Result<String> {
     if budget_items == 0 || budget_items > 200 {
         return Err(WorkVcsError::QueryInvalid(
@@ -28486,7 +29242,12 @@ fn run_recall(
         locator.locator_adapter_context,
     )?;
     let engine = open_verified_store_readonly(Path::new(&discovery.binding.store_path))?;
-    let head = engine.branch_head(discovery.binding.branch_id)?;
+    let selected = work.resolve(
+        &engine,
+        discovery.binding.workspace_id,
+        discovery.binding.branch_id,
+    )?;
+    let head = engine.branch_head(selected.context.branch_id)?;
     let commit_id = head.head_commit_id;
     let mut semantic_options = SemanticSnapshotOptions::new(commit_id);
     if profile != RecallProfileArg::Brief {
@@ -28497,7 +29258,56 @@ fn run_recall(
     if profile == RecallProfileArg::Retrospective {
         semantic_options = semantic_options.with_knowledge_relations();
     }
-    let semantic = engine.semantic_snapshot(semantic_options)?;
+    let mut semantic = engine.semantic_snapshot(semantic_options)?;
+    let records_available = semantic.records.len();
+    work_context::project_snapshot(&engine, &mut semantic, &selected, profile)?;
+    let mut evidence_projection =
+        work_context::project_evidence(&engine, &semantic, &selected, profile)?;
+    let context_digest = work_context::context_basis_digest(
+        &discovery,
+        &selected,
+        profile,
+        &semantic,
+        &evidence_projection,
+    )?;
+    let selected_task_ids = semantic
+        .tasks
+        .iter()
+        .map(|task| task.task_entity_id)
+        .collect::<BTreeSet<_>>();
+    let selected_item_entities = semantic
+        .goals
+        .iter()
+        .map(|goal| goal.goal_entity_id)
+        .chain(semantic.plans.iter().map(|plan| plan.plan_entity_id))
+        .chain(selected_task_ids.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let records_not_selected = records_available - semantic.records.len();
+    let since = since_commit
+        .as_deref()
+        .map(CommitId::parse_canonical)
+        .transpose()?;
+    let removed = if let Some(since) = since {
+        let expected = expected_context_digest.as_deref().ok_or_else(|| {
+            WorkVcsError::QueryInvalid(
+                "delta recall requires the exact cached context digest".to_owned(),
+            )
+        })?;
+        work_context::apply_delta(
+            &engine,
+            &mut semantic,
+            &selected,
+            profile,
+            work_context::RecoveryBaseline {
+                commit_id: since,
+                context_digest: Digest::from_hex(expected)?,
+            },
+            &discovery,
+            &mut evidence_projection,
+        )?
+    } else {
+        Vec::new()
+    };
     let current_scope = engine.current_scope_at(commit_id)?;
 
     let mut goals = semantic.goals;
@@ -28514,6 +29324,10 @@ fn run_recall(
     tasks.reverse();
     records.sort_by_key(|record| record.record_entity_version_id);
     records.reverse();
+    if let Some(selector) = &selected.applicability.selector {
+        records
+            .sort_by_key(|record| !workvcs_core::work_scope_matches(&record.state.scope, selector));
+    }
     knowledge.sort_by_key(|item| item.knowledge_entity_version_id);
     knowledge.reverse();
 
@@ -28539,11 +29353,7 @@ fn run_recall(
     let mut record_relations = semantic.record_relations;
     let mut record_knowledge_relations = semantic.record_knowledge_relations;
     let mut knowledge_relations = semantic.knowledge_relations;
-    let mut evidence = if profile == RecallProfileArg::Retrospective {
-        engine.evidences(EvidenceListOptions::all())?.evidences
-    } else {
-        Vec::new()
-    };
+    let mut evidence = evidence_projection.items;
     record_relations.sort_by_key(|relation| relation.relation_version_id);
     record_relations.reverse();
     record_knowledge_relations.sort_by_key(|relation| relation.relation_version_id);
@@ -28557,24 +29367,42 @@ fn run_recall(
         .sessions(
             SessionListOptions::all()
                 .with_active_workspace_id(discovery.binding.workspace_id)
-                .with_active_branch_id(discovery.binding.branch_id),
+                .with_active_branch_id(selected.context.branch_id),
         )?
         .sessions;
+    if let Some(session_id) = selected.context.session_id {
+        sessions.retain(|session| session.session_id == session_id);
+    }
     sessions.sort_by_key(|session| session.last_activity_at_us.unwrap_or(session.started_at_us));
     sessions.reverse();
     let mut claims = Vec::new();
-    for session in &sessions {
-        claims.extend(
-            engine
-                .active_claims_for_session(ClaimListOptions::for_session(session.session_id))?
-                .claims
-                .into_iter()
-                .filter(|claim| {
-                    claim.workspace_id == discovery.binding.workspace_id
-                        && claim.branch_id == discovery.binding.branch_id
-                }),
-        );
+    let mut relevant_sessions = Vec::new();
+    for session in sessions {
+        let session_claims = engine
+            .active_claims_for_session(ClaimListOptions::for_session(session.session_id))?
+            .claims
+            .into_iter()
+            .filter(|claim| {
+                claim.workspace_id == discovery.binding.workspace_id
+                    && claim.branch_id == selected.context.branch_id
+                    && (!selected.applicability.is_work_scoped()
+                        || selected_task_ids.contains(&claim.task_entity_id))
+            })
+            .collect::<Vec<_>>();
+        if selected.applicability.is_work_scoped()
+            && selected.context.session_id.is_none()
+            && session_claims.is_empty()
+            && !session
+                .focus
+                .as_ref()
+                .is_some_and(|focus| selected_item_entities.contains(&focus.focus_entity_id))
+        {
+            continue;
+        }
+        relevant_sessions.push(session);
+        claims.extend(session_claims);
     }
+    let sessions = relevant_sessions;
     claims.sort_by_key(|claim| claim.last_activity_at_us.unwrap_or(claim.created_at_us));
     claims.reverse();
 
@@ -28618,7 +29446,7 @@ fn run_recall(
         discovery.binding.store_path,
         discovery.binding.store_id,
         discovery.binding.workspace_id,
-        discovery.binding.branch_id,
+        selected.context.branch_id,
         commit_id,
         head.state_digest,
         budget_items,
@@ -28634,8 +29462,67 @@ fn run_recall(
         record_knowledge_relations.len(),
         knowledge_relations.len(),
         evidence.len(),
-        if evidence.is_empty() { "none" } else { "store" },
+        if evidence.is_empty() {
+            "none"
+        } else if selected.applicability.selector.is_some() {
+            "selected_work"
+        } else {
+            "selected_branch"
+        },
     );
+    writeln!(output, "default_branch_id={}", discovery.binding.branch_id).expect("write to String");
+    writeln!(output, "context_digest={context_digest}").expect("write to String");
+    writeln!(
+        output,
+        "selected_session_id={}",
+        render_optional_display_or_none(selected.context.session_id.as_ref())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "selected_focus_entity_id={}",
+        render_optional_display_or_none(selected.applicability.entity_id().as_ref())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "runtime_focus_entity_id={}",
+        render_optional_display_or_none(selected.context.focus_entity_id.as_ref())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "context_basis=exact_commit_and_projected_semantic_versions"
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "record_scope_json={}",
+        selected
+            .applicability
+            .selector
+            .as_ref()
+            .map(|scope| canonical_cli_json("selected work scope", scope))
+            .transpose()?
+            .unwrap_or_else(|| "null".to_owned())
+    )
+    .expect("write to String");
+    writeln!(output, "records_not_selected={records_not_selected}").expect("write to String");
+    writeln!(output, "action_authority=not_inferred_from_recovery").expect("write to String");
+    writeln!(
+        output,
+        "delta_from_commit={}",
+        render_optional_display_or_none(since.as_ref())
+    )
+    .expect("write to String");
+    writeln!(output, "removed_items={}", removed.len()).expect("write to String");
+    for (index, (category, id)) in removed.iter().enumerate() {
+        writeln!(
+            output,
+            "removed.{index}.category={category}\nremoved.{index}.id={id}"
+        )
+        .expect("write to String");
+    }
     enum RecallItem<'a> {
         Goal(&'a GoalSnapshot),
         Plan(&'a PlanSnapshot),
@@ -29063,6 +29950,20 @@ fn run_recall(
                 writeln!(output, "item.{index}.category=record").expect("write to String");
                 writeln!(
                     output,
+                    "item.{index}.applicability={}",
+                    workvcs_core::work_item_applicability(
+                        &record.state.scope,
+                        selected.applicability.selector.is_some()
+                            && selected
+                                .applicability
+                                .matches_scope(&record.state.scope, Some(&selected_item_entities)),
+                        false
+                    )
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.action_authority=none").expect("write to String");
+                writeln!(
+                    output,
                     "item.{index}.temporal_scope={}",
                     if record_status_is_current(record.state.status) {
                         "current_active"
@@ -29106,6 +30007,21 @@ fn run_recall(
             }
             RecallItem::Knowledge(knowledge) => {
                 writeln!(output, "item.{index}.category=knowledge").expect("write to String");
+                writeln!(
+                    output,
+                    "item.{index}.applicability={}",
+                    workvcs_core::work_item_applicability(
+                        &knowledge.state.scope,
+                        selected.applicability.selector.is_some()
+                            && selected.applicability.matches_scope(
+                                &knowledge.state.scope,
+                                Some(&selected_item_entities)
+                            ),
+                        true
+                    )
+                )
+                .expect("write to String");
+                writeln!(output, "item.{index}.action_authority=none").expect("write to String");
                 writeln!(
                     output,
                     "item.{index}.temporal_scope={}",
@@ -29284,6 +30200,9 @@ fn run_recall(
             }
             RecallItem::Evidence(evidence) => {
                 writeln!(output, "item.{index}.category=evidence").expect("write to String");
+                writeln!(output, "item.{index}.applicability=reference_evidence")
+                    .expect("write to String");
+                writeln!(output, "item.{index}.action_authority=none").expect("write to String");
                 writeln!(output, "item.{index}.temporal_scope=store_snapshot")
                     .expect("write to String");
                 writeln!(output, "item.{index}.id={}", evidence.evidence_id)
@@ -30635,10 +31554,12 @@ fn record_status_is_current(status: RecordStatus) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_cognition_capture(
     cwd: PathBuf,
     registry: Option<PathBuf>,
     locator: ProjectLocatorArgs,
+    work: WorkSelectionArgs,
     value_reason: Option<String>,
     manifest_path: PathBuf,
     capture_group_path: Option<PathBuf>,
@@ -30669,6 +31590,11 @@ fn run_cognition_capture(
     let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
     match load_project_registry_readonly(&registry_path, true)? {
         LoadedProjectRegistry::V1 { digest, .. } => {
+            if work.is_explicit() {
+                return Err(WorkVcsError::QueryInvalid(
+                    "session-selected work capture requires ProjectRef-v2 routing".to_owned(),
+                ));
+            }
             if deliver_existing_binding {
                 return Err(WorkVcsError::ControlPlaneInvalid(
                     "--deliver-existing-binding requires registry v2 and cannot continue legacy or registry-v1 capture"
@@ -30770,9 +31696,38 @@ fn run_cognition_capture(
             }
             require_active_journal_admission(&effective, &registry_path, &registry_v2)?;
 
-            let semantic_payload = canonical_cognition_v2_payload(&manifest_bytes)?;
+            let mut semantic_payload = canonical_cognition_v2_payload(&manifest_bytes)?;
+            let selected = if work.is_explicit() {
+                let owner = resolution.primary_project_ref().ok_or_else(|| {
+                    WorkVcsError::QueryInvalid(
+                        "explicit work selection requires a resolved ProjectRef".to_owned(),
+                    )
+                })?;
+                let binding = registry_v2.binding(owner).ok_or_else(|| {
+                    WorkVcsError::QueryInvalid(
+                        "explicit work selection requires an existing Project binding".to_owned(),
+                    )
+                })?;
+                let (engine, _) = open_verified_v2_registry_binding_readonly(binding)?;
+                Some(work.resolve(&engine, binding.workspace_id(), binding.branch_id())?)
+            } else {
+                None
+            };
+            if let Some(selected) = &selected {
+                let overview_scope = CanonicalValue::Object(Vec::new());
+                let scope = selected
+                    .applicability
+                    .selector
+                    .as_ref()
+                    .unwrap_or(&overview_scope);
+                work_context::tag_cognition_payload(
+                    &mut semantic_payload,
+                    scope,
+                    &selected.context,
+                )?;
+            }
             let capture_group = load_capture_group_intent(capture_group_path.as_deref())?;
-            let intent = CaptureIntent::new(
+            let mut intent = CaptureIntent::new(
                 CaptureId::new_v7(),
                 manifest.idempotency_key.clone(),
                 UtcTimestamp::now()?,
@@ -30783,6 +31738,9 @@ fn run_cognition_capture(
                 resolution,
                 capture_group,
             )?;
+            if let Some(selected) = selected {
+                intent = intent.with_work_context(selected.context)?;
+            }
             let journal = CaptureJournal::for_project_registry(
                 &registry_path,
                 project_registry_journal_alias(&effective),
@@ -31115,8 +32073,7 @@ fn resolve_resume_session(
             let result = engine.sessions(
                 SessionListOptions::all()
                     .with_lifecycle_state(SessionLifecycleState::Active)
-                    .with_active_workspace_id(discovery.binding.workspace_id)
-                    .with_active_branch_id(discovery.binding.branch_id),
+                    .with_active_workspace_id(discovery.binding.workspace_id),
             )?;
             match result.sessions.as_slice() {
                 [session] => Ok(session.session_id),
@@ -31146,11 +32103,18 @@ fn resolve_resume_session(
                     discovery.binding.workspace_id
                 )));
             }
-            if snapshot.active_branch_id != Some(discovery.binding.branch_id) {
-                return Err(WorkVcsError::QueryInvalid(format!(
-                    "resume --cwd session {session_id} branch does not match binding {}",
-                    discovery.binding.branch_id
-                )));
+            let active_branch = snapshot.active_branch_id.ok_or_else(|| {
+                WorkVcsError::QueryInvalid(format!(
+                    "resume --cwd session {session_id} has no active Branch"
+                ))
+            })?;
+            let branch = engine.branch_head(active_branch)?;
+            if branch.workspace_id != discovery.binding.workspace_id
+                || branch.lifecycle_state != "active"
+            {
+                return Err(WorkVcsError::QueryInvalid(
+                    "resume Session Branch must be active in the bound Workspace".to_owned(),
+                ));
             }
             Ok(session_id)
         }
@@ -31159,12 +32123,15 @@ fn resolve_resume_session(
 
 #[derive(Debug)]
 struct RoutedPlanDelivery {
+    manifest_bytes: Vec<u8>,
     capture_id: CaptureId,
+    branch_id: BranchId,
     binding: ProjectBindingV2,
     journal_admission_reused: bool,
     target_delivery_reused: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_routed_plan_delivery(
     cwd: PathBuf,
     registry: Option<PathBuf>,
@@ -31172,6 +32139,8 @@ fn try_routed_plan_delivery(
     capability: JournalAdmissionCapability,
     manifest_idempotency_key: &str,
     manifest_bytes: &[u8],
+    locator: ProjectLocatorArgs,
+    work: WorkSelectionArgs,
 ) -> Result<Option<RoutedPlanDelivery>> {
     try_routed_plan_delivery_with_policy(
         cwd,
@@ -31182,9 +32151,12 @@ fn try_routed_plan_delivery(
         manifest_bytes,
         true,
         None,
+        locator,
+        work,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_existing_routed_plan_delivery(
     cwd: PathBuf,
     registry: Option<PathBuf>,
@@ -31192,6 +32164,8 @@ fn try_existing_routed_plan_delivery(
     capability: JournalAdmissionCapability,
     manifest_idempotency_key: &str,
     manifest_bytes: &[u8],
+    locator: ProjectLocatorArgs,
+    work: WorkSelectionArgs,
 ) -> Result<Option<RoutedPlanDelivery>> {
     try_routed_plan_delivery_with_policy(
         cwd,
@@ -31202,6 +32176,8 @@ fn try_existing_routed_plan_delivery(
         manifest_bytes,
         false,
         None,
+        locator,
+        work,
     )
 }
 
@@ -31224,6 +32200,8 @@ fn try_routed_plan_delivery_with_fault(
         manifest_bytes,
         true,
         fault,
+        ProjectLocatorArgs::default(),
+        WorkSelectionArgs::default(),
     )
 }
 
@@ -31237,20 +32215,37 @@ fn try_routed_plan_delivery_with_policy(
     manifest_bytes: &[u8],
     allow_new_admission: bool,
     fault: Option<CaptureRecoveryFault>,
+    locator: ProjectLocatorArgs,
+    work: WorkSelectionArgs,
 ) -> Result<Option<RoutedPlanDelivery>> {
     let current_identity = resolve_project_identity(&cwd)?;
     let effective = effective_registry_config(registry)?;
     let registry_path = project_registry_path_from_effective(&effective, false, &current_identity)?;
     let (registry_v2, registry_digest) = match load_project_registry_readonly(&registry_path, true)?
     {
-        LoadedProjectRegistry::V1 { .. } => return Ok(None),
+        LoadedProjectRegistry::V1 { .. } => {
+            if work.is_explicit()
+                || locator.project_ref.is_some()
+                || locator.locator_context.is_some()
+                || locator.locator_adapter_context.is_some()
+            {
+                return Err(WorkVcsError::QueryInvalid(
+                    "explicit work/Project selection requires registry v2 Plan routing".to_owned(),
+                ));
+            }
+            return Ok(None);
+        }
         LoadedProjectRegistry::V2 { registry, digest } => (*registry, digest),
     };
     let locator_input = unified_locator_input_for_identity_with_mode(
         ResolutionMode::DurableWrite,
-        None,
-        load_semantic_locator_evidence(None)?,
-        None,
+        locator
+            .project_ref
+            .as_deref()
+            .map(ProjectRefId::parse_canonical)
+            .transpose()?,
+        load_semantic_locator_evidence(locator.locator_context.as_deref())?,
+        locator.locator_adapter_context.as_deref(),
         &current_identity,
     )?;
     let resolution = resolve_project(&registry_v2, locator_input.resolution_context())?;
@@ -31262,8 +32257,33 @@ fn try_routed_plan_delivery_with_policy(
         )));
     }
     require_active_journal_capability(&effective, &registry_path, &registry_v2, capability)?;
-    let semantic_payload = canonical_durable_operation_payload(manifest_bytes, payload_kind)?;
-    let intent = CaptureIntent::new(
+    let mut semantic_payload = canonical_durable_operation_payload(manifest_bytes, payload_kind)?;
+    let selected = if work.is_explicit() {
+        let owner = resolution
+            .primary_project_ref()
+            .expect("resolved Plan owner");
+        let binding = registry_v2.binding(owner).ok_or_else(|| {
+            WorkVcsError::QueryInvalid(
+                "explicit Plan work selection requires an existing binding".to_owned(),
+            )
+        })?;
+        let (engine, _) = open_verified_v2_registry_binding_readonly(binding)?;
+        Some(work.resolve(&engine, binding.workspace_id(), binding.branch_id())?)
+    } else {
+        None
+    };
+    if let Some(selected) = &selected {
+        let overview_scope = CanonicalValue::Object(Vec::new());
+        let scope = selected
+            .applicability
+            .selector
+            .as_ref()
+            .unwrap_or(&overview_scope);
+        work_context::tag_cognition_payload(&mut semantic_payload, scope, &selected.context)?;
+    }
+    let delivered_manifest_bytes = serde_json::to_vec(&semantic_payload)
+        .map_err(|error| WorkVcsError::CanonicalEncodingInvalid(error.to_string()))?;
+    let mut intent = CaptureIntent::new(
         CaptureId::new_v7(),
         format!("{}:{manifest_idempotency_key}", payload_kind.as_str()),
         UtcTimestamp::now()?,
@@ -31280,6 +32300,9 @@ fn try_routed_plan_delivery_with_policy(
         resolution,
         None,
     )?;
+    if let Some(selected) = selected {
+        intent = intent.with_work_context(selected.context)?;
+    }
     let journal = CaptureJournal::for_project_registry(
         &registry_path,
         project_registry_journal_alias(&effective),
@@ -31345,13 +32368,15 @@ fn try_routed_plan_delivery_with_policy(
             "durable Plan delivery completed without a verified binding".to_owned(),
         )
     })?;
-    report.primary_delivery.ok_or_else(|| {
+    let receipt = report.primary_delivery.ok_or_else(|| {
         WorkVcsError::ControlPlaneInvalid(
             "durable Plan delivery completed without a delivery_applied receipt".to_owned(),
         )
     })?;
     Ok(Some(RoutedPlanDelivery {
+        manifest_bytes: delivered_manifest_bytes,
         capture_id,
+        branch_id: receipt.branch_id(),
         binding,
         journal_admission_reused: admission.outcome() == CaptureAdmissionOutcome::Reused,
         target_delivery_reused,
@@ -31429,7 +32454,8 @@ fn run_plan_admit(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
     registry: Option<PathBuf>,
-    branch: Option<String>,
+    work: WorkSelectionArgs,
+    locator: ProjectLocatorArgs,
     manifest_path: PathBuf,
 ) -> Result<String> {
     let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
@@ -31441,12 +32467,19 @@ fn run_plan_admit(
     let manifest = PlanAdmissionManifest::from_json_bytes(&manifest_bytes)?;
     match (store, cwd) {
         (Some(store_path), None) => {
-            if registry.is_some() {
+            if registry.is_some()
+                || work.session.is_some()
+                || work.task.is_some()
+                || work.scope_json.is_some()
+                || locator.project_ref.is_some()
+                || locator.locator_context.is_some()
+                || locator.locator_adapter_context.is_some()
+            {
                 return Err(WorkVcsError::QueryInvalid(
-                    "plan admit explicit STORE does not accept --registry".to_owned(),
+                    "plan admit explicit STORE does not accept registry, locator, or Session selectors; use --cwd for project work routing".to_owned(),
                 ));
             }
-            let branch = branch.ok_or_else(|| {
+            let branch = work.branch.ok_or_else(|| {
                 WorkVcsError::QueryInvalid("plan admit explicit STORE requires --branch".to_owned())
             })?;
             let current_dir = std::env::current_dir().map_err(|error| {
@@ -31463,11 +32496,6 @@ fn run_plan_admit(
             Ok(render_plan_admission(&result))
         }
         (None, Some(cwd)) => {
-            if branch.is_some() {
-                return Err(WorkVcsError::QueryInvalid(
-                    "plan admit --cwd uses bound branch and must not pass --branch".to_owned(),
-                ));
-            }
             if let Some(routed) = try_routed_plan_delivery(
                 cwd.clone(),
                 registry.clone(),
@@ -31475,12 +32503,14 @@ fn run_plan_admit(
                 JournalAdmissionCapability::PlanAdmit,
                 manifest.idempotency_key(),
                 &manifest_bytes,
+                locator.clone(),
+                work.clone(),
             )? {
                 let engine = open_verified_store_readonly(routed.binding.store_path().as_path())?;
                 let mut result = engine
                     .find_plan_admission_result(PlanAdmissionOptions::new(
-                        routed.binding.branch_id(),
-                        manifest,
+                        routed.branch_id,
+                        PlanAdmissionManifest::from_json_bytes(&routed.manifest_bytes)?,
                     ))?
                     .ok_or_else(|| {
                         WorkVcsError::IntegrityInvalid(
@@ -31524,7 +32554,8 @@ fn run_plan_evolve(
     store: Option<PathBuf>,
     cwd: Option<PathBuf>,
     registry: Option<PathBuf>,
-    branch: Option<String>,
+    work: WorkSelectionArgs,
+    locator: ProjectLocatorArgs,
     manifest_path: PathBuf,
 ) -> Result<String> {
     let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
@@ -31540,12 +32571,19 @@ fn run_plan_evolve(
     );
     match (store, cwd) {
         (Some(store_path), None) => {
-            if registry.is_some() {
+            if registry.is_some()
+                || work.session.is_some()
+                || work.task.is_some()
+                || work.scope_json.is_some()
+                || locator.project_ref.is_some()
+                || locator.locator_context.is_some()
+                || locator.locator_adapter_context.is_some()
+            {
                 return Err(WorkVcsError::QueryInvalid(
-                    "plan evolve explicit STORE does not accept --registry".to_owned(),
+                    "plan evolve explicit STORE does not accept registry, locator, or Session selectors; use --cwd for project work routing".to_owned(),
                 ));
             }
-            let branch = branch.ok_or_else(|| {
+            let branch = work.branch.ok_or_else(|| {
                 WorkVcsError::QueryInvalid(
                     "plan evolve explicit STORE requires --branch".to_owned(),
                 )
@@ -31577,11 +32615,6 @@ fn run_plan_evolve(
             Ok(render_plan_evolution(&result))
         }
         (None, Some(cwd)) => {
-            if branch.is_some() {
-                return Err(WorkVcsError::QueryInvalid(
-                    "plan evolve --cwd uses bound branch and must not pass --branch".to_owned(),
-                ));
-            }
             let payload_kind = if manifest.payload_kind_version() == 2 {
                 CapturePayloadKind::PlanEvolveV2
             } else {
@@ -31595,6 +32628,8 @@ fn run_plan_evolve(
                     JournalAdmissionCapability::PlanEvolve,
                     manifest.idempotency_key(),
                     &manifest_bytes,
+                    locator.clone(),
+                    work.clone(),
                 )?
             } else {
                 manifest.validate_for_authoring()?;
@@ -31605,14 +32640,16 @@ fn run_plan_evolve(
                     JournalAdmissionCapability::PlanEvolve,
                     manifest.idempotency_key(),
                     &manifest_bytes,
+                    locator.clone(),
+                    work.clone(),
                 )?
             };
             if let Some(routed) = routed {
                 let engine = open_verified_store_readonly(routed.binding.store_path().as_path())?;
                 let mut result = engine
                     .find_plan_evolution_result(PlanEvolutionOptions::new(
-                        routed.binding.branch_id(),
-                        manifest,
+                        routed.branch_id,
+                        PlanEvolutionManifest::from_json_bytes(&routed.manifest_bytes)?,
                     ))?
                     .ok_or_else(|| {
                         WorkVcsError::IntegrityInvalid(
@@ -40092,7 +41129,7 @@ fn render_continuation_project_policy(
 
 fn render_continuation_scope(scope: &ContinuationScopeSnapshot) -> String {
     format!(
-        "scope.scope_id={}\nscope.workspace_id={}\nscope.branch_id={}\nscope.task_entity_id={}\nscope.listener_session_id={}\nscope.listener_revision={}\nscope.carrier_session_id={}\nscope.carrier_claim_id={}\nscope.owner_epoch={}\nscope.updated_at_us={}\n",
+        "scope.scope_id={}\nscope.workspace_id={}\nscope.branch_id={}\nscope.task_entity_id={}\nscope.listener_session_id={}\nscope.listener_revision={}\nscope.carrier_session_id={}\nscope.carrier_claim_id={}\nscope.owner_epoch={}\nscope.updated_at_us={}\nscope.project_id={}\nscope.project_policy_revision={}\nscope.project_policy_receipt_digest={}\nscope.project_binding_source={}\n",
         scope.scope_id,
         scope.workspace_id,
         scope.branch_id,
@@ -40103,6 +41140,10 @@ fn render_continuation_scope(scope: &ContinuationScopeSnapshot) -> String {
         scope.carrier_claim_id,
         scope.owner_epoch,
         scope.updated_at_us,
+        render_optional_display_or_none(scope.project_id.as_ref()),
+        render_optional_display_or_none(scope.project_policy_revision.as_ref()),
+        render_optional_display_or_none(scope.project_policy_receipt_digest.as_ref()),
+        render_optional_display_or_none(scope.project_binding_source.as_ref()),
     )
 }
 
@@ -44477,6 +45518,7 @@ fn render_structural_reference_list(references: &[StructuralReferenceSnapshot]) 
 
 #[cfg(test)]
 mod tests {
+    mod work_context_tests;
     use super::*;
     use clap::CommandFactory;
     use std::sync::{Arc, Barrier, Mutex, mpsc};
@@ -44962,6 +46004,7 @@ mod tests {
                 "context",
                 "resume",
                 "capture",
+                "capture-validate",
                 "recall",
                 "search",
                 "automation",
@@ -69327,15 +70370,19 @@ mod tests {
         let mut calls = [0_usize; 3];
         let health = inspect_project_binding_health_with(&bindings, |index, _| {
             calls[index] += 1;
-            Ok(index + 1)
+            Ok((index, index + 1))
         });
 
         assert_eq!(calls, [1, 1, 1]);
-        assert!(health.iter().all(ProjectBindingHealth::is_verified));
+        assert!(
+            health
+                .iter()
+                .all(ProjectBindingHealthInspection::is_verified)
+        );
         assert_eq!(
             health
                 .iter()
-                .filter_map(|item| item.local_content_objects_verified)
+                .filter_map(|item| item.health.local_content_objects_verified)
                 .sum::<usize>(),
             6
         );
@@ -69421,6 +70468,9 @@ mod tests {
             Some(fixture.registry_path.clone()),
             false,
             true,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
         )
         .expect("inspect default-off project health");
         assert_eq!(value(&degraded, "health"), "degraded");
@@ -69428,9 +70478,17 @@ mod tests {
         assert_eq!(value(&degraded, "resolution_status"), "resolved");
         assert_eq!(value(&degraded, "read_only"), "true");
         assert!(degraded.contains("timing.registry_load_us="));
-        let routing_error =
-            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
-                .expect_err("require-healthy rejects absent read routing");
+        let routing_error = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            true,
+            false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
+        )
+        .expect_err("require-healthy rejects absent read routing");
         assert_eq!(routing_error.code(), ErrorCode::RoutingActivationInactive);
 
         let read_preview =
@@ -69441,9 +70499,17 @@ mod tests {
             ControlPlaneDigest::from_text(&value(&read_preview, "candidate_digest")).unwrap(),
         )
         .unwrap();
-        let journal_error =
-            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
-                .expect_err("require-healthy rejects absent journal admission");
+        let journal_error = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            true,
+            false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
+        )
+        .expect_err("require-healthy rejects absent journal admission");
         assert_eq!(
             journal_error.code(),
             ErrorCode::JournalAdmissionActivationInactive
@@ -69531,6 +70597,9 @@ mod tests {
             Some(fixture.registry_path.clone()),
             false,
             false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
         )
         .unwrap();
         assert_eq!(value(&degraded, "health"), "degraded");
@@ -69540,9 +70609,17 @@ mod tests {
         );
         assert_eq!(value(&degraded, "capability.cognition_capture"), "true");
         assert_eq!(value(&degraded, "capability.plan_admit"), "false");
-        let missing =
-            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
-                .expect_err("legacy marker does not authorize Plan capabilities");
+        let missing = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            true,
+            false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
+        )
+        .expect_err("legacy marker does not authorize Plan capabilities");
         assert!(matches!(
             missing,
             WorkVcsError::JournalAdmissionCapabilityInactive {
@@ -69573,13 +70650,24 @@ mod tests {
             Some(fixture.registry_path.clone()),
             false,
             false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
         )
         .unwrap();
         assert_eq!(value(&blocked, "health"), "blocked");
         assert_eq!(value(&blocked, "routing_activation_state"), "stale");
-        let stale =
-            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
-                .expect_err("stale marker remains a generic invalid control plane");
+        let stale = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            true,
+            false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
+        )
+        .expect_err("stale marker remains a generic invalid control plane");
         assert_eq!(stale.code(), ErrorCode::ControlPlaneInvalid);
     }
 
@@ -69609,6 +70697,9 @@ mod tests {
             Some(fixture.registry_path.clone()),
             false,
             false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
         )
         .expect("invalid binding remains inspectable");
         assert_eq!(value(&health, "health"), "blocked");
@@ -69617,9 +70708,17 @@ mod tests {
         assert_eq!(value(&health, "binding.0.verified"), "false");
         assert!(value(&health, "binding.0.verification_error").contains("store id"));
 
-        let required =
-            inspect_project_health(None, None, Some(fixture.registry_path.clone()), true, false)
-                .expect_err("require-healthy rejects invalid binding");
+        let required = inspect_project_health(
+            None,
+            None,
+            Some(fixture.registry_path.clone()),
+            true,
+            false,
+            SearchOutputFormatArg::KeyValue,
+            Vec::new(),
+            None,
+        )
+        .expect_err("require-healthy rejects invalid binding");
         assert_eq!(required.code(), ErrorCode::ControlPlaneInvalid);
         assert_eq!(fs::read(&fixture.registry_path).unwrap(), registry_before);
         assert_eq!(cli_sqlite_file_snapshots(&fixture.store_path), store_before);

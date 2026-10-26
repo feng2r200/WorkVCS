@@ -81,10 +81,19 @@ authority before creating a binding. Malformed, stale, conflicting, or unsafe
 authority still fails closed. When existing state can change the work, use
 exactly one bounded path:
 
-- `recall --profile brief` for current project context;
-- `recall --profile handoff` for continuation or delegation;
+- `recall --profile brief` with the selected Session, Branch, or Task for current work;
+- `recall --profile handoff` with the same work selection for continuation or delegation;
 - `recall --profile retrospective` for reconstruction and learning; or
 - `resume --cwd` when a live or recoverable Session is relevant.
+
+Resolve project ownership and current work separately. A Project's registered
+Branch is a default. Choose or recover a Branch from the Project's conversation
+goals, continuation, parallel work, and shared-state needs, independently of
+Git. Use [Session-selected work and recovery](references/work-context.md) for
+Session/Branch/Task selection, No-Plan scopes, shared facts, and incremental
+reads. Carry the chosen selection through recording and exact readback.
+Project-wide Recall is an overview; another task's active record is not an
+instruction or authorization for this task.
 
 If continuation depends on one exact predecessor, use its stable identifier or
 a focused Handoff; bounded Recall does not promise that every historical item
@@ -133,6 +142,12 @@ objects and explicit provenance. `capture` can atomically create standalone
 Records, Knowledge, Evidence metadata, and supported relations without a Plan.
 Use Goal, Plan, Task, Acceptance Criterion, and Verification Requirement only
 when their structure improves coordination, recovery, or acceptance.
+
+Before admitting newly authored cognition, run
+`workvcs capture-validate --manifest FILE` to check fields, supported semantics,
+and relation endpoints without opening a project or Store. Validation grants
+no admission or delivery authority. After admission, preserve the operation ID
+and correct only the invalid or affected input.
 
 When a request needs supporting statements beyond bounded recovery and exact
 identifiers are unknown, use local derived search. Read

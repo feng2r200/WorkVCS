@@ -16,7 +16,12 @@ rules below.
 
 Store, Workspace, and Knowledge Space define scope or ownership.
 Work Branch refs select heads in immutable version history. They are not
-versioned entities inside their own Work State.
+determined by Git branch identity. Project conversations can share, separate,
+continue, or explicitly switch work Branches according to their goals and
+shared-state needs. A Project binding provides a default target; a verified
+Session or explicit Branch can select another target in that Workspace.
+
+Work Branch refs are not versioned entities inside their own Work State.
 
 `ObjectIdentity` is a lower Store-local registry shared by addressable typed
 families. It does not make every registered object an Entity. Store and

@@ -3,12 +3,13 @@ use crate::canonical::{CanonicalValue, canonical_bytes, parse_canonical_json};
 use crate::error::{Result, WorkVcsError, storage_error};
 use crate::history::{self, BranchProjectionRefreshOptions};
 use crate::identity::{
-    BranchId, ClaimId, ContinuationRotationId, ContinuationScopeId, Digest, EntityId,
+    BranchId, ClaimId, CommitId, ContinuationRotationId, ContinuationScopeId, Digest, EntityId,
     EntityVersionId, EventId, SessionId, WorkspaceId,
 };
 use crate::runtime::SessionLifecycleState;
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use serde::Serialize;
 use sha2::{Digest as ShaDigest, Sha256};
 use std::collections::BTreeSet;
 
@@ -36,6 +37,7 @@ const RECOVERY_AUTHORITY_DIGEST_DOMAIN: &str = "workvcs.continuation.abort-only-
 const RECOVERY_RECEIPT_DIGEST_DOMAIN: &str = "workvcs.continuation.abort-only-recovery.v1";
 const RECOVERY_HISTORY_CHAIN_DIGEST_DOMAIN: &str =
     "workvcs.continuation.abort-only-recovery-history.v1";
+const READINESS_DIGEST_DOMAIN: &str = "workvcs.continuation.readiness.v1";
 const MAX_CONTINUATION_DOCUMENT_BYTES: usize = 65_536;
 const MAX_CURRENTNESS_ENTITY_IDS: usize = 64;
 const MAX_CONTINUATION_PACKET_BYTES: i64 = 8_192;
@@ -43,6 +45,9 @@ const MAX_CONTINUATION_PACKET_ITEMS: i64 = 64;
 const MAX_CONTINUATION_PACKET_TOKEN_BUDGET: i64 = 4_096;
 const MAX_CONTINUATION_EVIDENCE_REFERENCES: usize = 32;
 const CONTINUATION_EVALUATOR_VERSION: &str = "wg-continuation-v1";
+const SCOPE_PROJECT_BINDING_SOURCE: &str = "continuation.scope_bound";
+const PRODUCT_MEMBERSHIP_VERIFIED: bool = false;
+const PRODUCT_DISPATCH_AUTHORIZED: bool = false;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContinuationSessionRole {
@@ -169,12 +174,141 @@ pub struct ContinuationScopeSnapshot {
     pub workspace_id: WorkspaceId,
     pub branch_id: BranchId,
     pub task_entity_id: EntityId,
+    pub project_id: Option<String>,
+    pub project_policy_revision: Option<i64>,
+    pub project_policy_receipt_digest: Option<Digest>,
+    pub project_binding_source: Option<String>,
     pub listener_session_id: SessionId,
     pub listener_revision: i64,
     pub carrier_session_id: SessionId,
     pub carrier_claim_id: ClaimId,
     pub owner_epoch: i64,
     pub updated_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessScopeFacts {
+    pub scope_id: ContinuationScopeId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub task_entity_id: EntityId,
+    pub project_id: Option<String>,
+    pub project_policy_revision: Option<i64>,
+    pub project_policy_receipt_digest: Option<Digest>,
+    pub project_binding_source: Option<String>,
+    pub listener_session_id: SessionId,
+    pub listener_revision: i64,
+    pub carrier_session_id: SessionId,
+    pub carrier_claim_id: ClaimId,
+    pub owner_epoch: i64,
+    pub updated_at_us: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessPolicyFacts {
+    pub resolution: String,
+    pub candidate_count: i64,
+    pub project_id: Option<String>,
+    pub enabled: Option<bool>,
+    pub revision: Option<i64>,
+    pub actor_session_id: Option<SessionId>,
+    pub receipt_digest: Option<Digest>,
+    pub updated_at_us: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessSessionFacts {
+    pub session_id: SessionId,
+    pub lifecycle_state: String,
+    pub role: Option<String>,
+    pub thread_id: Option<String>,
+    pub thread_session_count: Option<i64>,
+    pub historical_created_target_count: Option<i64>,
+    pub active_workspace_id: Option<WorkspaceId>,
+    pub active_branch_id: Option<BranchId>,
+    pub last_activity_at_us: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessCarrierFacts {
+    #[serde(flatten)]
+    pub session: ContinuationReadinessSessionFacts,
+    pub provenance: String,
+    pub promotion_rotation_id: Option<ContinuationRotationId>,
+    pub promotion_project_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessClaimFacts {
+    pub claim_id: ClaimId,
+    pub active: bool,
+    pub session_id: SessionId,
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    pub task_entity_id: EntityId,
+    pub mode: String,
+    pub last_activity_at_us: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessBranchFacts {
+    pub branch_id: BranchId,
+    pub workspace_id: WorkspaceId,
+    pub lifecycle_state: String,
+    pub head_commit_id: CommitId,
+    pub head_state_digest: Digest,
+    pub projection_status: Option<String>,
+    pub projected_commit_id: Option<CommitId>,
+    pub projection_state_digest: Option<Digest>,
+    pub projection_current: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessTaskFacts {
+    pub task_entity_id: EntityId,
+    pub current: bool,
+    pub entity_version_id: Option<EntityVersionId>,
+    pub state_digest: Option<Digest>,
+    pub status: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessRotationFacts {
+    pub active: bool,
+    pub rotation_id: Option<ContinuationRotationId>,
+    pub state: Option<String>,
+    pub scope_currentness_digest: Option<Digest>,
+    pub abort_only: Option<bool>,
+    pub listener_session_id: Option<SessionId>,
+    pub listener_revision: Option<i64>,
+    pub candidate_session_id: Option<SessionId>,
+    pub last_activity_at_us: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessGap {
+    pub code: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContinuationReadinessSnapshot {
+    pub schema_version: i64,
+    pub read_only: bool,
+    pub store_opened_readonly: bool,
+    pub provider_protocol_ready: bool,
+    pub product_membership_verified: bool,
+    pub product_dispatch_authorized: bool,
+    pub currentness_digest: Digest,
+    pub scope: ContinuationReadinessScopeFacts,
+    pub policy: ContinuationReadinessPolicyFacts,
+    pub listener: ContinuationReadinessSessionFacts,
+    pub carrier: ContinuationReadinessCarrierFacts,
+    pub claim: ContinuationReadinessClaimFacts,
+    pub branch: ContinuationReadinessBranchFacts,
+    pub task: ContinuationReadinessTaskFacts,
+    pub rotation: ContinuationReadinessRotationFacts,
+    pub gaps: Vec<ContinuationReadinessGap>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -370,6 +504,7 @@ pub struct ContinuationScopeBindOptions {
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     task_entity_id: EntityId,
+    project_id: Option<String>,
     listener_session_id: SessionId,
     carrier_session_id: SessionId,
     carrier_claim_id: ClaimId,
@@ -388,10 +523,19 @@ impl ContinuationScopeBindOptions {
             workspace_id,
             branch_id,
             task_entity_id,
+            project_id: None,
             listener_session_id,
             carrier_session_id,
             carrier_claim_id,
         }
+    }
+
+    pub fn with_project_id(mut self, project_id: impl Into<String>) -> Result<Self> {
+        self.project_id = Some(validate_embedded_identifier(
+            "continuation scope project_id",
+            &project_id.into(),
+        )?);
+        Ok(self)
     }
 }
 
@@ -1064,13 +1208,24 @@ pub(crate) fn bind_continuation_scope(
             && existing.carrier_session_id == options.carrier_session_id
             && existing.carrier_claim_id == options.carrier_claim_id
         {
-            return Ok(existing);
+            if existing.project_id.as_deref() == options.project_id.as_deref() {
+                return Ok(existing);
+            }
+            return Err(WorkVcsError::ContinuationInvalid(format!(
+                "continuation scope {} is already bound to Project {:?}, not {:?}",
+                existing.scope_id, existing.project_id, options.project_id
+            )));
         }
         return Err(WorkVcsError::ContinuationInvalid(format!(
             "continuation scope ({}, {}, {}) is already bound",
             options.workspace_id, options.branch_id, options.task_entity_id
         )));
     }
+    let project_binding = options
+        .project_id
+        .as_deref()
+        .map(|project_id| scope_project_binding_for_bind(&transaction, project_id))
+        .transpose()?;
     let scope_id = ContinuationScopeId::new_v7();
     transaction
         .execute(
@@ -1097,7 +1252,7 @@ pub(crate) fn bind_continuation_scope(
         options.listener_session_id,
         "continuation.scope_bound",
         now_us,
-        scope_event_payload(options, scope_id, 1, 1)?,
+        scope_event_payload(options, project_binding.as_ref(), scope_id, 1, 1)?,
     )?;
     session::update_session_activity(&transaction, options.listener_session_id, now_us)?;
     transaction.commit().map_err(storage_error)?;
@@ -1872,6 +2027,16 @@ pub(crate) fn begin_continuation_rotation(
         ));
     }
     let parsed_basis = parse_basis(&options.basis)?;
+    if scope
+        .project_id
+        .as_deref()
+        .is_some_and(|project_id| project_id != parsed_basis.project_id)
+    {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation rotation Project {:?} does not match scope-bound Project {:?}",
+            parsed_basis.project_id, scope.project_id
+        )));
+    }
     require_session_thread_id(
         &transaction,
         options.source_session_id,
@@ -2669,7 +2834,7 @@ pub(crate) fn commit_continuation_rotation(
         ));
     }
     if initial.state == ContinuationRotationState::Committed {
-        return committed_replay_result(&initial, options);
+        return committed_replay_result(connection.inner(), &initial, options);
     }
     if initial.state == ContinuationRotationState::Aborted {
         return Err(WorkVcsError::ContinuationInvalid(
@@ -2685,7 +2850,7 @@ pub(crate) fn commit_continuation_rotation(
     let occurrence = load_rotation_occurrence(&transaction, options.rotation_id)?;
     let existing = load_rotation_snapshot(&transaction, options.rotation_id)?;
     if existing.state == ContinuationRotationState::Committed {
-        return committed_replay_result(&existing, options);
+        return committed_replay_result(&transaction, &existing, options);
     }
     if existing.state == ContinuationRotationState::Aborted {
         return Err(WorkVcsError::ContinuationInvalid(
@@ -2958,6 +3123,119 @@ pub(crate) fn continuation_scope(
     load_scope(connection, workspace_id, branch_id, task_entity_id)
 }
 
+pub(crate) fn continuation_readiness(
+    connection: &StoreConnection,
+    scope_id: ContinuationScopeId,
+) -> Result<ContinuationReadinessSnapshot> {
+    connection.verify_foreign_keys()?;
+    if !connection.query_only_enabled()? {
+        return Err(WorkVcsError::ContinuationInvalid(
+            "continuation readiness requires Engine::open_readonly".to_owned(),
+        ));
+    }
+    let transaction = connection
+        .inner()
+        .unchecked_transaction()
+        .map_err(storage_error)?;
+    let scope = load_scope_by_id(&transaction, scope_id)?;
+    let scope_facts = ContinuationReadinessScopeFacts {
+        scope_id: scope.scope_id,
+        workspace_id: scope.workspace_id,
+        branch_id: scope.branch_id,
+        task_entity_id: scope.task_entity_id,
+        project_id: scope.project_id.clone(),
+        project_policy_revision: scope.project_policy_revision,
+        project_policy_receipt_digest: scope.project_policy_receipt_digest,
+        project_binding_source: scope.project_binding_source.clone(),
+        listener_session_id: scope.listener_session_id,
+        listener_revision: scope.listener_revision,
+        carrier_session_id: scope.carrier_session_id,
+        carrier_claim_id: scope.carrier_claim_id,
+        owner_epoch: scope.owner_epoch,
+        updated_at_us: scope.updated_at_us,
+    };
+    let listener = load_readiness_session(&transaction, scope.listener_session_id)?;
+    let carrier_session = load_readiness_session(&transaction, scope.carrier_session_id)?;
+    let rotation = load_readiness_rotation(&transaction, &scope)?;
+    let active_rotation_project_id = rotation_project_id(&transaction, &rotation)?;
+    let promotion = load_carrier_promotion(&transaction, &scope, &carrier_session)?;
+    let policy = load_readiness_policy(&transaction, &scope, &promotion)?;
+    let carrier = ContinuationReadinessCarrierFacts {
+        session: carrier_session,
+        provenance: promotion.provenance.clone(),
+        promotion_rotation_id: promotion.rotation_id,
+        promotion_project_id: promotion.project_id.clone(),
+    };
+    let claim = load_readiness_claim(&transaction, scope.carrier_claim_id)?;
+    let branch = load_readiness_branch(&transaction, scope.branch_id)?;
+    let task = load_readiness_task(&transaction, scope.branch_id, scope.task_entity_id)?;
+
+    let mut gaps = Vec::new();
+    collect_policy_gaps(&policy, &mut gaps);
+    collect_project_consistency_gaps(
+        &scope,
+        active_rotation_project_id.as_deref(),
+        &promotion,
+        &mut gaps,
+    );
+    collect_session_gaps("listener", &listener, &scope, &mut gaps);
+    collect_listener_role_gaps(&listener, &mut gaps);
+    collect_session_gaps("carrier", &carrier.session, &scope, &mut gaps);
+    collect_carrier_role_gaps(&carrier, &mut gaps);
+    if listener.thread_id.is_some() && listener.thread_id == carrier.session.thread_id {
+        push_readiness_gap(
+            &mut gaps,
+            "participant_thread_collision",
+            "continuation listener and carrier resolve to the same product thread",
+        );
+    }
+    collect_claim_gaps(&claim, &scope, &mut gaps);
+    collect_branch_gaps(&branch, &scope, &mut gaps);
+    collect_task_gaps(&task, &mut gaps);
+    collect_rotation_gaps(&rotation, &mut gaps);
+
+    let digest_input = ContinuationReadinessDigestInput {
+        schema_version: 1,
+        product_membership_verified: PRODUCT_MEMBERSHIP_VERIFIED,
+        product_dispatch_authorized: PRODUCT_DISPATCH_AUTHORIZED,
+        scope: &scope_facts,
+        policy: &policy,
+        listener: &listener,
+        carrier: &carrier,
+        claim: &claim,
+        branch: &branch,
+        task: &task,
+        rotation: &rotation,
+        gaps: &gaps,
+    };
+    let digest_bytes = serde_json::to_vec(&digest_input).map_err(|error| {
+        WorkVcsError::ContinuationInvalid(format!(
+            "continuation readiness digest serialization failed: {error}"
+        ))
+    })?;
+    let currentness_digest = Digest::domain_separated(READINESS_DIGEST_DOMAIN, &digest_bytes);
+    let provider_protocol_ready = gaps.is_empty();
+    transaction.commit().map_err(storage_error)?;
+    Ok(ContinuationReadinessSnapshot {
+        schema_version: 1,
+        read_only: true,
+        store_opened_readonly: true,
+        provider_protocol_ready,
+        product_membership_verified: PRODUCT_MEMBERSHIP_VERIFIED,
+        product_dispatch_authorized: PRODUCT_DISPATCH_AUTHORIZED,
+        currentness_digest,
+        scope: scope_facts,
+        policy,
+        listener,
+        carrier,
+        claim,
+        branch,
+        task,
+        rotation,
+        gaps,
+    })
+}
+
 pub(crate) fn continuation_rotation(
     connection: &Connection,
     rotation_id: ContinuationRotationId,
@@ -3103,6 +3381,7 @@ pub(super) fn prepare_session_departure(
 }
 
 fn committed_replay_result(
+    connection: &Connection,
     existing: &ContinuationRotationSnapshot,
     options: &ContinuationRotationCommitOptions,
 ) -> Result<ContinuationRotationCommitResult> {
@@ -3125,21 +3404,23 @@ fn committed_replay_result(
             "committed continuation rotation is missing its resulting claim".to_owned(),
         )
     })?;
-    let owner_epoch = existing.source_owner_epoch.checked_add(1).ok_or_else(|| {
-        WorkVcsError::ContinuationInvalid("continuation owner epoch overflow".to_owned())
-    })?;
-    let scope = ContinuationScopeSnapshot {
-        scope_id: existing.scope_id,
-        workspace_id: existing.workspace_id,
-        branch_id: existing.branch_id,
-        task_entity_id: existing.task_entity_id,
-        listener_session_id: existing.listener_session_id,
-        listener_revision: existing.listener_revision,
-        carrier_session_id: candidate_session_id,
-        carrier_claim_id: resulting_claim_id,
-        owner_epoch,
-        updated_at_us: existing.ended_at_us.unwrap_or(existing.last_activity_at_us),
-    };
+    let scope = load_scope_by_id(connection, existing.scope_id)?;
+    if scope.workspace_id != existing.workspace_id
+        || scope.branch_id != existing.branch_id
+        || scope.task_entity_id != existing.task_entity_id
+        || scope.listener_session_id != existing.listener_session_id
+        || scope.listener_revision != existing.listener_revision
+        || scope.carrier_session_id != candidate_session_id
+        || scope.carrier_claim_id != resulting_claim_id
+        || scope.owner_epoch
+            != existing.source_owner_epoch.checked_add(1).ok_or_else(|| {
+                WorkVcsError::ContinuationInvalid("continuation owner epoch overflow".to_owned())
+            })?
+    {
+        return Err(WorkVcsError::ContinuationInvalid(
+            "committed continuation rotation replay does not match the current scope".to_owned(),
+        ));
+    }
     Ok(ContinuationRotationCommitResult {
         previous_claim_id: existing.source_claim_id,
         resulting_claim_id,
@@ -4002,6 +4283,28 @@ fn load_project_policy_optional(
         },
     )
     .transpose()
+}
+
+fn scope_project_binding_for_bind(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<ScopeProjectBinding> {
+    let policy = load_project_policy_optional(connection, project_id)?.ok_or_else(|| {
+        WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope Project {project_id:?} has no durable policy receipt"
+        ))
+    })?;
+    if !policy.enabled {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope Project {project_id:?} is not opted in"
+        )));
+    }
+    Ok(ScopeProjectBinding {
+        project_id: policy.project_id,
+        policy_revision: policy.revision,
+        policy_receipt_digest: policy.receipt_digest,
+        source: SCOPE_PROJECT_BINDING_SOURCE.to_owned(),
+    })
 }
 
 fn require_source_role_and_provenance(
@@ -5484,6 +5787,911 @@ fn load_active_rotation(
     })
 }
 
+#[derive(Serialize)]
+struct ContinuationReadinessDigestInput<'a> {
+    schema_version: i64,
+    product_membership_verified: bool,
+    product_dispatch_authorized: bool,
+    scope: &'a ContinuationReadinessScopeFacts,
+    policy: &'a ContinuationReadinessPolicyFacts,
+    listener: &'a ContinuationReadinessSessionFacts,
+    carrier: &'a ContinuationReadinessCarrierFacts,
+    claim: &'a ContinuationReadinessClaimFacts,
+    branch: &'a ContinuationReadinessBranchFacts,
+    task: &'a ContinuationReadinessTaskFacts,
+    rotation: &'a ContinuationReadinessRotationFacts,
+    gaps: &'a [ContinuationReadinessGap],
+}
+
+struct CarrierPromotion {
+    provenance: String,
+    rotation_id: Option<ContinuationRotationId>,
+    project_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScopeProjectBinding {
+    project_id: String,
+    policy_revision: i64,
+    policy_receipt_digest: Digest,
+    source: String,
+}
+
+fn load_scope_project_binding(
+    connection: &Connection,
+    scope_id: ContinuationScopeId,
+    workspace_id: WorkspaceId,
+    branch_id: BranchId,
+    task_entity_id: EntityId,
+) -> Result<Option<ScopeProjectBinding>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT workspace_id, session_id, payload_json
+             FROM event
+             WHERE event_kind = 'continuation.scope_bound'
+               AND json_extract(payload_json, '$.scope_id') = ?1
+             ORDER BY occurred_at_us, event_id",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![scope_id.to_string()], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Option<Vec<u8>>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(storage_error)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(storage_error)?;
+    let [(event_workspace, event_session, payload_json)] = rows.as_slice() else {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope {scope_id} must have exactly one immutable scope_bound event"
+        )));
+    };
+    let event_workspace = decode_workspace_id("scope_bound.workspace_id", event_workspace.clone())?;
+    let event_session = event_session
+        .clone()
+        .map(|session| decode_session_id("scope_bound.session_id", session))
+        .transpose()?;
+    let event_session = event_session.ok_or_else(|| {
+        WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope {scope_id} scope_bound event has no owner Session"
+        ))
+    })?;
+    if event_workspace != workspace_id {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope {scope_id} scope_bound event owner does not match its runtime scope"
+        )));
+    }
+    let payload = parse_continuation_json("continuation scope_bound payload", payload_json)?;
+    let label = "continuation scope_bound payload";
+    require_matching_string(&payload, "scope_id", &scope_id.to_string(), label)?;
+    require_matching_string(&payload, "branch_id", &branch_id.to_string(), label)?;
+    require_matching_string(
+        &payload,
+        "task_entity_id",
+        &task_entity_id.to_string(),
+        label,
+    )?;
+    require_matching_string(
+        &payload,
+        "listener_session_id",
+        &event_session.to_string(),
+        label,
+    )?;
+
+    let fields = [
+        optional_object_field(&payload, "project_id"),
+        optional_object_field(&payload, "project_policy_revision"),
+        optional_object_field(&payload, "project_policy_receipt_digest"),
+        optional_object_field(&payload, "project_binding_source"),
+    ];
+    if fields.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    if fields.iter().any(Option::is_none) {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "stored continuation scope {scope_id} has a partial Project binding"
+        )));
+    }
+    let project_id = validate_embedded_identifier(
+        "stored continuation scope project_id",
+        require_nonempty_string(&payload, "project_id", label)?,
+    )?;
+    let policy_revision = require_integer(&payload, "project_policy_revision", label)?;
+    if policy_revision <= 0 {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "stored continuation scope {scope_id} Project policy revision must be positive"
+        )));
+    }
+    let source = require_nonempty_string(&payload, "project_binding_source", label)?;
+    if source != SCOPE_PROJECT_BINDING_SOURCE {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "stored continuation scope {scope_id} Project binding source {source:?} is invalid"
+        )));
+    }
+    Ok(Some(ScopeProjectBinding {
+        project_id,
+        policy_revision,
+        policy_receipt_digest: require_digest_string(
+            &payload,
+            "project_policy_receipt_digest",
+            label,
+        )?,
+        source: source.to_owned(),
+    }))
+}
+
+fn load_scope_by_id(
+    connection: &Connection,
+    scope_id: ContinuationScopeId,
+) -> Result<ContinuationScopeSnapshot> {
+    let row = connection
+        .query_row(
+            "SELECT workspace_id, branch_id, task_entity_id, listener_session_id,
+                    listener_revision, carrier_session_id, carrier_claim_id,
+                    owner_epoch, updated_at_us
+             FROM continuation_scope_runtime WHERE scope_id = ?1",
+            params![&scope_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((workspace, branch, task, listener, revision, carrier, claim, epoch, updated)) = row
+    else {
+        return Err(WorkVcsError::ContinuationNotFound(format!(
+            "continuation scope {scope_id} does not exist"
+        )));
+    };
+    let workspace_id = decode_workspace_id("scope.workspace_id", workspace)?;
+    let branch_id = decode_branch_id("scope.branch_id", branch)?;
+    let task_entity_id = decode_entity_id("scope.task_entity_id", task)?;
+    let listener_session_id = decode_session_id("scope.listener_session_id", listener)?;
+    let project_binding = load_scope_project_binding(
+        connection,
+        scope_id,
+        workspace_id,
+        branch_id,
+        task_entity_id,
+    )?;
+    Ok(ContinuationScopeSnapshot {
+        scope_id,
+        workspace_id,
+        branch_id,
+        task_entity_id,
+        project_id: project_binding
+            .as_ref()
+            .map(|binding| binding.project_id.clone()),
+        project_policy_revision: project_binding
+            .as_ref()
+            .map(|binding| binding.policy_revision),
+        project_policy_receipt_digest: project_binding
+            .as_ref()
+            .map(|binding| binding.policy_receipt_digest),
+        project_binding_source: project_binding.map(|binding| binding.source),
+        listener_session_id,
+        listener_revision: revision,
+        carrier_session_id: decode_session_id("scope.carrier_session_id", carrier)?,
+        carrier_claim_id: decode_claim_id("scope.carrier_claim_id", claim)?,
+        owner_epoch: epoch,
+        updated_at_us: updated,
+    })
+}
+
+fn load_readiness_session(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<ContinuationReadinessSessionFacts> {
+    let lifecycle_state = session::session_lifecycle_state_for_connection(connection, session_id)?;
+    let metadata = session::session_metadata_for_update(connection, session_id)?;
+    let role = optional_nonempty_metadata_string(&metadata, SESSION_ROLE_METADATA_KEY, session_id)?;
+    let thread_id =
+        optional_nonempty_metadata_string(&metadata, THREAD_ID_METADATA_KEY, session_id)?;
+    let runtime = connection
+        .query_row(
+            "SELECT active_workspace_id, active_branch_id, last_activity_at_us
+             FROM session_runtime WHERE session_id = ?1",
+            params![&session_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Option<Vec<u8>>>(0)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let (active_workspace_id, active_branch_id, last_activity_at_us) = match runtime {
+        Some((workspace, branch, activity)) => (
+            workspace
+                .map(|bytes| decode_workspace_id("session_runtime.active_workspace_id", bytes))
+                .transpose()?,
+            branch
+                .map(|bytes| decode_branch_id("session_runtime.active_branch_id", bytes))
+                .transpose()?,
+            Some(activity),
+        ),
+        None => (None, None, None),
+    };
+    let (thread_session_count, historical_created_target_count) = match thread_id.as_deref() {
+        Some(thread_id) => {
+            let count = connection
+                .query_row(
+                    "SELECT count(*) FROM session
+                     WHERE json_extract(metadata_json, '$.thread_id') = ?1",
+                    params![thread_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(storage_error)?;
+            (
+                Some(count),
+                Some(historical_created_thread_count(connection, thread_id)?),
+            )
+        }
+        None => (None, None),
+    };
+    Ok(ContinuationReadinessSessionFacts {
+        session_id,
+        lifecycle_state: session_lifecycle_state_label(lifecycle_state).to_owned(),
+        role,
+        thread_id,
+        thread_session_count,
+        historical_created_target_count,
+        active_workspace_id,
+        active_branch_id,
+        last_activity_at_us,
+    })
+}
+
+fn optional_nonempty_metadata_string(
+    metadata: &CanonicalValue,
+    field: &str,
+    session_id: SessionId,
+) -> Result<Option<String>> {
+    match optional_object_field(metadata, field) {
+        None => Ok(None),
+        Some(CanonicalValue::String(value)) if !value.trim().is_empty() => Ok(Some(value.clone())),
+        Some(_) => Err(WorkVcsError::ContinuationInvalid(format!(
+            "session {session_id} metadata field {field:?} must be a non-empty string"
+        ))),
+    }
+}
+
+fn load_carrier_promotion(
+    connection: &Connection,
+    scope: &ContinuationScopeSnapshot,
+    carrier: &ContinuationReadinessSessionFacts,
+) -> Result<CarrierPromotion> {
+    match carrier.role.as_deref() {
+        Some(WORK_SESSION_ROLE) => Ok(CarrierPromotion {
+            provenance: WORK_SESSION_ROLE.to_owned(),
+            rotation_id: None,
+            project_id: None,
+        }),
+        Some(WORK_CANDIDATE_SESSION_ROLE) => {
+            let Some(thread_id) = carrier.thread_id.as_deref() else {
+                return Ok(CarrierPromotion {
+                    provenance: "invalid_work_candidate".to_owned(),
+                    rotation_id: None,
+                    project_id: None,
+                });
+            };
+            let mut statement = connection
+                .prepare(
+                    "SELECT occurrence.rotation_id, occurrence.basis_json
+                     FROM continuation_rotation_result AS result
+                     INNER JOIN continuation_rotation AS occurrence
+                       ON occurrence.rotation_id = result.rotation_id
+                     WHERE result.status = ?1
+                       AND result.candidate_session_id = ?2
+                       AND result.resulting_claim_id = ?3
+                       AND occurrence.workspace_id = ?4
+                       AND occurrence.branch_id = ?5
+                       AND occurrence.task_entity_id = ?6
+                       AND json_extract(result.creation_receipt_json, '$.outcome') = 'created'
+                       AND json_extract(result.creation_receipt_json, '$.thread_id') = ?7",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map(
+                    params![
+                        COMMITTED_STATUS,
+                        &carrier.session_id.raw_bytes()[..],
+                        &scope.carrier_claim_id.raw_bytes()[..],
+                        &scope.workspace_id.raw_bytes()[..],
+                        &scope.branch_id.raw_bytes()[..],
+                        &scope.task_entity_id.raw_bytes()[..],
+                        thread_id,
+                    ],
+                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+                )
+                .map_err(storage_error)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(storage_error)?;
+            if rows.len() != 1 || carrier.historical_created_target_count != Some(1) {
+                return Ok(CarrierPromotion {
+                    provenance: "invalid_work_candidate".to_owned(),
+                    rotation_id: None,
+                    project_id: None,
+                });
+            }
+            let (rotation_id, basis_json) = &rows[0];
+            let basis = parse_basis(&parse_continuation_json(
+                "committed carrier basis_json",
+                basis_json,
+            )?)?;
+            Ok(CarrierPromotion {
+                provenance: "committed_work_candidate".to_owned(),
+                rotation_id: Some(decode_rotation_id(
+                    "carrier promotion rotation_id",
+                    rotation_id.clone(),
+                )?),
+                project_id: Some(basis.project_id),
+            })
+        }
+        _ => Ok(CarrierPromotion {
+            provenance: "invalid_role".to_owned(),
+            rotation_id: None,
+            project_id: None,
+        }),
+    }
+}
+
+fn load_readiness_rotation(
+    connection: &Connection,
+    scope: &ContinuationScopeSnapshot,
+) -> Result<ContinuationReadinessRotationFacts> {
+    let Some(rotation_id) = active_rotation_for_scope(
+        connection,
+        scope.workspace_id,
+        scope.branch_id,
+        scope.task_entity_id,
+    )?
+    else {
+        return Ok(ContinuationReadinessRotationFacts {
+            active: false,
+            rotation_id: None,
+            state: None,
+            scope_currentness_digest: None,
+            abort_only: None,
+            listener_session_id: None,
+            listener_revision: None,
+            candidate_session_id: None,
+            last_activity_at_us: None,
+        });
+    };
+    let snapshot = load_rotation_snapshot(connection, rotation_id)?;
+    if snapshot.scope_id != scope.scope_id
+        || snapshot.workspace_id != scope.workspace_id
+        || snapshot.branch_id != scope.branch_id
+        || snapshot.task_entity_id != scope.task_entity_id
+    {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "active continuation rotation {rotation_id} does not match scope {}",
+            scope.scope_id
+        )));
+    }
+    Ok(ContinuationReadinessRotationFacts {
+        active: true,
+        rotation_id: Some(rotation_id),
+        state: Some(snapshot.state.as_str().to_owned()),
+        scope_currentness_digest: Some(snapshot.scope_currentness_digest),
+        abort_only: Some(snapshot.abort_only),
+        listener_session_id: Some(snapshot.listener_session_id),
+        listener_revision: Some(snapshot.listener_revision),
+        candidate_session_id: snapshot.candidate_session_id,
+        last_activity_at_us: Some(snapshot.last_activity_at_us),
+    })
+}
+
+fn rotation_project_id(
+    connection: &Connection,
+    rotation: &ContinuationReadinessRotationFacts,
+) -> Result<Option<String>> {
+    let Some(rotation_id) = rotation.rotation_id else {
+        return Ok(None);
+    };
+    let occurrence = load_rotation_occurrence(connection, rotation_id)?;
+    Ok(Some(parse_basis(&occurrence.basis)?.project_id))
+}
+
+fn load_readiness_policy(
+    connection: &Connection,
+    scope: &ContinuationScopeSnapshot,
+    promotion: &CarrierPromotion,
+) -> Result<ContinuationReadinessPolicyFacts> {
+    let (resolution, project_id) = if let Some(project_id) = scope.project_id.as_ref() {
+        ("scope_binding", Some(project_id.clone()))
+    } else if promotion.provenance == "committed_work_candidate" {
+        (
+            "committed_work_candidate",
+            promotion.project_id.as_ref().cloned(),
+        )
+    } else {
+        ("project_binding_missing", None)
+    };
+    let policy = project_id
+        .as_deref()
+        .map(|project_id| load_project_policy_optional(connection, project_id))
+        .transpose()?
+        .flatten();
+    let resolution = if project_id.is_some() && policy.is_none() {
+        "project_policy_missing"
+    } else {
+        resolution
+    };
+    Ok(ContinuationReadinessPolicyFacts {
+        resolution: resolution.to_owned(),
+        candidate_count: i64::from(policy.is_some()),
+        project_id,
+        enabled: policy.as_ref().map(|policy| policy.enabled),
+        revision: policy.as_ref().map(|policy| policy.revision),
+        actor_session_id: policy.as_ref().map(|policy| policy.actor_session_id),
+        receipt_digest: policy.as_ref().map(|policy| policy.receipt_digest),
+        updated_at_us: policy.as_ref().map(|policy| policy.updated_at_us),
+    })
+}
+
+fn load_readiness_claim(
+    connection: &Connection,
+    claim_id: ClaimId,
+) -> Result<ContinuationReadinessClaimFacts> {
+    let row = connection
+        .query_row(
+            "SELECT claim.session_id, claim.workspace_id, claim.branch_id,
+                    claim.task_entity_id, claim.mode, claim_runtime.last_activity_at_us
+             FROM claim
+             LEFT JOIN claim_runtime ON claim_runtime.claim_id = claim.claim_id
+             WHERE claim.claim_id = ?1",
+            params![&claim_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((session_id, workspace_id, branch_id, task_entity_id, mode, activity)) = row else {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope references missing claim {claim_id}"
+        )));
+    };
+    Ok(ContinuationReadinessClaimFacts {
+        claim_id,
+        active: activity.is_some(),
+        session_id: decode_session_id("claim.session_id", session_id)?,
+        workspace_id: decode_workspace_id("claim.workspace_id", workspace_id)?,
+        branch_id: decode_branch_id("claim.branch_id", branch_id)?,
+        task_entity_id: decode_entity_id("claim.task_entity_id", task_entity_id)?,
+        mode,
+        last_activity_at_us: activity,
+    })
+}
+
+fn load_readiness_branch(
+    connection: &Connection,
+    branch_id: BranchId,
+) -> Result<ContinuationReadinessBranchFacts> {
+    let row = connection
+        .query_row(
+            "SELECT branch.workspace_id, branch.lifecycle_state, branch.head_commit_id,
+                    workstate_commit.state_digest, branch_projection_state.projection_status,
+                    branch_projection_state.projected_commit_id,
+                    branch_projection_state.projection_state_digest
+             FROM branch
+             INNER JOIN workstate_commit
+               ON workstate_commit.commit_id = branch.head_commit_id
+             LEFT JOIN branch_projection_state
+               ON branch_projection_state.branch_id = branch.branch_id
+             WHERE branch.branch_id = ?1",
+            params![&branch_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((workspace, lifecycle, head, state, status, projected, projected_state)) = row else {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope references missing branch {branch_id}"
+        )));
+    };
+    if !matches!(lifecycle.as_str(), "active" | "closed") {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "stored branch lifecycle state {lifecycle:?} is invalid"
+        )));
+    }
+    if status
+        .as_deref()
+        .is_some_and(|status| !matches!(status, "complete" | "not_materialized" | "invalid"))
+    {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "stored branch projection status {:?} is invalid",
+            status.as_deref()
+        )));
+    }
+    let head_commit_id = decode_commit_id("branch.head_commit_id", head)?;
+    let head_state_digest = decode_digest("workstate_commit.state_digest", state)?;
+    let projected_commit_id = projected
+        .map(|bytes| decode_commit_id("branch_projection_state.projected_commit_id", bytes))
+        .transpose()?;
+    let projection_state_digest = projected_state
+        .map(|bytes| decode_digest("branch_projection_state.projection_state_digest", bytes))
+        .transpose()?;
+    let projection_current = status.as_deref() == Some("complete")
+        && projected_commit_id == Some(head_commit_id)
+        && projection_state_digest == Some(head_state_digest);
+    Ok(ContinuationReadinessBranchFacts {
+        branch_id,
+        workspace_id: decode_workspace_id("branch.workspace_id", workspace)?,
+        lifecycle_state: lifecycle,
+        head_commit_id,
+        head_state_digest,
+        projection_status: status,
+        projected_commit_id,
+        projection_state_digest,
+        projection_current,
+    })
+}
+
+fn load_readiness_task(
+    connection: &Connection,
+    branch_id: BranchId,
+    task_entity_id: EntityId,
+) -> Result<ContinuationReadinessTaskFacts> {
+    let row = connection
+        .query_row(
+            "SELECT current.entity_version_id, version.state_digest,
+                    entity.entity_kind, version.state_json
+             FROM branch_entity_current AS current
+             INNER JOIN entity_version AS version
+               ON version.entity_id = current.entity_id
+              AND version.entity_version_id = current.entity_version_id
+             INNER JOIN entity ON entity.object_id = current.entity_id
+             WHERE current.branch_id = ?1 AND current.entity_id = ?2",
+            params![&branch_id.raw_bytes()[..], &task_entity_id.raw_bytes()[..]],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?;
+    let Some((version, digest, entity_kind, state_json)) = row else {
+        return Ok(ContinuationReadinessTaskFacts {
+            task_entity_id,
+            current: false,
+            entity_version_id: None,
+            state_digest: None,
+            status: None,
+        });
+    };
+    if entity_kind != "task" {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation scope entity {task_entity_id} has kind {entity_kind:?}, expected task"
+        )));
+    }
+    let state = parse_continuation_json("task state_json", &state_json)?;
+    let status = require_nonempty_string(&state, "status", "continuation task state")?;
+    if !matches!(
+        status,
+        "pending" | "in_progress" | "blocked" | "done" | "failed" | "cancelled" | "superseded"
+    ) {
+        return Err(WorkVcsError::ContinuationInvalid(format!(
+            "continuation task {task_entity_id} has unsupported status {status:?}"
+        )));
+    }
+    Ok(ContinuationReadinessTaskFacts {
+        task_entity_id,
+        current: true,
+        entity_version_id: Some(decode_entity_version_id("task.entity_version_id", version)?),
+        state_digest: Some(decode_digest("task.state_digest", digest)?),
+        status: Some(status.to_owned()),
+    })
+}
+
+fn collect_policy_gaps(
+    policy: &ContinuationReadinessPolicyFacts,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    match policy.resolution.as_str() {
+        "scope_binding" | "committed_work_candidate" if policy.enabled == Some(true) => {}
+        "scope_binding" | "committed_work_candidate" => push_readiness_gap(
+            gaps,
+            "project_policy_disabled",
+            "continuation project policy is disabled",
+        ),
+        "project_binding_missing" => push_readiness_gap(
+            gaps,
+            "project_binding_missing",
+            "continuation scope has no trusted Project binding",
+        ),
+        _ => push_readiness_gap(
+            gaps,
+            "project_policy_missing",
+            "the exact continuation Project has no durable policy",
+        ),
+    }
+}
+
+fn collect_project_consistency_gaps(
+    scope: &ContinuationScopeSnapshot,
+    active_rotation_project_id: Option<&str>,
+    promotion: &CarrierPromotion,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    let Some(project_id) = scope.project_id.as_deref() else {
+        return;
+    };
+    if active_rotation_project_id.is_some_and(|rotation_project| rotation_project != project_id) {
+        push_readiness_gap(
+            gaps,
+            "rotation_project_mismatch",
+            "the active continuation rotation Project does not match the scope-bound Project",
+        );
+    }
+    if promotion.provenance == "committed_work_candidate"
+        && promotion
+            .project_id
+            .as_deref()
+            .is_some_and(|promotion_project| promotion_project != project_id)
+    {
+        push_readiness_gap(
+            gaps,
+            "carrier_promotion_project_mismatch",
+            "the committed work_candidate Project does not match the scope-bound Project",
+        );
+    }
+}
+
+fn collect_session_gaps(
+    label: &str,
+    session: &ContinuationReadinessSessionFacts,
+    scope: &ContinuationScopeSnapshot,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    if session.lifecycle_state != "active" {
+        push_readiness_gap(
+            gaps,
+            &format!("{label}_not_active"),
+            &format!(
+                "continuation {label} session lifecycle is {}",
+                session.lifecycle_state
+            ),
+        );
+    }
+    if session.active_workspace_id != Some(scope.workspace_id)
+        || session.active_branch_id != Some(scope.branch_id)
+    {
+        push_readiness_gap(
+            gaps,
+            &format!("{label}_target_mismatch"),
+            &format!("continuation {label} session is not on the scope workspace and branch"),
+        );
+    }
+    if session.thread_id.is_none() {
+        push_readiness_gap(
+            gaps,
+            &format!("{label}_thread_missing"),
+            &format!("continuation {label} session has no product thread identity"),
+        );
+    } else if session.thread_session_count != Some(1) {
+        push_readiness_gap(
+            gaps,
+            &format!("{label}_thread_not_unique"),
+            &format!("continuation {label} product thread identity is not unique"),
+        );
+    }
+}
+
+fn collect_listener_role_gaps(
+    listener: &ContinuationReadinessSessionFacts,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    if listener.role.as_deref() != Some(LISTENER_SESSION_ROLE) {
+        push_readiness_gap(
+            gaps,
+            "listener_role_invalid",
+            "continuation listener session does not have role listener",
+        );
+    }
+    if listener
+        .historical_created_target_count
+        .is_some_and(|count| count != 0)
+    {
+        push_readiness_gap(
+            gaps,
+            "listener_thread_reserved",
+            "continuation listener thread is a historical created continuation target",
+        );
+    }
+}
+
+fn collect_carrier_role_gaps(
+    carrier: &ContinuationReadinessCarrierFacts,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    match carrier.session.role.as_deref() {
+        Some(WORK_SESSION_ROLE) => {
+            if carrier
+                .session
+                .historical_created_target_count
+                .is_some_and(|count| count != 0)
+            {
+                push_readiness_gap(
+                    gaps,
+                    "carrier_thread_reserved",
+                    "work carrier thread is a historical created continuation target",
+                );
+            }
+        }
+        Some(WORK_CANDIDATE_SESSION_ROLE) => {
+            if carrier.provenance != "committed_work_candidate" {
+                push_readiness_gap(
+                    gaps,
+                    "carrier_promotion_invalid",
+                    "work_candidate carrier lacks one exact committed continuation promotion",
+                );
+            }
+        }
+        _ => push_readiness_gap(
+            gaps,
+            "carrier_role_invalid",
+            "continuation carrier role must be work or a committed work_candidate",
+        ),
+    }
+}
+
+fn collect_claim_gaps(
+    claim: &ContinuationReadinessClaimFacts,
+    scope: &ContinuationScopeSnapshot,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    if !claim.active {
+        push_readiness_gap(
+            gaps,
+            "carrier_claim_released",
+            "continuation carrier Claim is not active",
+        );
+    }
+    if claim.session_id != scope.carrier_session_id
+        || claim.workspace_id != scope.workspace_id
+        || claim.branch_id != scope.branch_id
+        || claim.task_entity_id != scope.task_entity_id
+    {
+        push_readiness_gap(
+            gaps,
+            "carrier_claim_scope_mismatch",
+            "continuation carrier Claim does not match the exact Session, Workspace, Branch, and Task",
+        );
+    }
+    if claim.mode != "exclusive" {
+        push_readiness_gap(
+            gaps,
+            "carrier_claim_not_exclusive",
+            "continuation carrier Claim is not exclusive",
+        );
+    }
+}
+
+fn collect_branch_gaps(
+    branch: &ContinuationReadinessBranchFacts,
+    scope: &ContinuationScopeSnapshot,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    if branch.workspace_id != scope.workspace_id {
+        push_readiness_gap(
+            gaps,
+            "branch_workspace_mismatch",
+            "continuation Branch does not belong to the scope Workspace",
+        );
+    }
+    if branch.lifecycle_state != "active" {
+        push_readiness_gap(
+            gaps,
+            "branch_not_active",
+            "continuation Branch lifecycle is not active",
+        );
+    }
+    if !branch.projection_current {
+        push_readiness_gap(
+            gaps,
+            "branch_projection_not_current",
+            "continuation Branch projection does not match the current head and state digest",
+        );
+    }
+}
+
+fn collect_task_gaps(
+    task: &ContinuationReadinessTaskFacts,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    if !task.current {
+        push_readiness_gap(
+            gaps,
+            "task_not_current",
+            "continuation Task is not current on the Branch",
+        );
+    } else if task
+        .status
+        .as_deref()
+        .is_some_and(|status| matches!(status, "done" | "failed" | "cancelled" | "superseded"))
+    {
+        push_readiness_gap(
+            gaps,
+            "task_terminal",
+            "continuation Task has a terminal lifecycle status",
+        );
+    }
+}
+
+fn collect_rotation_gaps(
+    rotation: &ContinuationReadinessRotationFacts,
+    gaps: &mut Vec<ContinuationReadinessGap>,
+) {
+    if !rotation.active {
+        return;
+    }
+    let (code, detail) = if rotation.state.as_deref() == Some(CREATION_UNKNOWN_STATUS) {
+        (
+            "rotation_creation_unknown",
+            "continuation rotation creation outcome is unknown and permits abort-only recovery",
+        )
+    } else {
+        (
+            "rotation_in_progress",
+            "continuation rotation has active nonterminal runtime state",
+        )
+    };
+    push_readiness_gap(gaps, code, detail);
+    if rotation.abort_only == Some(true) {
+        push_readiness_gap(
+            gaps,
+            "rotation_abort_only",
+            "continuation rotation is fenced to abort-only recovery",
+        );
+    }
+}
+
+fn push_readiness_gap(gaps: &mut Vec<ContinuationReadinessGap>, code: &str, detail: &str) {
+    gaps.push(ContinuationReadinessGap {
+        code: code.to_owned(),
+        detail: detail.to_owned(),
+    });
+}
+
 fn load_scope(
     connection: &Connection,
     workspace_id: WorkspaceId,
@@ -5530,12 +6738,31 @@ fn load_scope_optional(
         .map_err(storage_error)?;
     row.map(
         |(scope_id, listener, revision, carrier, claim, epoch, updated)| {
-            Ok(ContinuationScopeSnapshot {
-                scope_id: decode_scope_id("scope_id", scope_id)?,
+            let scope_id = decode_scope_id("scope_id", scope_id)?;
+            let listener_session_id = decode_session_id("listener_session_id", listener)?;
+            let project_binding = load_scope_project_binding(
+                connection,
+                scope_id,
                 workspace_id,
                 branch_id,
                 task_entity_id,
-                listener_session_id: decode_session_id("listener_session_id", listener)?,
+            )?;
+            Ok(ContinuationScopeSnapshot {
+                scope_id,
+                workspace_id,
+                branch_id,
+                task_entity_id,
+                project_id: project_binding
+                    .as_ref()
+                    .map(|binding| binding.project_id.clone()),
+                project_policy_revision: project_binding
+                    .as_ref()
+                    .map(|binding| binding.policy_revision),
+                project_policy_receipt_digest: project_binding
+                    .as_ref()
+                    .map(|binding| binding.policy_receipt_digest),
+                project_binding_source: project_binding.map(|binding| binding.source),
+                listener_session_id,
                 listener_revision: revision,
                 carrier_session_id: decode_session_id("carrier_session_id", carrier)?,
                 carrier_claim_id: decode_claim_id("carrier_claim_id", claim)?,
@@ -6426,11 +7653,12 @@ fn require_integer(value: &CanonicalValue, field: &str, label: &str) -> Result<i
 
 fn scope_event_payload(
     options: &ContinuationScopeBindOptions,
+    project_binding: Option<&ScopeProjectBinding>,
     scope_id: ContinuationScopeId,
     owner_epoch: i64,
     listener_revision: i64,
 ) -> Result<CanonicalValue> {
-    CanonicalValue::object(vec![
+    let mut entries = vec![
         (
             "branch_id".to_owned(),
             CanonicalValue::String(options.branch_id.to_string()),
@@ -6463,7 +7691,28 @@ fn scope_event_payload(
             "task_entity_id".to_owned(),
             CanonicalValue::String(options.task_entity_id.to_string()),
         ),
-    ])
+    ];
+    if let Some(binding) = project_binding {
+        entries.extend([
+            (
+                "project_binding_source".to_owned(),
+                CanonicalValue::String(binding.source.clone()),
+            ),
+            (
+                "project_id".to_owned(),
+                CanonicalValue::String(binding.project_id.clone()),
+            ),
+            (
+                "project_policy_receipt_digest".to_owned(),
+                CanonicalValue::String(binding.policy_receipt_digest.to_string()),
+            ),
+            (
+                "project_policy_revision".to_owned(),
+                CanonicalValue::safe_integer(binding.policy_revision)?,
+            ),
+        ]);
+    }
+    CanonicalValue::object(entries)
 }
 
 fn insert_rotation_event(
@@ -6946,6 +8195,7 @@ macro_rules! decode_id {
 
 decode_id!(decode_workspace_id, WorkspaceId);
 decode_id!(decode_branch_id, BranchId);
+decode_id!(decode_commit_id, CommitId);
 decode_id!(decode_entity_id, EntityId);
 decode_id!(decode_entity_version_id, EntityVersionId);
 decode_id!(decode_session_id, SessionId);

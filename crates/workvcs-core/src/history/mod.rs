@@ -63,13 +63,13 @@ pub use bundle::{
     BundlePortableEvidenceContentRef, BundleRelationMembershipChangeRef, BundleRelationVersionRef,
     BundleVerificationRequirementIdentityRef,
 };
-pub(crate) use capture::capture_cognition;
 pub use capture::{
     CognitionCaptureEntityResult, CognitionCaptureEvidenceResult,
     CognitionCaptureKnowledgeManifest, CognitionCaptureManifest, CognitionCaptureOptions,
     CognitionCaptureOutcome, CognitionCaptureRelationManifest, CognitionCaptureRelationResult,
     CognitionCaptureResult,
 };
+pub(crate) use capture::{capture_cognition, find_cognition_capture_result};
 pub use checkpoint::{
     CheckpointCreateOptions, CheckpointCreateResult, CheckpointLatestOptions,
     CheckpointLatestResult, CheckpointListOptions, CheckpointListResult, CheckpointSnapshot,
@@ -254,7 +254,7 @@ pub(crate) use containment::{
 pub(crate) use currentness::current_scope_at;
 pub(crate) use diff::diff_work_state;
 pub(crate) use entity::commit_entity_transition;
-pub(crate) use evidence::{create_evidence, evidence, evidences};
+pub(crate) use evidence::{create_evidence, evidence, evidence_introductions, evidences};
 pub(crate) use external::{external_object_ref, external_object_refs, record_external_object_ref};
 pub(crate) use genesis::{create_workspace, load_workspace_info, workspaces};
 pub(crate) use goal::{create_goal, goal_at, goals_at, goals_at_with_cache, transition_goal};

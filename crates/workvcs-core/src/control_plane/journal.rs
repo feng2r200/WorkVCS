@@ -13,7 +13,7 @@ use crate::{
     EntityVersionId, EventId, EvidenceId, PlanAdmissionGoalManifest, PlanAdmissionManifest,
     PlanAdmissionRecordManifest, PlanAdmissionTaskManifest, PlanEvolutionExpectedParentManifest,
     PlanEvolutionManifest, PlanTaskDispositionAction, ProjectLocatorId, ProjectRefId, RegistryId,
-    RelationId, RelationVersionId, StoreId, WorkspaceId,
+    RelationId, RelationVersionId, SessionId, StoreId, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -225,11 +225,17 @@ impl ProjectBindingReadyPayload {
         }
     }
 
-    fn matches_delivery_target(&self, started: &DeliveryStartedPayload) -> bool {
+    fn matches_delivery_target(
+        &self,
+        started: &DeliveryStartedPayload,
+        work_context: Option<&CaptureWorkContext>,
+    ) -> bool {
         self.project_ref_id == started.project_ref_id()
             && self.store_id == started.store_id()
             && self.workspace_id == started.workspace_id()
-            && self.branch_id == started.branch_id()
+            && work_context.map_or(self.branch_id, |context| context.branch_id)
+                == started.branch_id()
+            && work_context.is_none_or(|context| context.workspace_id == self.workspace_id)
     }
 }
 
@@ -2242,6 +2248,8 @@ pub struct CaptureProjection {
     delivery_failure: Nullable<DeliveryFailedPayload>,
     #[serde(default)]
     operation_disposition: Nullable<OperationDispositionRecordedPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_context: Option<CaptureWorkContext>,
 }
 
 impl CaptureProjection {
@@ -2340,9 +2348,9 @@ impl CaptureProjection {
                             event.event_id()
                         ));
                     }
-                    let retains_delivery = delivery_started
-                        .as_ref()
-                        .is_some_and(|started| payload.matches_delivery_target(started));
+                    let retains_delivery = delivery_started.as_ref().is_some_and(|started| {
+                        payload.matches_delivery_target(started, intent.work_context())
+                    });
                     if capture_group
                         .as_ref()
                         .is_some_and(|group| group.canonical_record_ref().is_some())
@@ -2437,7 +2445,13 @@ impl CaptureProjection {
                         || binding.project_ref_id() != payload.project_ref_id()
                         || binding.store_id() != payload.store_id()
                         || binding.workspace_id() != payload.workspace_id()
-                        || binding.branch_id() != payload.branch_id()
+                        || intent
+                            .work_context()
+                            .map_or(binding.branch_id(), |context| context.branch_id)
+                            != payload.branch_id()
+                        || intent
+                            .work_context()
+                            .is_some_and(|context| context.workspace_id != binding.workspace_id())
                     {
                         return invalid(format!(
                             "delivery_started event {} does not match the current resolved binding",
@@ -2723,6 +2737,7 @@ impl CaptureProjection {
             recovery_state,
             latest_resolution,
             project_binding_ready: Nullable::present(project_binding_ready),
+            work_context: intent.work_context().cloned(),
             requires_secondary_references,
             capture_group: Nullable::present(capture_group),
             delivery_started: Nullable::present(delivery_started),
@@ -2834,11 +2849,9 @@ impl CaptureProjection {
                     "capture projection retained delivery must match its latest resolved ProjectRef",
                 );
             }
-            if self
-                .project_binding_ready
-                .as_ref()
-                .is_some_and(|binding| !binding.matches_delivery_target(started))
-            {
+            if self.project_binding_ready.as_ref().is_some_and(|binding| {
+                !binding.matches_delivery_target(started, self.work_context.as_ref())
+            }) {
                 return invalid(
                     "capture projection delivery target must match its binding receipt",
                 );
@@ -3166,6 +3179,17 @@ impl CaptureProjectionWriteResult {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureWorkContext {
+    pub workspace_id: WorkspaceId,
+    pub branch_id: BranchId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_entity_id: Option<EntityId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureIntent {
@@ -3181,6 +3205,8 @@ pub struct CaptureIntent {
     initial_resolution: ResolutionResult,
     #[serde(default)]
     capture_group: Nullable<CaptureGroupIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_context: Option<CaptureWorkContext>,
 }
 
 impl CaptureIntent {
@@ -3213,9 +3239,23 @@ impl CaptureIntent {
             resolution_context,
             initial_resolution,
             capture_group: Nullable::present(capture_group),
+            work_context: None,
         };
         intent.validate()?;
         Ok(intent)
+    }
+
+    pub fn with_work_context(mut self, context: CaptureWorkContext) -> Result<Self> {
+        if self.payload_kind == CapturePayloadKind::LegacyCognitionV1 {
+            return invalid("work context requires ProjectRef-v2 operation routing");
+        }
+        self.work_context = Some(context);
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn work_context(&self) -> Option<&CaptureWorkContext> {
+        self.work_context.as_ref()
     }
 
     pub fn from_json_bytes(input: &[u8]) -> Result<Self> {
@@ -3279,6 +3319,12 @@ impl CaptureIntent {
             ));
         }
         self.initial_resolution.validate()?;
+        if self.work_context.is_some()
+            && (self.payload_kind == CapturePayloadKind::LegacyCognitionV1
+                || self.initial_resolution.status() != ResolutionStatus::Resolved)
+        {
+            return invalid("work context requires an initially resolved ProjectRef-v2 owner");
+        }
         if let Some(group) = self.capture_group.as_ref() {
             if !self.payload_kind.is_cognition() {
                 return invalid("CaptureGroup is supported only for cognition payloads");
@@ -3682,6 +3728,7 @@ impl CaptureJournal {
         if existing.payload_digest() != intent.payload_digest()
             || existing.capture_group() != intent.capture_group()
             || existing.payload_kind() != intent.payload_kind()
+            || existing.work_context() != intent.work_context()
         {
             return Err(WorkVcsError::CaptureIdempotencyConflict(format!(
                 "idempotency key {:?} already belongs to capture {} with different admitted content",
@@ -3743,6 +3790,7 @@ impl CaptureJournal {
             if existing.payload_digest() == intent.payload_digest()
                 && existing.capture_group() == intent.capture_group()
                 && existing.payload_kind() == intent.payload_kind()
+                && existing.work_context() == intent.work_context()
             {
                 return Ok(CaptureAdmissionResult {
                     outcome: CaptureAdmissionOutcome::Reused,
@@ -3766,6 +3814,7 @@ impl CaptureJournal {
                 && existing.payload_digest() == intent.payload_digest()
                 && existing.capture_group() == intent.capture_group()
                 && existing.payload_kind() == intent.payload_kind()
+                && existing.work_context() == intent.work_context()
             {
                 return Ok(CaptureAdmissionResult {
                     outcome: CaptureAdmissionOutcome::Reused,

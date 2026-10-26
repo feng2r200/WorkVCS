@@ -9,6 +9,7 @@ pub mod identity;
 mod runtime;
 pub mod search;
 pub mod store;
+mod work_scope;
 
 pub use automation::{
     AUTOMATION_SOURCE_POLICY_FORMAT_VERSION, AutomationArtifactKind, AutomationCatalogManifest,
@@ -218,11 +219,15 @@ pub use runtime::{
     ContinuationCandidateAttachOptions, ContinuationCreationDispatchOptions,
     ContinuationCreationResultOptions, ContinuationListenerReplaceOptions,
     ContinuationProjectPolicySetOptions, ContinuationProjectPolicySnapshot,
-    ContinuationRotationAbortOptions, ContinuationRotationBeginOptions,
-    ContinuationRotationCommitOptions, ContinuationRotationCommitResult,
-    ContinuationRotationSnapshot, ContinuationRotationState, ContinuationScopeBindOptions,
-    ContinuationScopeCurrentnessOptions, ContinuationScopeCurrentnessSnapshot,
-    ContinuationScopeSnapshot, ContinuationSessionRole,
+    ContinuationReadinessBranchFacts, ContinuationReadinessCarrierFacts,
+    ContinuationReadinessClaimFacts, ContinuationReadinessGap, ContinuationReadinessPolicyFacts,
+    ContinuationReadinessRotationFacts, ContinuationReadinessScopeFacts,
+    ContinuationReadinessSessionFacts, ContinuationReadinessSnapshot,
+    ContinuationReadinessTaskFacts, ContinuationRotationAbortOptions,
+    ContinuationRotationBeginOptions, ContinuationRotationCommitOptions,
+    ContinuationRotationCommitResult, ContinuationRotationSnapshot, ContinuationRotationState,
+    ContinuationScopeBindOptions, ContinuationScopeCurrentnessOptions,
+    ContinuationScopeCurrentnessSnapshot, ContinuationScopeSnapshot, ContinuationSessionRole,
 };
 pub use runtime::{
     MergeAbortOptions, MergeAbortResult, MergeAttemptSnapshot, MergeContinueOptions,
@@ -242,6 +247,7 @@ pub use runtime::{
     SessionFocusPathEntry, SessionFocusUpdateResult, SessionLifecycleState, SessionListOptions,
     SessionListResult, SessionMarkStaleOptions, SessionMarkStaleResult, SessionSnapshot,
     SessionStartOptions, SessionStartResult, SessionSwitchOptions, SessionSwitchResult,
+    SessionWorkGuard,
 };
 pub use runtime::{VerifyOptions, VerifyResourceObservationInput, VerifyResult};
 pub use search::federated::{
@@ -270,7 +276,7 @@ pub use search::source_archive::{
     SourceArchiveQueryResult, SourceArchiveRegistryBasis, SourceArchiveRegistryRoute,
     SourceArchiveRegistryVerifiedImportRequest, SourceArchiveRegistryVerifiedImportResult,
     SourceArchiveRegistryVerifiedOwnerResolution, SourceArchiveRolePolicy, SourceArchiveSearchItem,
-    SourceArchiveSnapshot, SourceArchiveSnapshotSessionMeta,
+    SourceArchiveSnapshot, SourceArchiveSnapshotSessionMeta, SourceArchiveStoredSource,
 };
 pub use search::{
     SearchDerivedStatus, SearchIndexManifest, SearchItem, SearchQueryOptions, SearchQueryResult,
@@ -281,4 +287,9 @@ pub use search::{
 pub use store::{
     ContextPacketSnapshotSchemaMigrationResult, ContinuationRotationSchemaMigrationResult,
     StoreInfo, StoreInitOptions, StoreManifest,
+};
+pub use work_scope::{
+    WorkApplicability, WorkApplicabilityTarget, has_work_scope_identity, is_project_fact_scope,
+    resolve_work_applicability, task_work_scope, validate_work_scope, work_item_applicability,
+    work_scope_matches,
 };

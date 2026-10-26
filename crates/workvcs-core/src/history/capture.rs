@@ -16,8 +16,9 @@ use crate::identity::{
     BranchId, ChangeSetId, CommitId, Digest, EntityId, EntityVersionId, EventId, EvidenceId,
     RelationId, RelationVersionId, WorkspaceId,
 };
+use crate::runtime::SessionWorkGuard;
 use crate::store::{StoreConnection, current_epoch_micros};
-use rusqlite::{Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +28,7 @@ pub(super) const CAPTURE_OPERATION_SCHEMA_VERSION: i64 = 1;
 const NORMAL_COMMIT_KIND: &str = "normal";
 const PAYLOAD_DIGEST_DOMAIN: &str = "workvcs.cognition-capture-manifest.v1";
 const PRIMARY_PARENT_ROLE: &str = "primary";
+const CAPTURE_MANIFEST_SUPPORTED_FORM: &str = "an object with integer schema_version=1, non-empty idempotency_key, optional canonical expected_head_commit_id/expected_state_digest strings, arrays records/knowledge/evidence/relations, and object rationale";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CognitionCaptureOptions {
@@ -34,6 +36,7 @@ pub struct CognitionCaptureOptions {
     current_head_commit_id: CommitId,
     current_state_digest: Digest,
     manifest: CognitionCaptureManifest,
+    session_work_guard: Option<SessionWorkGuard>,
 }
 
 impl CognitionCaptureOptions {
@@ -48,7 +51,17 @@ impl CognitionCaptureOptions {
             current_head_commit_id,
             current_state_digest,
             manifest,
+            session_work_guard: None,
         }
+    }
+
+    pub fn with_session_work_guard(mut self, guard: SessionWorkGuard) -> Self {
+        self.session_work_guard = Some(guard);
+        self
+    }
+
+    pub fn session_work_guard(&self) -> Option<&SessionWorkGuard> {
+        self.session_work_guard.as_ref()
     }
 }
 
@@ -89,17 +102,34 @@ struct CognitionCaptureManifestShape {
 
 impl CognitionCaptureManifest {
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice::<serde_json::Value>(bytes).map_err(|error| {
+            WorkVcsError::RecordInvalid(format!(
+                "cognition capture manifest is not valid JSON at line {}, column {}: {error}; supported form: {CAPTURE_MANIFEST_SUPPORTED_FORM}",
+                error.line(),
+                error.column(),
+            ))
+        })?;
         let value = parse_canonical_json(bytes).map_err(|error| {
             WorkVcsError::RecordInvalid(format!(
-                "cognition capture manifest is not valid JSON: {error}"
+                "cognition capture manifest is outside the supported canonical JSON domain: {error}; supported form: {CAPTURE_MANIFEST_SUPPORTED_FORM}; object keys must be unique and numbers must be canonical integers"
             ))
         })?;
         let canonical = canonical_bytes(&value).map_err(capture_invalid_from)?;
         let payload_digest = Digest::domain_separated(PAYLOAD_DIGEST_DOMAIN, &canonical);
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
         let shape: CognitionCaptureManifestShape =
-            serde_json::from_slice(&canonical).map_err(|error| {
+            serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+                let path = error.path().to_string();
+                let source = error.inner();
+                let path = if path.is_empty() || path == "." {
+                    "$".to_owned()
+                } else {
+                    format!("$.{path}")
+                };
                 WorkVcsError::RecordInvalid(format!(
-                    "cognition capture manifest has invalid shape: {error}"
+                    "cognition capture manifest has invalid shape at {path} (line {}, column {}): {source}; supported form: {CAPTURE_MANIFEST_SUPPORTED_FORM}",
+                    source.line(),
+                    source.column(),
                 ))
             })?;
         Ok(Self {
@@ -125,9 +155,8 @@ impl CognitionCaptureManifest {
     /// an immutable CaptureIntent cannot defer a deterministic semantic error
     /// until target delivery.
     pub fn validate_semantics(&self) -> Result<()> {
-        prepare_capture_content(self)
-            .map(|_| ())
-            .map_err(capture_semantic_invalid_from)
+        validate_capture_guards(self)?;
+        prepare_capture_content(self).map(|_| ())
     }
 }
 
@@ -243,6 +272,7 @@ struct PreparedCapture {
     expected_state_digest: Digest,
     idempotency_key: String,
     payload_digest: Digest,
+    session_work_guard: Option<SessionWorkGuard>,
     rationale: CanonicalValue,
     records: Vec<super::admission::PreparedRecord>,
     knowledge: Vec<PreparedKnowledge>,
@@ -282,6 +312,23 @@ pub(crate) fn capture_cognition(
         prepared.payload_digest,
     )? {
         return Ok(reused);
+    }
+    if let Some(guard) = prepared.session_work_guard.as_ref() {
+        if guard.branch_id() != prepared.branch_id {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "cognition capture branch {} does not match session work guard branch {}",
+                prepared.branch_id,
+                guard.branch_id()
+            )));
+        }
+        if guard.workspace_id() != branch.workspace_id {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "cognition capture workspace {} does not match session work guard workspace {}",
+                branch.workspace_id,
+                guard.workspace_id()
+            )));
+        }
+        crate::runtime::verify_session_work_guard(&transaction, guard)?;
     }
     if branch.head_commit_id != prepared.previous_head_commit_id {
         return Err(WorkVcsError::BranchHeadConflict(format!(
@@ -339,9 +386,26 @@ pub(crate) fn capture_cognition(
     result_from_payload(&payload, CognitionCaptureOutcome::Created)
 }
 
+pub(crate) fn find_cognition_capture_result(
+    connection: &StoreConnection,
+    options: &CognitionCaptureOptions,
+) -> Result<Option<CognitionCaptureResult>> {
+    connection.verify_foreign_keys()?;
+    options.manifest.validate_semantics()?;
+    let branch = super::query::branch_head(connection, options.branch_id)?;
+    find_idempotent_capture(
+        connection.inner(),
+        branch.workspace_id,
+        options.branch_id,
+        &options.manifest.idempotency_key,
+        options.manifest.payload_digest,
+    )
+}
+
 fn prepare_capture(options: &CognitionCaptureOptions) -> Result<PreparedCapture> {
     let manifest = &options.manifest;
-    let content = prepare_capture_content(manifest).map_err(capture_semantic_invalid_from)?;
+    validate_capture_guards(manifest)?;
+    let content = prepare_capture_content(manifest)?;
     let previous_head_commit_id = manifest
         .expected_head_commit_id
         .as_deref()
@@ -361,6 +425,7 @@ fn prepare_capture(options: &CognitionCaptureOptions) -> Result<PreparedCapture>
         expected_state_digest,
         idempotency_key: manifest.idempotency_key.clone(),
         payload_digest: manifest.payload_digest,
+        session_work_guard: options.session_work_guard,
         rationale: manifest.rationale.clone(),
         records: content.records,
         knowledge: content.knowledge,
@@ -369,69 +434,182 @@ fn prepare_capture(options: &CognitionCaptureOptions) -> Result<PreparedCapture>
     })
 }
 
+fn validate_capture_guards(manifest: &CognitionCaptureManifest) -> Result<()> {
+    if let Some(value) = manifest.expected_head_commit_id.as_deref() {
+        CommitId::parse_canonical(value).map_err(|error| {
+            capture_field_invalid(
+                "$.expected_head_commit_id",
+                "a canonical CommitId UUID string",
+                error,
+            )
+        })?;
+    }
+    if let Some(value) = manifest.expected_state_digest.as_deref() {
+        Digest::from_hex(value).map_err(|error| {
+            capture_field_invalid(
+                "$.expected_state_digest",
+                "a lowercase 64-hex state digest",
+                error,
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn prepare_capture_content(manifest: &CognitionCaptureManifest) -> Result<PreparedCaptureContent> {
     if manifest.schema_version != 1 {
-        return Err(WorkVcsError::RecordInvalid(format!(
-            "cognition capture manifest schema_version {} is not supported",
-            manifest.schema_version
-        )));
-    }
-    validate_text("idempotency key", &manifest.idempotency_key)?;
-    if manifest.idempotency_key.len() > 256 {
-        return Err(WorkVcsError::RecordInvalid(
-            "idempotency key must be at most 256 bytes".to_owned(),
-        ));
-    }
-    require_object("capture rationale", &manifest.rationale)?;
-    if manifest.records.is_empty() && manifest.knowledge.is_empty() {
-        return Err(WorkVcsError::RecordInvalid(
-            "cognition capture requires at least one Record or Knowledge item; standalone Evidence may use evidence create"
-                .to_owned(),
-        ));
-    }
-    validate_unique_local_ids(
-        manifest
-            .records
-            .iter()
-            .map(|item| ("record", &item.local_id))
-            .chain(
-                manifest
-                    .knowledge
-                    .iter()
-                    .map(|item| ("knowledge", &item.local_id)),
-            )
-            .chain(
-                manifest
-                    .evidence
-                    .iter()
-                    .map(|item| ("evidence", &item.local_id)),
+        return Err(capture_field_invalid(
+            "$.schema_version",
+            "integer 1",
+            format!(
+                "schema version {} is not supported",
+                manifest.schema_version
             ),
-    )?;
-    validate_unique_local_ids(
-        manifest
-            .relations
-            .iter()
-            .map(|item| ("relation", &item.local_id)),
-    )?;
+        ));
+    }
+    validate_text("idempotency key", &manifest.idempotency_key).map_err(|error| {
+        capture_field_invalid(
+            "$.idempotency_key",
+            "non-empty text without surrounding whitespace or control characters",
+            error,
+        )
+    })?;
+    if manifest.idempotency_key.len() > 256 {
+        return Err(capture_field_invalid(
+            "$.idempotency_key",
+            "at most 256 UTF-8 bytes",
+            format!(
+                "contains {} bytes, exceeding the 256-byte limit",
+                manifest.idempotency_key.len()
+            ),
+        ));
+    }
+    require_object("capture rationale", &manifest.rationale)
+        .map_err(|error| capture_field_invalid("$.rationale", "a JSON object", error))?;
+    if manifest.records.is_empty() && manifest.knowledge.is_empty() {
+        return Err(capture_field_invalid(
+            "$.records and $.knowledge",
+            "at least one Record or Knowledge item",
+            "both arrays are empty; standalone Evidence must use evidence create",
+        ));
+    }
+    validate_capture_local_ids(manifest)?;
 
-    let records = prepare_records(&manifest.records)?;
+    let records = manifest
+        .records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            let kind_path = format!("$.records[{index}].kind");
+            let canonical_kind = record.canonical_kind().map_err(|error| {
+                capture_field_invalid(
+                    &kind_path,
+                    "assumption, attempt, decision, finding, handoff, question, unknown, or risk",
+                    error,
+                )
+            })?;
+            require_object("record scope", &record.scope).map_err(|error| {
+                capture_field_invalid(&format!("$.records[{index}].scope"), "a JSON object", error)
+            })?;
+            prepare_records(std::slice::from_ref(record))
+                .and_then(|mut prepared| {
+                    prepared.pop().ok_or_else(|| {
+                        WorkVcsError::RecordInvalid(
+                            "record preparation returned no item".to_owned(),
+                        )
+                    })
+                })
+                .map_err(|error| {
+                    let path = if canonical_kind == "authorization_receipt" {
+                        kind_path
+                    } else {
+                        format!("$.records[{index}].statement")
+                    };
+                    capture_field_invalid(
+                        &path,
+                        "a supported semantic Record statement for the selected kind",
+                        error,
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let knowledge = manifest
         .knowledge
         .iter()
-        .map(|item| {
-            validate_text("knowledge local_id", &item.local_id)?;
-            require_object("knowledge scope", &item.scope)?;
-            require_object("knowledge provenance", &item.provenance)?;
-            let state = KnowledgeState::active(item.statement.clone())?
-                .with_scope(item.scope.clone())?
-                .with_provenance(item.provenance.clone())?;
+        .enumerate()
+        .map(|(index, item)| {
+            require_object("knowledge scope", &item.scope).map_err(|error| {
+                capture_field_invalid(
+                    &format!("$.knowledge[{index}].scope"),
+                    "a JSON object",
+                    error,
+                )
+            })?;
+            require_object("knowledge provenance", &item.provenance).map_err(|error| {
+                capture_field_invalid(
+                    &format!("$.knowledge[{index}].provenance"),
+                    "a JSON object",
+                    error,
+                )
+            })?;
+            let state = KnowledgeState::active(item.statement.clone()).map_err(|error| {
+                capture_field_invalid(
+                    &format!("$.knowledge[{index}].statement"),
+                    "a non-empty semantic Knowledge statement",
+                    error,
+                )
+            })?;
+            let state = state.with_scope(item.scope.clone()).map_err(|error| {
+                capture_field_invalid(
+                    &format!("$.knowledge[{index}].scope"),
+                    "a JSON object",
+                    error,
+                )
+            })?;
+            let state = state
+                .with_provenance(item.provenance.clone())
+                .map_err(|error| {
+                    capture_field_invalid(
+                        &format!("$.knowledge[{index}].provenance"),
+                        "a JSON object",
+                        error,
+                    )
+                })?;
             Ok(PreparedKnowledge {
                 local_id: item.local_id.clone(),
                 entity: prepared_entity(KNOWLEDGE_ENTITY_KIND, state.to_canonical_value()?)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let evidence = prepare_evidence(&manifest.evidence)?;
+    let evidence = manifest
+        .evidence
+        .iter()
+        .enumerate()
+        .map(|(index, evidence)| {
+            require_object("evidence metadata", &evidence.metadata).map_err(|error| {
+                capture_field_invalid(
+                    &format!("$.evidence[{index}].metadata"),
+                    "a JSON object",
+                    error,
+                )
+            })?;
+            prepare_evidence(std::slice::from_ref(evidence))
+                .and_then(|mut prepared| {
+                    prepared.pop().ok_or_else(|| {
+                        WorkVcsError::RecordInvalid(
+                            "evidence preparation returned no item".to_owned(),
+                        )
+                    })
+                })
+                .map_err(|error| {
+                    capture_field_invalid(
+                        &format!("$.evidence[{index}].kind"),
+                        "a non-empty Evidence kind",
+                        error,
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let mut local_entities = BTreeMap::new();
     for record in &records {
@@ -472,46 +650,94 @@ fn prepare_relations(
     let mut logical_keys = BTreeSet::new();
     manifests
         .iter()
-        .map(|manifest| {
-            validate_text("relation local_id", &manifest.local_id)?;
-            validate_text("relation rationale", &manifest.rationale)?;
-            let source = local_entities.get(&manifest.source_local_id).ok_or_else(|| {
-                WorkVcsError::RecordInvalid(format!(
-                    "relation {} source local_id {:?} does not name a captured Record or Knowledge item",
-                    manifest.local_id, manifest.source_local_id
-                ))
+        .enumerate()
+        .map(|(index, manifest)| {
+            validate_text("relation rationale", &manifest.rationale).map_err(|error| {
+                capture_field_invalid(
+                    &format!("$.relations[{index}].rationale"),
+                    "non-empty text without surrounding whitespace or control characters",
+                    error,
+                )
             })?;
-            let target = local_entities.get(&manifest.target_local_id).ok_or_else(|| {
-                WorkVcsError::RecordInvalid(format!(
-                    "relation {} target local_id {:?} does not name a captured Record or Knowledge item",
-                    manifest.local_id, manifest.target_local_id
-                ))
-            })?;
+            let source = local_entities
+                .get(&manifest.source_local_id)
+                .ok_or_else(|| {
+                    capture_field_invalid(
+                        &format!("$.relations[{index}].source_local_id"),
+                        "the local_id of a Record or Knowledge item in this manifest",
+                        format!(
+                            "relation {} names unknown source {:?}",
+                            manifest.local_id, manifest.source_local_id
+                        ),
+                    )
+                })?;
+            let target = local_entities
+                .get(&manifest.target_local_id)
+                .ok_or_else(|| {
+                    capture_field_invalid(
+                        &format!("$.relations[{index}].target_local_id"),
+                        "the local_id of a Record or Knowledge item in this manifest",
+                        format!(
+                            "relation {} names unknown target {:?}",
+                            manifest.local_id, manifest.target_local_id
+                        ),
+                    )
+                })?;
             if source.entity_id == target.entity_id {
-                return Err(WorkVcsError::RecordInvalid(format!(
-                    "relation {} cannot use the same item as source and target",
-                    manifest.local_id
-                )));
+                return Err(capture_field_invalid(
+                    &format!("$.relations[{index}]"),
+                    "different source_local_id and target_local_id values",
+                    format!(
+                        "relation {} uses the same item as source and target",
+                        manifest.local_id
+                    ),
+                ));
             }
-            let relation_type = capture_relation_type(&manifest.relation_type)?;
-            validate_capture_relation_endpoints(relation_type, *source, *target)?;
+            let relation_type =
+                capture_relation_type(&manifest.relation_type).map_err(|error| {
+                    capture_field_invalid(
+                        &format!("$.relations[{index}].type"),
+                        "contradicts, derived_from, related_to, supports, or validates",
+                        error,
+                    )
+                })?;
+            validate_capture_relation_endpoints(relation_type, *source, *target).map_err(
+                |error| {
+                    capture_field_invalid(
+                        &format!("$.relations[{index}]"),
+                        "source and target kinds permitted for the selected relation type",
+                        error,
+                    )
+                },
+            )?;
             let discriminator = match relation_type {
                 "related_to" => {
                     let label = manifest.label.as_deref().ok_or_else(|| {
-                        WorkVcsError::RecordInvalid(format!(
-                            "related_to relation {} requires label",
-                            manifest.local_id
-                        ))
+                        capture_field_invalid(
+                            &format!("$.relations[{index}].label"),
+                            "non-empty text for related_to",
+                            format!("related_to relation {} omitted label", manifest.local_id),
+                        )
                     })?;
-                    validate_text("related_to label", label)?;
+                    validate_text("related_to label", label).map_err(|error| {
+                        capture_field_invalid(
+                            &format!("$.relations[{index}].label"),
+                            "non-empty text without surrounding whitespace or control characters",
+                            error,
+                        )
+                    })?;
                     label
                 }
                 _ => {
                     if manifest.label.is_some() {
-                        return Err(WorkVcsError::RecordInvalid(format!(
-                            "relation {} type {} does not accept label",
-                            manifest.local_id, relation_type
-                        )));
+                        return Err(capture_field_invalid(
+                            &format!("$.relations[{index}].label"),
+                            "omitted unless type is related_to",
+                            format!(
+                                "relation {} type {} does not accept label",
+                                manifest.local_id, relation_type
+                            ),
+                        ));
                     }
                     ""
                 }
@@ -523,10 +749,14 @@ fn prepare_relations(
                 discriminator.to_owned(),
             );
             if !logical_keys.insert(logical_key) {
-                return Err(WorkVcsError::RecordInvalid(format!(
-                    "relation {} duplicates another relation in the capture manifest",
-                    manifest.local_id
-                )));
+                return Err(capture_field_invalid(
+                    &format!("$.relations[{index}]"),
+                    "a unique type, source, target, and label combination",
+                    format!(
+                        "relation {} duplicates another relation in the capture manifest",
+                        manifest.local_id
+                    ),
+                ));
             }
             Ok(PreparedCaptureRelation {
                 local_id: manifest.local_id.clone(),
@@ -841,13 +1071,13 @@ fn write_capture(
 }
 
 fn find_idempotent_capture(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     workspace_id: WorkspaceId,
     branch_id: BranchId,
     idempotency_key: &str,
     payload_digest: Digest,
 ) -> Result<Option<CognitionCaptureResult>> {
-    let mut statement = transaction
+    let mut statement = connection
         .prepare(
             "SELECT changeset.operation_payload_json
              FROM changeset
@@ -1010,16 +1240,64 @@ fn required_json_array<'a>(
         })
 }
 
-fn validate_unique_local_ids<'a>(
-    values: impl IntoIterator<Item = (&'a str, &'a String)>,
-) -> Result<()> {
-    let mut seen = BTreeSet::new();
-    for (kind, value) in values {
-        validate_text(&format!("{kind} local_id"), value)?;
-        if !seen.insert(value.clone()) {
-            return Err(WorkVcsError::RecordInvalid(format!(
-                "duplicate local_id {value:?} in cognition capture manifest"
-            )));
+fn validate_capture_local_ids(manifest: &CognitionCaptureManifest) -> Result<()> {
+    let mut entity_ids = BTreeMap::<String, String>::new();
+    for (collection, index, value) in manifest
+        .records
+        .iter()
+        .enumerate()
+        .map(|(index, item)| ("records", index, &item.local_id))
+        .chain(
+            manifest
+                .knowledge
+                .iter()
+                .enumerate()
+                .map(|(index, item)| ("knowledge", index, &item.local_id)),
+        )
+        .chain(
+            manifest
+                .evidence
+                .iter()
+                .enumerate()
+                .map(|(index, item)| ("evidence", index, &item.local_id)),
+        )
+    {
+        let path = format!("$.{collection}[{index}].local_id");
+        validate_text("local_id", value).map_err(|error| {
+            capture_field_invalid(
+                &path,
+                "non-empty text without surrounding whitespace or control characters",
+                error,
+            )
+        })?;
+        if let Some(first_path) = entity_ids.insert(value.clone(), path.clone()) {
+            return Err(capture_field_invalid(
+                &path,
+                "a local_id unique across records, knowledge, and evidence",
+                format!("duplicates {value:?}, first declared at {first_path}"),
+            ));
+        }
+    }
+
+    let mut relation_ids = BTreeMap::<String, String>::new();
+    for (index, relation) in manifest.relations.iter().enumerate() {
+        let path = format!("$.relations[{index}].local_id");
+        validate_text("relation local_id", &relation.local_id).map_err(|error| {
+            capture_field_invalid(
+                &path,
+                "non-empty text without surrounding whitespace or control characters",
+                error,
+            )
+        })?;
+        if let Some(first_path) = relation_ids.insert(relation.local_id.clone(), path.clone()) {
+            return Err(capture_field_invalid(
+                &path,
+                "a local_id unique within relations",
+                format!(
+                    "duplicates relation local_id {:?}, first declared at {first_path}",
+                    relation.local_id
+                ),
+            ));
         }
     }
     Ok(())
@@ -1072,9 +1350,12 @@ fn capture_invalid_from(error: impl std::fmt::Display) -> WorkVcsError {
     WorkVcsError::RecordInvalid(error.to_string())
 }
 
-fn capture_semantic_invalid_from(error: WorkVcsError) -> WorkVcsError {
-    match error {
-        WorkVcsError::RecordInvalid(_) => error,
-        other => WorkVcsError::RecordInvalid(other.to_string()),
-    }
+fn capture_field_invalid(
+    path: &str,
+    supported_form: &str,
+    reason: impl std::fmt::Display,
+) -> WorkVcsError {
+    WorkVcsError::RecordInvalid(format!(
+        "cognition capture manifest field {path} is invalid: {reason}; supported form: {supported_form}"
+    ))
 }

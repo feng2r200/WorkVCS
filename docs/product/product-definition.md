@@ -126,8 +126,10 @@ records from a transcript.
 
 ## Design principles
 
-1. **Work state is the versioned object.** A Work Branch expresses a divergent
-   work or knowledge state, not merely Agent concurrency and not a Git branch.
+1. **Work state is the versioned object.** A Work Branch selects a work or
+   knowledge state. Project conversations can share, separate, continue, or
+   explicitly switch work Branches according to their goals and shared-state
+   needs, independently of Git branches.
 2. **Current state, runtime coordination, and provenance are distinct.** They
    have different lifecycle and merge behavior.
 3. **Top-down and bottom-up work are equally valid.** A Task may exist before a

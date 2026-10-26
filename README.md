@@ -18,7 +18,7 @@ conversation. WorkVCS covers the missing layer between them: the evolving
 review, and restore work.
 
 > **Project status:** the repository contains a locally validated bounded V1
-> implementation. The current source package version is `1.6.0`, and no public
+> implementation. The current source package version is `1.7.0`, and no public
 > release has been made. The source is licensed under Apache-2.0; selecting a
 > release version, publishing artifacts, and making release commitments remain
 > separate decisions.
@@ -41,6 +41,15 @@ It also adds the opt-in, exact-scope continuation protocol specified by
 [ADR-0534](docs/decisions/adr/0534-scoped-continuation-rotation.md). This local
 candidate does not itself create Codex conversations or establish real-product
 acceptance.
+
+Project-facing capture and recovery can follow an existing Session's Work
+Branch, with explicit Task or No-Plan applicability selected before output
+limits. Work Branch choice follows conversation goals and shared-state needs,
+independently of Git. Exact cached commits and semantic versions anchor delta
+recovery. Typed layered health and native read-only continuation readiness
+provide current evidence without changing runtime state. See
+[the work-context guide](skills/workvcs/references/work-context.md) and
+[ADR-0538](docs/decisions/adr/0538-read-only-continuation-readiness.md).
 
 ## What makes it different
 
@@ -126,8 +135,8 @@ ADR-0520 adds explicit, digest-locked pre-delivery `superseded`/`abandoned`
 classification and a read-only `--list-all` lifecycle inventory; it never
 infers successors or sweeps history. ADR-0521 adds zero-write intrinsic Plan
 manifest validation plus Capture-aware terminal rejection diagnostics while
-retaining journal-first durable admission. Exact source commit `382cef20` is
-now pushed, CI-verified, and installed locally with package-to-install parity;
+retaining journal-first durable admission. The adoption record for source
+commit `382cef20` documents its CI verification and package-to-install parity;
 see the [local adoption evidence](docs/provenance/operation-disposition-and-plan-validation-local-adoption.md).
 
 See [ADR-0513](docs/decisions/adr/0513-projectref-durable-capture-routing.md),

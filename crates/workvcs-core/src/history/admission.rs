@@ -58,6 +58,7 @@ const TASK_SUPERSEDES_RELATION_DISCRIMINATOR: &str = "task";
 pub struct PlanAdmissionOptions {
     branch_id: BranchId,
     manifest: PlanAdmissionManifest,
+    session_work_guard: Option<crate::SessionWorkGuard>,
 }
 
 impl PlanAdmissionOptions {
@@ -65,7 +66,13 @@ impl PlanAdmissionOptions {
         Self {
             branch_id,
             manifest,
+            session_work_guard: None,
         }
+    }
+
+    pub fn with_session_work_guard(mut self, guard: crate::SessionWorkGuard) -> Self {
+        self.session_work_guard = Some(guard);
+        self
     }
 }
 
@@ -137,6 +144,7 @@ pub struct PlanEvolutionOptions {
     branch_id: BranchId,
     manifest: PlanEvolutionManifest,
     allow_legacy_supersede_recovery: bool,
+    session_work_guard: Option<crate::SessionWorkGuard>,
 }
 
 impl PlanEvolutionOptions {
@@ -145,6 +153,7 @@ impl PlanEvolutionOptions {
             branch_id,
             manifest,
             allow_legacy_supersede_recovery: false,
+            session_work_guard: None,
         }
     }
 
@@ -156,7 +165,15 @@ impl PlanEvolutionOptions {
             branch_id,
             manifest,
             allow_legacy_supersede_recovery: true,
+            session_work_guard: None,
         }
+    }
+}
+
+impl PlanEvolutionOptions {
+    pub fn with_session_work_guard(mut self, guard: crate::SessionWorkGuard) -> Self {
+        self.session_work_guard = Some(guard);
+        self
     }
 }
 
@@ -910,6 +927,14 @@ pub(crate) fn admit_plan(
     )? {
         return Ok(reused);
     }
+    if let Some(guard) = &options.session_work_guard {
+        if guard.branch_id() != prepared.branch_id || guard.workspace_id() != branch.workspace_id {
+            return Err(WorkVcsError::SessionInvalid(
+                "Session work guard does not match the Plan mutation target".to_owned(),
+            ));
+        }
+        crate::runtime::verify_session_work_guard(&transaction, guard)?;
+    }
     if branch.head_commit_id != prepared.previous_head_commit_id {
         return Err(WorkVcsError::BranchHeadConflict(format!(
             "branch {} expected head {}, found {}",
@@ -1027,6 +1052,14 @@ pub(crate) fn evolve_plan(
     )? {
         validate_idempotent_evolution_result(&transaction, &parent.state, &reused)?;
         return Ok(reused);
+    }
+    if let Some(guard) = &options.session_work_guard {
+        if guard.branch_id() != prepared.branch_id || guard.workspace_id() != branch.workspace_id {
+            return Err(WorkVcsError::SessionInvalid(
+                "Session work guard does not match the Plan mutation target".to_owned(),
+            ));
+        }
+        crate::runtime::verify_session_work_guard(&transaction, guard)?;
     }
     if branch.head_commit_id != prepared.previous_head_commit_id {
         return Err(WorkVcsError::BranchHeadConflict(format!(

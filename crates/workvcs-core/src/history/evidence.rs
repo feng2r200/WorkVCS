@@ -2,7 +2,7 @@ use crate::canonical::{
     CanonicalValue, canonical_bytes, content_object_digest, parse_canonical_json,
 };
 use crate::error::{Result, WorkVcsError, storage_error};
-use crate::identity::{Digest, EvidenceId, SessionId};
+use crate::identity::{CommitId, Digest, EvidenceId, SessionId};
 use crate::store::{StoreConnection, current_epoch_micros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
@@ -223,6 +223,40 @@ impl EvidenceListOptions {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvidenceListResult {
     pub evidences: Vec<EvidenceSnapshot>,
+}
+
+/// Read immutable introduction identities without projecting another work's evidence.
+pub(crate) fn evidence_introductions(
+    connection: &StoreConnection,
+) -> Result<Vec<(EvidenceId, CommitId)>> {
+    let mut statement = connection
+        .inner()
+        .prepare(
+            "SELECT json_extract(item.value, '$.evidence_id'), workstate_commit.commit_id
+         FROM changeset
+         JOIN workstate_commit ON workstate_commit.changeset_id = changeset.changeset_id
+         JOIN json_each(changeset.operation_payload_json, '$.evidence') AS item
+         WHERE changeset.operation_type IN ('cognition.capture', 'plan.admit', 'plan.evolve')
+         ORDER BY workstate_commit.commit_id, item.key",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(storage_error)?;
+    let mut result = Vec::new();
+    for row in rows {
+        let (evidence, commit) = row.map_err(storage_error)?;
+        let commit = uuid::Uuid::from_slice(&commit).map_err(|error| {
+            WorkVcsError::EvidenceInvalid(format!("invalid introduction CommitId: {error}"))
+        })?;
+        result.push((
+            EvidenceId::parse_canonical(&evidence)?,
+            CommitId::parse_canonical(&commit.to_string())?,
+        ));
+    }
+    Ok(result)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -15,6 +15,17 @@ and the [candidate dependency audit record](docs/provenance/v0.1.0-source-releas
 
 ### Added
 
+- Session-selected project reads and cognition/Plan delivery, explicit Task and
+  No-Plan record applicability, structural-subset recovery before budgets,
+  ancestor- and selection-bound semantic deltas, immutable work-context
+  idempotency, transaction-time Session guards, and exact read-only cognition
+  result lookup.
+- Zero-write cognition manifest validation with field-level diagnostics.
+- Compressed `.jsonl.zst` rollout discovery and logical/container provenance,
+  including relocation and recompression with retained immutable archives.
+- Typed JSON project health with single-pass binding proofs and optional
+  read-only archive/retrieval observations that preserve partial success.
+
 - Exact-scope continuation rotation with revision-fenced listeners,
   trusted-envelope revisioned exact-Project opt-in, durable pre-call dispatch,
   operation-correlated visible Project-bound Work candidates, immutable

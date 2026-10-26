@@ -15,6 +15,7 @@ needs. Required participation does not mean every capability must be used.
 | Completion has real conditions | Acceptance Criteria, Verification Requirements, `verify`, `verification`, and `evidence` | Inspectable acceptance contract, result, and supporting material |
 | Validation depends on files, repositories, or other observable inputs | `resource`, observations, and applicability refresh | Evidence tied to an exact observed basis and explicit drift state |
 | Several Agents or Sessions share execution | `session`, focus, `claim`, `next`, and `runnable` | Explicit coordination without rewriting Work State |
+| Project conversations share, separate, or continue work | Session/Branch selection and scoped `recall`, `capture`, `plan` | The chosen work context persists independently of Git and project defaults |
 | Work pauses or changes owner | focused `handoff`, optionally a saved `context-packet` | Bounded continuation state with stable identifiers |
 | A prior conclusion may now be stale | `record currentness-audit`, then guarded transition or correction | Explicit currentness decision without inventing changes |
 | Need to explain or reconstruct history | `why`, `history`, `diff`, `show-at`, `commit`, `changeset`, and `event` | Causal, structural, or historical evidence at a named state |

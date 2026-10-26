@@ -130,6 +130,9 @@ V1 includes:
   semantic Handoffs; each Handoff belongs to exactly one Workspace and Work
   Branch and may bind a Focus/context path;
 - multiple Sessions on the same Work Branch without a branch-wide lock;
+- flexible conversation-selected Branches, scoped project-facing recovery and
+  durable operations, and transaction-time Session work guards independent of
+  Git branch identity;
 - optimistic concurrency using an expected base and deterministic
   reconciliation when safe;
 - exclusive Task claims by default, with explicit shared claims;

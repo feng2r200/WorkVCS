@@ -136,6 +136,12 @@ layout. Valid configurations include:
 - a Workspace with no Git repository.
 
 Every versioned mutation has exactly one active Workspace and Work Branch.
+ProjectRef establishes project ownership, while an explicit verified Session
+or Branch selects the operation's work target in that Workspace. The registered
+Branch is the default. Routed operations retain the chosen target in immutable
+intent and receipts; Session guards are verified inside semantic write
+transactions. Read projections filter current-work applicability before output
+budgets and distinguish shared facts from task instructions and authority.
 Cross-Workspace Task containment and dependency are not allowed in V1 because
 they would couple independent branch and restore histories.
 

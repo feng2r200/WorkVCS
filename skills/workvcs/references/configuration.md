@@ -29,7 +29,9 @@ locator is a direct registry path, pass `--store-root PATH`; WorkVCS will not
 invent a Store location from the registry's parent.
 
 In registry v1, the registry is an index, not the work history. Each
-binding pins Store, Workspace, and Work Branch identities. Git projects use the
+binding pins Store, Workspace, and a default Work Branch identity. A verified
+Session or explicit work selection can choose another Branch in that Workspace
+without changing the registry binding. Git projects use the
 common Git directory as identity, so linked worktrees resolve to the same
 record set even when their checkout paths differ.
 

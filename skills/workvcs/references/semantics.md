@@ -56,6 +56,12 @@ dedicated commands so the replaced target is explicit and guarded.
 
 Finding currentness is not inferred from recency or text similarity:
 
+Apply user corrections to the affected goal, Decision, Finding, constraint,
+or acceptance scope. Verify which object changed and use its guarded
+operation; independent notes must not leave conflicting active instructions.
+A correction in one task does not change another task's authority. Keep the
+current conclusion concise and retrieve exact history when provenance matters.
+
 - use `record supersede-finding` when an active correcting Finding replaces an
   active prior Finding;
 - use `record invalidate-finding` when an active Finding disproves an active

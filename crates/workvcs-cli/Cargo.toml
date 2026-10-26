@@ -28,4 +28,5 @@ toml.workspace = true
 workvcs-core = { path = "../workvcs-core" }
 
 [dev-dependencies]
+zstd.workspace = true
 tempfile.workspace = true

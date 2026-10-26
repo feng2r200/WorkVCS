@@ -561,10 +561,13 @@ invalidation, supersession, or another confirmed deterministic rule.
 
 ## Branch, merge, and concurrency
 
-### INV-020 — Work Branch represents state divergence
+### INV-020 — Work Branch selection follows work and conversation relationships
 
-A Work Branch expresses a divergent work or cognition state. It is independent
-of Git branch identity and is not required merely to run multiple Sessions.
+A Work Branch selects a work or cognition state. Project conversations may
+share a Branch, choose separate Branches, or explicitly switch according to
+their goals, continuation, parallelism, and shared-state needs. Work Branch
+identity is independent of Git branch identity. Neither one Branch per
+conversation nor one mandatory Branch per Project is imposed.
 
 ### INV-021 — Merge commit has two parents
 

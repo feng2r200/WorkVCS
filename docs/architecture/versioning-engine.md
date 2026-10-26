@@ -185,8 +185,8 @@ provenance. Detailed storage is defined in
 
 ## Branch semantics
 
-A Work Branch may start at any historical WorkStateCommit. It represents a
-divergent work or cognition route and may exist without a Git Branch. Git
+A Work Branch may start at any historical WorkStateCommit. It selects a
+work or cognition route for Project conversations and may exist without a Git Branch. Git
 branch, commit, or worktree associations are optional and do not define Work
 Branch identity.
 
@@ -199,8 +199,9 @@ is complete only when it names HEAD as its projected Commit and its state digest
 has been validated. Ordinary HOT-Branch mutation advances immutable history,
 HEAD by expected-head compare-and-swap, and the complete projection atomically.
 
-Multiple Sessions may work on one Work Branch. Agent concurrency alone is not
-a reason to create branches. Unmerged sibling Branch state is isolated from
+Multiple Sessions may work on one Work Branch. Selection can also separate
+independent conversation goals or preserve continuity across conversations;
+it is not determined by the Git branch or conversation count. Unmerged sibling Branch state is isolated from
 the current Branch's context unless explicitly queried.
 
 After merge, the source Branch remains present and its head does not move. It

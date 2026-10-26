@@ -10,11 +10,13 @@ WorkVCS 为编码 Agent 提供可持久、可检查的状态，使工作可以�
 
 Git 对文件进行版本控制，任务管理工具描述工作分配，对话记录保存交流过程。WorkVCS 补上了三者之间缺失的一层：Agent 为了继续、解释、分支、合并、审查和恢复工作而需要持续演进的 **工作与知识状态（Work & Knowledge State）**。
 
-> **项目状态：** 本仓库包含一个经过本机验证、范围受限的 V1 实现。当前源码包版本为 `1.6.0`，尚未进行公开发布。源码采用 Apache-2.0 许可证；选择发布版本、发布构建产物和作出发布承诺仍是彼此独立的决策。
+> **项目状态：** 本仓库包含一个经过本机验证、范围受限的 V1 实现。当前源码包版本为 `1.7.0`，尚未进行公开发布。源码采用 Apache-2.0 许可证；选择发布版本、发布构建产物和作出发布承诺仍是彼此独立的决策。
 
 凡是影响运行时、Skill、打包、安装或发布工作流的优化，都必须变更语义版本号。兼容性修复和运维改进递增 patch；新增且保持兼容的能力（例如运行时或安装保护）递增 minor；不兼容的 CLI、registry 或状态契约递增 major。Git commit、构建时间和二进制摘要只能标识构建，不能替代语义版本。CI 会对这些发布相关改动强制检查版本是否变化。
 
 1.0.0 实现新增了 Plan 被取代或退役时的显式 Task 处置评估。评估可以原样保留旧 Task；生命周期状态与执行当前性是两个独立概念。本地安装与稳定采用见[采用证据（英文）](docs/provenance/task-disposition-and-currentness-local-adoption.md)，且尚未公开发布，详见已接受的 [ADR-0524（英文）](docs/decisions/adr/0524-task-disposition-and-execution-currentness.md)。
+
+项目入口的记录和恢复可跟随既有 Session 的 Work Branch，并在输出限额前筛选 Task 或无 Plan 工作范围。Branch 根据会话目标与共享状态需要选择，独立于 Git Branch。增量恢复核验缓存的具体提交和语义版本；分层健康检查与原生只读接续检查提供当前证据。使用方式见[工作范围指南（英文）](skills/workvcs/references/work-context.md)和 [ADR-0538（英文）](docs/decisions/adr/0538-read-only-continuation-readiness.md)。
 
 ## 它有什么不同
 

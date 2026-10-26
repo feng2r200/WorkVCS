@@ -255,14 +255,18 @@ fn fixture(path: &Path) -> Fixture {
 fn bind_scope(fixture: &mut Fixture) -> workvcs_core::ContinuationScopeSnapshot {
     let scope = fixture
         .engine
-        .bind_continuation_scope(ContinuationScopeBindOptions::new(
-            fixture.workspace.workspace_id,
-            fixture.workspace.initial_branch_id,
-            fixture.task_id,
-            fixture.listener_id,
-            fixture.work_id,
-            fixture.claim_id,
-        ))
+        .bind_continuation_scope(
+            ContinuationScopeBindOptions::new(
+                fixture.workspace.workspace_id,
+                fixture.workspace.initial_branch_id,
+                fixture.task_id,
+                fixture.listener_id,
+                fixture.work_id,
+                fixture.claim_id,
+            )
+            .with_project_id(PROJECT_ID)
+            .expect("scope Project binding"),
+        )
         .expect("bind continuation scope");
     assert_eq!(scope.owner_epoch, 1);
     assert_eq!(scope.listener_revision, 1);
@@ -278,6 +282,20 @@ fn basis_with_entities(
     source_thread_id: &str,
     currentness_entity_ids: Vec<workvcs_core::EntityId>,
 ) -> CanonicalValue {
+    basis_for_project(
+        PROJECT_ID,
+        handoff_id,
+        source_thread_id,
+        currentness_entity_ids,
+    )
+}
+
+fn basis_for_project(
+    project_id: &str,
+    handoff_id: workvcs_core::EntityId,
+    source_thread_id: &str,
+    currentness_entity_ids: Vec<workvcs_core::EntityId>,
+) -> CanonicalValue {
     CanonicalValue::object(vec![
         (
             "schema_version".to_owned(),
@@ -285,7 +303,7 @@ fn basis_with_entities(
         ),
         (
             "project_id".to_owned(),
-            CanonicalValue::String(PROJECT_ID.to_owned()),
+            CanonicalValue::String(project_id.to_owned()),
         ),
         (
             "source_thread_id".to_owned(),
@@ -4574,6 +4592,137 @@ fn committed_work_candidate_can_rotate_again_but_uncommitted_roles_cannot_target
         )
         .expect("second attach");
     commit(&mut fixture, &attached_second);
+}
+
+#[test]
+fn continuation_readiness_blocks_active_rotation_and_tracks_its_state() {
+    let (_tempdir, path) = store_path();
+    let mut fixture = fixture(&path);
+    let scope = bind_scope(&mut fixture);
+    let rotation = begin(&mut fixture, "readiness-active-rotation");
+
+    let readiness = Engine::open_readonly(&path)
+        .expect("open readiness store readonly")
+        .continuation_readiness(scope.scope_id)
+        .expect("active rotation readiness");
+
+    assert!(!readiness.provider_protocol_ready);
+    assert!(readiness.rotation.active);
+    assert_eq!(readiness.rotation.rotation_id, Some(rotation.rotation_id));
+    assert_eq!(
+        readiness.rotation.state.as_deref(),
+        Some("pending_creation")
+    );
+    assert!(
+        readiness
+            .gaps
+            .iter()
+            .any(|gap| gap.code == "rotation_in_progress")
+    );
+}
+
+#[test]
+fn rotation_begin_rejects_project_that_differs_from_scope_binding() {
+    const OTHER_PROJECT_ID: &str = "g-p-other-continuation-test";
+    let (_tempdir, path) = store_path();
+    let mut fixture = fixture(&path);
+    let scope = bind_scope(&mut fixture);
+    let conflicting_basis = basis_for_project(
+        OTHER_PROJECT_ID,
+        fixture.handoff_id,
+        SOURCE_THREAD,
+        Vec::new(),
+    );
+    let currentness = fixture
+        .engine
+        .preview_continuation_scope_currentness(
+            ContinuationScopeCurrentnessOptions::new(
+                fixture.work_id,
+                fixture.claim_id,
+                scope.scope_id,
+                fixture.listener_id,
+                1,
+                1,
+                fixture.handoff_digest,
+                conflicting_basis.clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .scope_currentness_digest;
+    let operation_id = "create:project-conflict";
+    let error = fixture
+        .engine
+        .begin_continuation_rotation(
+            ContinuationRotationBeginOptions::new(
+                fixture.listener_id,
+                fixture.work_id,
+                fixture.claim_id,
+                scope.scope_id,
+                1,
+                1,
+                "project-conflict",
+                operation_id,
+                fixture.handoff_digest,
+                conflicting_basis,
+                policy_decision(
+                    &fixture,
+                    scope.scope_id,
+                    fixture.work_id,
+                    fixture.claim_id,
+                    1,
+                    1,
+                    currentness,
+                ),
+                creation_request(
+                    &fixture,
+                    scope.scope_id,
+                    SOURCE_THREAD,
+                    1,
+                    currentness,
+                    operation_id,
+                ),
+            )
+            .unwrap(),
+        )
+        .expect_err("rotation Project must match the immutable scope binding");
+    assert_eq!(error.code(), ErrorCode::ContinuationInvalid);
+    assert!(
+        error
+            .to_string()
+            .contains("does not match scope-bound Project")
+    );
+}
+
+#[test]
+fn continuation_readiness_accepts_the_exact_committed_work_candidate_carrier() {
+    let (_tempdir, path) = store_path();
+    let mut fixture = fixture(&path);
+    let scope = bind_scope(&mut fixture);
+    let rotation = begin(&mut fixture, "readiness-committed-candidate");
+    let attached = attach_direct(&mut fixture, &rotation);
+    let committed = commit(&mut fixture, &attached);
+
+    let readiness = Engine::open_readonly(&path)
+        .expect("open committed readiness store readonly")
+        .continuation_readiness(scope.scope_id)
+        .expect("committed carrier readiness");
+
+    assert!(readiness.provider_protocol_ready, "{:?}", readiness.gaps);
+    assert_eq!(
+        readiness.carrier.session.session_id,
+        committed.rotation.candidate_session_id.expect("candidate")
+    );
+    assert_eq!(readiness.carrier.provenance, "committed_work_candidate");
+    assert_eq!(
+        readiness.carrier.promotion_rotation_id,
+        Some(committed.rotation.rotation_id)
+    );
+    assert_eq!(
+        readiness.carrier.promotion_project_id.as_deref(),
+        Some(PROJECT_ID)
+    );
+    assert!(!readiness.rotation.active);
 }
 
 #[test]

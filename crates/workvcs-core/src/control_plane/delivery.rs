@@ -565,6 +565,13 @@ fn prepare_primary_delivery_inner(
     current_state_digest: Digest,
     existing_started: Option<&DeliveryStartedPayload>,
 ) -> Result<PreparedPrimaryDelivery> {
+    if let Some(context) = intent.work_context()
+        && (context.workspace_id != workspace_id || context.branch_id != branch_id)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "delivery target conflicts with the immutable admitted work context".to_owned(),
+        ));
+    }
     if effective_group_primary.is_some_and(|primary| primary != Some(project_ref_id)) {
         return Err(WorkVcsError::ControlPlaneInvalid(
             "capture group primary is unresolved or does not match the delivery target; capture_group_resolved is required before primary delivery"

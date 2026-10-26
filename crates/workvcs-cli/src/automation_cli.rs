@@ -2,7 +2,7 @@ use super::*;
 use clap::{Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as ShaDigest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use workvcs_core::{
     RegistryDerivedCatalogBasis, SearchDerivedStatus, SourceArchiveAutomationRoot,
     SourceArchiveInspectOptions, SourceArchiveLiveSourceFence, SourceArchiveRegistryRoute,
     SourceArchiveRegistryVerifiedImportRequest, SourceArchiveRegistryVerifiedImportResult,
-    SourceArchiveRegistryVerifiedOwnerResolution, SourceArchiveSnapshot,
+    SourceArchiveRegistryVerifiedOwnerResolution, SourceArchiveSnapshot, SourceArchiveStoredSource,
     apply_automation_registration, apply_automation_source_policy, automation_source_policy_path,
     preview_automation_registration, preview_automation_source_policy, publish_automation_catalog,
     publish_registry_derived_automation_catalog, read_automation_catalog, read_automation_registry,
@@ -337,7 +337,7 @@ struct ReconcileReport {
     existing_artifacts_deleted: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 struct RegistryDerivedMember {
     project_ref_id: ProjectRefId,
     store_path: PathBuf,
@@ -398,6 +398,13 @@ enum RegistryDerivedLiveCheckStage {
 
 type RegistryDerivedLiveCheckHook<'a> = dyn FnMut(&Path, RegistryDerivedLiveCheckStage) + 'a;
 
+#[cfg(test)]
+std::thread_local! {
+    static TEST_SOURCE_CAPTURE_LIMITS: std::cell::Cell<Option<(u64, u64)>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
 #[derive(Clone, Debug)]
 struct RegistryDerivedLiveSourceFence {
     source_path: PathBuf,
@@ -408,11 +415,44 @@ struct RegistryDerivedLiveSourceFence {
     catalog_range: std::ops::Range<usize>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceFingerprint {
     bytes: u64,
     sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RegistryRelocationKey {
+    source_id: String,
+    member: RegistryDerivedMember,
+    fingerprint: SourceFingerprint,
+}
+
+#[derive(Clone, Debug)]
+struct RegistryObservedRollout {
+    file: PathBuf,
+    path_key: String,
+    previous: Option<GlobalSourceInventoryEntry>,
+    snapshot: SourceArchiveSnapshot,
+    resolved: ResolvedHistoricalSourceMember,
+    fingerprint: SourceFingerprint,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct LegacyRelocationKey {
+    registration_id: String,
+    project_ref_id: ProjectRefId,
+    fingerprint: SourceFingerprint,
+}
+
+#[derive(Clone, Debug)]
+struct LegacyObservedRollout {
+    file: PathBuf,
+    path_key: String,
+    previous: Option<SourceInventoryEntry>,
+    snapshot: SourceArchiveSnapshot,
+    fingerprint: SourceFingerprint,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -423,6 +463,8 @@ struct SourceArchiveReference {
     source_path: PathBuf,
     source_bytes: u64,
     source_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stored_source: Option<SourceArchiveStoredSource>,
     source_anchor: String,
 }
 
@@ -1701,6 +1743,8 @@ fn run_registry_derived_historical_reconciliation(
         }
     };
     *rollout_files_discovered += files.len();
+    let discovered_paths = files.iter().cloned().collect::<BTreeSet<_>>();
+    let mut observed_rollouts = Vec::new();
     for file in files {
         let path_key = file
             .to_str()
@@ -1713,11 +1757,12 @@ fn run_registry_derived_historical_reconciliation(
         let previous = previous_inventory
             .files
             .get(&path_key)
-            .filter(|entry| entry.source_id == source_policy.source_id);
-        let snapshot = match SourceArchiveSnapshot::capture(&source_policy.rollout_root, &file) {
+            .filter(|entry| entry.source_id == source_policy.source_id)
+            .cloned();
+        let snapshot = match capture_rollout_snapshot(&source_policy.rollout_root, &file) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                if let Some(entry) = previous {
+                if let Some(entry) = previous.as_ref() {
                     current_inventory.insert(path_key.clone(), entry.clone());
                     retain_or_quarantine_global_archive(
                         source_policy,
@@ -1753,7 +1798,7 @@ fn run_registry_derived_historical_reconciliation(
                     file.display(),
                     member.project_ref_id
                 ));
-                if let Some(entry) = previous {
+                if let Some(entry) = previous.as_ref() {
                     current_inventory.insert(path_key.clone(), entry.clone());
                     catalog_sources.push(failed_global_catalog_source(
                         &entry.member,
@@ -1774,7 +1819,7 @@ fn run_registry_derived_historical_reconciliation(
                 continue;
             }
             Err(error) => {
-                if let Some(entry) = previous {
+                if let Some(entry) = previous.as_ref() {
                     current_inventory.insert(path_key.clone(), entry.clone());
                     catalog_sources.push(failed_global_catalog_source(
                         &entry.member,
@@ -1795,13 +1840,82 @@ fn run_registry_derived_historical_reconciliation(
                 continue;
             }
         };
+        observed_rollouts.push(RegistryObservedRollout {
+            file,
+            path_key,
+            previous,
+            snapshot,
+            resolved,
+            fingerprint,
+        });
+    }
+
+    let mut new_observations = BTreeMap::<RegistryRelocationKey, Vec<String>>::new();
+    for observed in &observed_rollouts {
+        if observed.previous.is_none() {
+            new_observations
+                .entry(RegistryRelocationKey {
+                    source_id: source_policy.source_id.clone(),
+                    member: observed.resolved.member.clone(),
+                    fingerprint: observed.fingerprint.clone(),
+                })
+                .or_default()
+                .push(observed.path_key.clone());
+        }
+    }
+    let mut missing_previous =
+        BTreeMap::<RegistryRelocationKey, Vec<(String, GlobalSourceInventoryEntry)>>::new();
+    for (path, entry) in &previous_inventory.files {
+        if entry.source_id == source_policy.source_id
+            && !discovered_paths.contains(Path::new(path.as_str()))
+        {
+            missing_previous
+                .entry(RegistryRelocationKey {
+                    source_id: entry.source_id.clone(),
+                    member: entry.member.clone(),
+                    fingerprint: entry.fingerprint.clone(),
+                })
+                .or_default()
+                .push((path.clone(), entry.clone()));
+        }
+    }
+    let mut relocations = BTreeMap::<String, (String, GlobalSourceInventoryEntry)>::new();
+    for (key, new_paths) in new_observations {
+        let Some(old_paths) = missing_previous.get(&key) else {
+            continue;
+        };
+        if let ([new_path], [(old_path, old_entry)]) = (new_paths.as_slice(), old_paths.as_slice())
+        {
+            relocations.insert(new_path.clone(), (old_path.clone(), old_entry.clone()));
+        }
+    }
+    let relocated_sources = relocations
+        .values()
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+
+    for observed in observed_rollouts {
+        let RegistryObservedRollout {
+            file,
+            path_key,
+            previous,
+            snapshot,
+            resolved,
+            fingerprint,
+        } = observed;
         core_owner_resolutions.push(resolved.owner_resolution.clone());
         let member = resolved.member.clone();
+        let relocated_previous = previous
+            .is_none()
+            .then(|| relocations.get(&path_key))
+            .flatten()
+            .map(|(_, entry)| entry);
+        let effective_previous = previous.as_ref().or(relocated_previous);
         let catalog_start = catalog_sources.len();
         let live_fence = snapshot.live_source_fence();
         let fence_source_path = file.clone();
         let change = classify_source_change_from_bytes(
-            previous.map(|entry| &entry.fingerprint),
+            previous.as_ref().map(|entry| &entry.fingerprint),
             &fingerprint,
             snapshot.bytes(),
         );
@@ -1811,7 +1925,7 @@ fn run_registry_derived_historical_reconciliation(
             SourceChange::Unchanged => *rollout_files_unchanged += 1,
             SourceChange::Rewritten => *rollout_files_rewritten += 1,
         }
-        let prior_archive = previous
+        let prior_archive = effective_previous
             .filter(|entry| entry.member == member)
             .and_then(|entry| entry.archive.clone());
         let mut entry = GlobalSourceInventoryEntry {
@@ -1822,7 +1936,12 @@ fn run_registry_derived_historical_reconciliation(
         };
         let reusable = change == SourceChange::Unchanged
             && entry.archive.as_ref().is_some_and(|reference| {
-                archive_reference_matches_source(reference, &file, &fingerprint)
+                archive_reference_matches_source(
+                    reference,
+                    &file,
+                    &fingerprint,
+                    snapshot.stored_source(),
+                )
             });
         if reusable {
             live_check_hook(&file, RegistryDerivedLiveCheckStage::Reuse);
@@ -1878,6 +1997,7 @@ fn run_registry_derived_historical_reconciliation(
             }
         } else {
             let member_archive_root = archive_root.join(member.project_ref_id.to_string());
+            let captured_stored_source = snapshot.stored_source().cloned();
             let request = SourceArchiveRegistryVerifiedImportRequest::new(
                 membership.archive_registry_route.clone(),
                 SourceArchiveAutomationRoot::Explicit(root.to_path_buf()),
@@ -1898,8 +2018,12 @@ fn run_registry_derived_historical_reconciliation(
                     live_check_hook(&file, RegistryDerivedLiveCheckStage::PostImport);
                     let live_result = live_fence.verify_live_source();
                     let current_matches = matches!(&live_result, Ok(true));
-                    if !archive_reference_matches_source(&reference, &file, &fingerprint)
-                        || !current_matches
+                    if !archive_reference_matches_source(
+                        &reference,
+                        &file,
+                        &fingerprint,
+                        captured_stored_source.as_ref(),
+                    ) || !current_matches
                     {
                         let live_state = match &live_result {
                             Ok(true) => "matches captured snapshot".to_owned(),
@@ -1973,7 +2097,7 @@ fn run_registry_derived_historical_reconciliation(
             path_key,
             live_fence,
             member,
-            previous: previous.cloned(),
+            previous: effective_previous.cloned(),
             catalog_range: catalog_start..catalog_sources.len(),
         });
     }
@@ -1982,7 +2106,9 @@ fn run_registry_derived_historical_reconciliation(
         .files
         .iter()
         .filter(|(path, entry)| {
-            entry.source_id == source_policy.source_id && !current_inventory.contains_key(*path)
+            entry.source_id == source_policy.source_id
+                && !current_inventory.contains_key(*path)
+                && !relocated_sources.contains(*path)
         })
         .map(|(path, entry)| (path.clone(), entry.clone()))
         .collect::<Vec<_>>();
@@ -2164,6 +2290,9 @@ fn run_historical_reconciliation(
     let archive_root = root.join("history").join(&registration.registration_id);
     let previous_inventory = read_source_inventory(root, &registration.registration_id)?;
     let mut current_inventory = BTreeMap::new();
+    let mut scanned_roots = Vec::new();
+    let mut discovered_by_root = Vec::new();
+    let mut discovered_paths = BTreeSet::new();
 
     for rollout_root in &registration.rollout_roots {
         let files = match collect_rollout_files(rollout_root) {
@@ -2197,6 +2326,13 @@ fn run_historical_reconciliation(
             }
         };
         *rollout_files_discovered += files.len();
+        discovered_paths.extend(files.iter().cloned());
+        scanned_roots.push(rollout_root.clone());
+        discovered_by_root.push((rollout_root.clone(), files));
+    }
+
+    let mut observed_rollouts = Vec::new();
+    for (rollout_root, files) in discovered_by_root {
         for file in files {
             let path_key = file
                 .to_str()
@@ -2206,16 +2342,16 @@ fn run_historical_reconciliation(
                     )
                 })?
                 .to_owned();
-            let previous = previous_inventory.files.get(&path_key);
-            let fingerprint = match fingerprint_source(&file) {
-                Ok(fingerprint) => fingerprint,
+            let previous = previous_inventory.files.get(&path_key).cloned();
+            let snapshot = match capture_rollout_snapshot(&rollout_root, &file) {
+                Ok(snapshot) => snapshot,
                 Err(error) => {
                     record_historical_observation_failure(
                         registration,
                         identity,
                         &path_key,
                         file,
-                        previous,
+                        previous.as_ref(),
                         &error,
                         &mut current_inventory,
                         catalog_sources,
@@ -2225,93 +2361,100 @@ fn run_historical_reconciliation(
                     continue;
                 }
             };
-            let change = classify_source_change(
-                &file,
-                previous.map(|entry| &entry.fingerprint),
-                &fingerprint,
-            )?;
-            match change {
-                SourceChange::New => *rollout_files_new += 1,
-                SourceChange::Appended => *rollout_files_appended += 1,
-                SourceChange::Unchanged => *rollout_files_unchanged += 1,
-                SourceChange::Rewritten => *rollout_files_rewritten += 1,
-            }
-            let mut entry = SourceInventoryEntry {
-                fingerprint: fingerprint.clone(),
-                archive: previous.and_then(|entry| entry.archive.clone()),
-            };
-            let reusable = change == SourceChange::Unchanged
-                && entry.archive.as_ref().is_some_and(|reference| {
-                    archive_reference_matches_source(reference, &file, &fingerprint)
-                });
-            if reusable {
-                retain_previous_archive(
-                    registration,
-                    identity,
-                    &entry,
-                    catalog_sources,
-                    rollout_archives_ready,
-                    rollout_archives_failed,
-                );
-            } else {
-                let options =
-                    SourceArchiveImportOptions::new(identity, &archive_root, vec![file.clone()])?
-                        .include_assistant(matches!(
-                            registration.role_policy,
-                            AutomationRolePolicy::UserAndAssistant
-                        ));
-                match Engine::import_source_archive(options) {
-                    Ok(result) => {
-                        let reference = archive_reference(result.archive_path, &result.manifest)?;
-                        entry.archive = Some(reference.clone());
-                        *rollout_archives_ready += 1;
-                        catalog_sources.push(AutomationCatalogSource {
-                            registration_id: registration.registration_id.clone(),
-                            project_ref_id: registration.project_ref_id,
-                            lane: AutomationLane::HistoricalReference,
-                            artifact_kind: AutomationArtifactKind::SourceArchive,
-                            artifact_path: reference.artifact_path,
-                            artifact_manifest_sha256: reference.artifact_manifest_sha256,
-                            source_anchor: reference.source_anchor,
-                            status: AutomationSourceStatus::Ready,
-                            error_code: None,
-                            error: None,
-                        });
-                    }
-                    Err(error) => {
-                        retain_previous_archive(
-                            registration,
-                            identity,
-                            &entry,
-                            catalog_sources,
-                            rollout_archives_ready,
-                            rollout_archives_failed,
-                        );
-                        *rollout_archives_failed += 1;
-                        catalog_sources.push(failed_catalog_source(
-                            registration,
-                            AutomationLane::HistoricalReference,
-                            AutomationArtifactKind::SourceArchive,
-                            file,
-                            &error.code().to_string(),
-                            &error.to_string(),
-                        ));
-                    }
-                }
-            }
-            current_inventory.insert(path_key, entry);
+            let fingerprint = fingerprint_from_snapshot(&snapshot);
+            observed_rollouts.push(LegacyObservedRollout {
+                file,
+                path_key,
+                previous,
+                snapshot,
+                fingerprint,
+            });
         }
+    }
 
-        let deleted_sources = previous_inventory
-            .files
-            .iter()
-            .filter(|(path, _)| {
-                source_belongs_to_root(path, rollout_root) && !current_inventory.contains_key(*path)
-            })
-            .map(|(path, entry)| (path.clone(), entry.clone()))
-            .collect::<Vec<_>>();
-        for (deleted, entry) in deleted_sources {
-            *rollout_files_deleted += 1;
+    let mut new_observations = BTreeMap::<LegacyRelocationKey, Vec<String>>::new();
+    for observed in &observed_rollouts {
+        if observed.previous.is_none() {
+            new_observations
+                .entry(LegacyRelocationKey {
+                    registration_id: registration.registration_id.clone(),
+                    project_ref_id: registration.project_ref_id,
+                    fingerprint: observed.fingerprint.clone(),
+                })
+                .or_default()
+                .push(observed.path_key.clone());
+        }
+    }
+    let mut missing_previous =
+        BTreeMap::<LegacyRelocationKey, Vec<(String, SourceInventoryEntry)>>::new();
+    for (path, entry) in &previous_inventory.files {
+        if source_belongs_to_any_root(path, &scanned_roots)
+            && !discovered_paths.contains(Path::new(path.as_str()))
+        {
+            missing_previous
+                .entry(LegacyRelocationKey {
+                    registration_id: registration.registration_id.clone(),
+                    project_ref_id: registration.project_ref_id,
+                    fingerprint: entry.fingerprint.clone(),
+                })
+                .or_default()
+                .push((path.clone(), entry.clone()));
+        }
+    }
+    let mut relocations = BTreeMap::<String, (String, SourceInventoryEntry)>::new();
+    for (key, new_paths) in new_observations {
+        let Some(old_paths) = missing_previous.get(&key) else {
+            continue;
+        };
+        if let ([new_path], [(old_path, old_entry)]) = (new_paths.as_slice(), old_paths.as_slice())
+        {
+            relocations.insert(new_path.clone(), (old_path.clone(), old_entry.clone()));
+        }
+    }
+    let relocated_sources = relocations
+        .values()
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+
+    for observed in observed_rollouts {
+        let LegacyObservedRollout {
+            file,
+            path_key,
+            previous,
+            snapshot,
+            fingerprint,
+        } = observed;
+        let change = classify_source_change_from_bytes(
+            previous.as_ref().map(|entry| &entry.fingerprint),
+            &fingerprint,
+            snapshot.bytes(),
+        );
+        match change {
+            SourceChange::New => *rollout_files_new += 1,
+            SourceChange::Appended => *rollout_files_appended += 1,
+            SourceChange::Unchanged => *rollout_files_unchanged += 1,
+            SourceChange::Rewritten => *rollout_files_rewritten += 1,
+        }
+        let relocated_previous = previous
+            .is_none()
+            .then(|| relocations.get(&path_key))
+            .flatten()
+            .map(|(_, entry)| entry);
+        let effective_previous = previous.as_ref().or(relocated_previous);
+        let mut entry = SourceInventoryEntry {
+            fingerprint: fingerprint.clone(),
+            archive: effective_previous.and_then(|entry| entry.archive.clone()),
+        };
+        let reusable = change == SourceChange::Unchanged
+            && entry.archive.as_ref().is_some_and(|reference| {
+                archive_reference_matches_source(
+                    reference,
+                    &file,
+                    &fingerprint,
+                    snapshot.stored_source(),
+                )
+            });
+        if reusable {
             retain_previous_archive(
                 registration,
                 identity,
@@ -2320,23 +2463,97 @@ fn run_historical_reconciliation(
                 rollout_archives_ready,
                 rollout_archives_failed,
             );
-            *rollout_archives_failed += 1;
-            catalog_sources.push(failed_catalog_source(
-                registration,
-                AutomationLane::HistoricalReference,
-                AutomationArtifactKind::SourceArchive,
-                PathBuf::from(&deleted),
-                "source_deleted",
-                "previously registered rollout source is no longer present",
-            ));
-            current_inventory.insert(deleted, entry);
+        } else {
+            let options =
+                SourceArchiveImportOptions::new(identity, &archive_root, vec![file.clone()])?
+                    .include_assistant(matches!(
+                        registration.role_policy,
+                        AutomationRolePolicy::UserAndAssistant
+                    ));
+            match Engine::import_source_archive(options) {
+                Ok(result) => {
+                    let reference = archive_reference(result.archive_path, &result.manifest)?;
+                    entry.archive = Some(reference.clone());
+                    *rollout_archives_ready += 1;
+                    catalog_sources.push(AutomationCatalogSource {
+                        registration_id: registration.registration_id.clone(),
+                        project_ref_id: registration.project_ref_id,
+                        lane: AutomationLane::HistoricalReference,
+                        artifact_kind: AutomationArtifactKind::SourceArchive,
+                        artifact_path: reference.artifact_path,
+                        artifact_manifest_sha256: reference.artifact_manifest_sha256,
+                        source_anchor: reference.source_anchor,
+                        status: AutomationSourceStatus::Ready,
+                        error_code: None,
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    retain_previous_archive(
+                        registration,
+                        identity,
+                        &entry,
+                        catalog_sources,
+                        rollout_archives_ready,
+                        rollout_archives_failed,
+                    );
+                    *rollout_archives_failed += 1;
+                    catalog_sources.push(failed_catalog_source(
+                        registration,
+                        AutomationLane::HistoricalReference,
+                        AutomationArtifactKind::SourceArchive,
+                        file,
+                        &error.code().to_string(),
+                        &error.to_string(),
+                    ));
+                }
+            }
         }
+        current_inventory.insert(path_key, entry);
+    }
+
+    let deleted_sources = previous_inventory
+        .files
+        .iter()
+        .filter(|(path, _)| {
+            source_belongs_to_any_root(path, &scanned_roots)
+                && !current_inventory.contains_key(*path)
+                && !relocated_sources.contains(*path)
+        })
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .collect::<Vec<_>>();
+    for (deleted, entry) in deleted_sources {
+        *rollout_files_deleted += 1;
+        retain_previous_archive(
+            registration,
+            identity,
+            &entry,
+            catalog_sources,
+            rollout_archives_ready,
+            rollout_archives_failed,
+        );
+        *rollout_archives_failed += 1;
+        catalog_sources.push(failed_catalog_source(
+            registration,
+            AutomationLane::HistoricalReference,
+            AutomationArtifactKind::SourceArchive,
+            PathBuf::from(&deleted),
+            "source_deleted",
+            "previously registered rollout source is no longer present",
+        ));
+        current_inventory.insert(deleted, entry);
     }
     write_source_inventory(root, &registration.registration_id, current_inventory)
 }
 
 fn source_belongs_to_root(source: &str, root: &Path) -> bool {
     Path::new(source).starts_with(root)
+}
+
+fn source_belongs_to_any_root(source: &str, roots: &[PathBuf]) -> bool {
+    roots
+        .iter()
+        .any(|root| source_belongs_to_root(source, root))
 }
 
 fn retain_previous_archive(
@@ -2477,9 +2694,7 @@ fn collect_rollout_files(root: &Path) -> Result<Vec<PathBuf>> {
             if metadata.is_dir() {
                 validate_rollout_permissions(&metadata, &path, "rollout directory")?;
                 pending.push(path);
-            } else if metadata.is_file()
-                && path.extension().and_then(|value| value.to_str()) == Some("jsonl")
-            {
+            } else if metadata.is_file() && is_rollout_source_path(&path) {
                 validate_rollout_permissions(&metadata, &path, "rollout source")?;
                 files.push(path);
             }
@@ -2487,6 +2702,15 @@ fn collect_rollout_files(root: &Path) -> Result<Vec<PathBuf>> {
     }
     files.sort();
     Ok(files)
+}
+
+fn is_rollout_source_path(path: &Path) -> bool {
+    path.extension().is_some_and(|value| value == "jsonl")
+        || (path.extension().is_some_and(|value| value == "zst")
+            && path
+                .file_stem()
+                .and_then(|stem| Path::new(stem).extension())
+                .is_some_and(|value| value == "jsonl"))
 }
 
 fn validate_rollout_permissions(metadata: &fs::Metadata, path: &Path, label: &str) -> Result<()> {
@@ -2502,6 +2726,22 @@ fn validate_rollout_permissions(metadata: &fs::Metadata, path: &Path, label: &st
     Ok(())
 }
 
+fn capture_rollout_snapshot(source_root: &Path, source: &Path) -> Result<SourceArchiveSnapshot> {
+    #[cfg(test)]
+    if let Some((max_container_bytes, max_logical_bytes)) =
+        TEST_SOURCE_CAPTURE_LIMITS.with(std::cell::Cell::get)
+    {
+        return SourceArchiveSnapshot::capture_with_limits(
+            source_root,
+            source,
+            max_container_bytes,
+            max_logical_bytes,
+        );
+    }
+    SourceArchiveSnapshot::capture(source_root, source)
+}
+
+#[cfg(test)]
 fn fingerprint_source(path: &Path) -> Result<SourceFingerprint> {
     let metadata = fs::symlink_metadata(path).map_err(storage_error("inspect rollout source"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -2547,6 +2787,7 @@ fn classify_source_change_from_bytes(
     SourceChange::Rewritten
 }
 
+#[cfg(test)]
 fn classify_source_change(
     path: &Path,
     previous: Option<&SourceFingerprint>,
@@ -2564,6 +2805,7 @@ fn classify_source_change(
     Ok(SourceChange::Rewritten)
 }
 
+#[cfg(test)]
 fn sha256_prefix(path: &Path, bytes: u64) -> Result<String> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -2816,6 +3058,7 @@ fn archive_reference(
         source_path: source.source_path.clone(),
         source_bytes: source.source_bytes,
         source_sha256: source.source_sha256.clone(),
+        stored_source: source.stored_source.clone(),
         source_anchor: format!(
             "path:{};sha256:{}",
             source.source_path.display(),
@@ -2865,10 +3108,12 @@ fn archive_reference_matches_source(
     reference: &SourceArchiveReference,
     source: &Path,
     fingerprint: &SourceFingerprint,
+    stored_source: Option<&SourceArchiveStoredSource>,
 ) -> bool {
     reference.source_path == source
         && reference.source_bytes == fingerprint.bytes
         && reference.source_sha256 == fingerprint.sha256
+        && reference.stored_source.as_ref() == stored_source
 }
 
 fn source_changed_during_archive_import_error(
@@ -5275,6 +5520,29 @@ mod tests {
         SourceArchiveOwnerResolutionScheme, automation::AUTOMATION_CATALOG_FORMAT_VERSION,
     };
 
+    struct SourceCaptureLimitReset(Option<(u64, u64)>);
+
+    impl Drop for SourceCaptureLimitReset {
+        fn drop(&mut self) {
+            TEST_SOURCE_CAPTURE_LIMITS.with(|limits| limits.set(self.0));
+        }
+    }
+
+    fn with_source_capture_limits<T>(
+        max_container_bytes: u64,
+        max_logical_bytes: u64,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        TEST_SOURCE_CAPTURE_LIMITS.with(|limits| {
+            let reset = SourceCaptureLimitReset(
+                limits.replace(Some((max_container_bytes, max_logical_bytes))),
+            );
+            let result = action();
+            drop(reset);
+            result
+        })
+    }
+
     fn write_test_rollout(path: &Path, text: &str) {
         let thread = "01900000-0000-7000-8000-000000000001";
         let user = "01900000-0000-7000-8000-000000000002";
@@ -5290,6 +5558,12 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         fs::write(path, format!("{bytes}\n")).unwrap();
+    }
+
+    fn write_zstd_rollout_copy(source: &Path, destination: &Path, level: i32) {
+        let logical = fs::read(source).unwrap();
+        let compressed = zstd::stream::encode_all(logical.as_slice(), level).unwrap();
+        fs::write(destination, compressed).unwrap();
     }
 
     fn automation_fixture(
@@ -5949,10 +6223,13 @@ mod tests {
         let temporary = TempDir::new().unwrap();
         fs::write(temporary.path().join("b.jsonl"), b"{}\n").unwrap();
         fs::write(temporary.path().join("a.jsonl"), b"{}\n").unwrap();
+        fs::write(temporary.path().join("c.jsonl.zst"), b"zstd candidate").unwrap();
+        fs::write(temporary.path().join("ignored.zst"), b"ignored").unwrap();
         fs::write(temporary.path().join("ignored.txt"), b"ignored").unwrap();
         let files = collect_rollout_files(temporary.path()).unwrap();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 3);
         assert!(files[0].ends_with("a.jsonl"));
+        assert!(files[2].ends_with("c.jsonl.zst"));
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(
@@ -6006,6 +6283,7 @@ mod tests {
             source_path: source.clone(),
             source_bytes: rewritten.bytes,
             source_sha256: rewritten.sha256.clone(),
+            stored_source: None,
             source_anchor: format!("path:{};sha256:{}", source.display(), rewritten.sha256),
         };
         let mut files = BTreeMap::new();
@@ -6021,7 +6299,7 @@ mod tests {
         assert_eq!(persisted.schema_version, 2);
         assert_eq!(persisted.files, files);
         assert!(archive_reference_matches_source(
-            &reference, &source, &rewritten
+            &reference, &source, &rewritten, None,
         ));
 
         let legacy = SourceInventoryV1 {
@@ -6143,6 +6421,277 @@ mod tests {
         assert_eq!(second.status, "completed");
         assert_eq!(second.rollout_files_unchanged, 1);
         assert_eq!(second.rollout_archives_ready, 1);
+    }
+
+    #[test]
+    fn registry_derived_reconcile_recognizes_a_compressed_relocated_rollout() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let first = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(first.status, "completed", "{first:#?}");
+        let original = fixture.rollout_root.join("thread.jsonl");
+        let original_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        let original_entry = original_inventory.files[original.to_str().unwrap()].clone();
+
+        let archived_directory = fixture.rollout_root.join("archived");
+        fs::create_dir(&archived_directory).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&archived_directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let relocated = archived_directory.join("thread.jsonl.zst");
+        let logical = fs::read(&original).unwrap();
+        let compressed = zstd::stream::encode_all(logical.as_slice(), 3).unwrap();
+        fs::write(&relocated, compressed).unwrap();
+        fs::remove_file(&original).unwrap();
+
+        let second =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(second.status, "completed", "{second:#?}");
+        assert_eq!(second.rollout_files_new, 1);
+        assert_eq!(second.rollout_files_deleted, 0);
+        assert_eq!(second.rollout_archives_ready, 1);
+        assert_eq!(second.rollout_archives_failed, 0);
+        let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert!(!inventory.files.contains_key(original.to_str().unwrap()));
+        let relocated_entry = &inventory.files[relocated.to_str().unwrap()];
+        assert_eq!(relocated_entry.fingerprint, original_entry.fingerprint);
+        assert_eq!(relocated_entry.member, original_entry.member);
+        let reference = relocated_entry.archive.as_ref().expect("relocated archive");
+        assert_eq!(reference.source_path, relocated);
+        assert_eq!(reference.source_sha256, original_entry.fingerprint.sha256);
+        let inspection = Engine::inspect_source_archive(SourceArchiveInspectOptions::new(
+            relocated_entry.member.identity(),
+            &reference.artifact_path,
+        ))
+        .unwrap();
+        assert_eq!(
+            inspection.manifest.files[0].source_sha256,
+            original_entry.fingerprint.sha256
+        );
+        assert!(inspection.manifest.files[0].stored_source.is_some());
+        let first_compressed = fs::read(&relocated).unwrap();
+        let first_reference = reference.clone();
+        let catalog = read_automation_catalog(&second.catalog_path).unwrap();
+        assert!(
+            catalog
+                .sources
+                .iter()
+                .all(|source| { source.error_code.as_deref() != Some("source_deleted") })
+        );
+
+        let recompressed = zstd::stream::encode_all(logical.as_slice(), 19).unwrap();
+        assert_ne!(recompressed, first_compressed);
+        fs::write(&relocated, &recompressed).unwrap();
+        let third = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(third.status, "completed", "{third:#?}");
+        assert_eq!(third.rollout_files_unchanged, 1);
+        assert_eq!(third.rollout_files_deleted, 0);
+        assert_eq!(third.rollout_archives_ready, 1);
+        assert_eq!(third.rollout_archives_failed, 0);
+        let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        let recompressed_entry = &inventory.files[relocated.to_str().unwrap()];
+        assert_eq!(
+            recompressed_entry.fingerprint, original_entry.fingerprint,
+            "recompression must preserve logical source identity"
+        );
+        let recompressed_reference = recompressed_entry
+            .archive
+            .as_ref()
+            .expect("recompressed archive");
+        assert_ne!(
+            recompressed_reference.artifact_path, first_reference.artifact_path,
+            "encoded-container drift must publish a new immutable archive basis"
+        );
+        let stored = recompressed_reference
+            .stored_source
+            .as_ref()
+            .expect("recompressed source provenance");
+        assert_eq!(stored.container_bytes, recompressed.len() as u64);
+        assert_eq!(
+            stored.container_sha256,
+            hex::encode(Sha256::digest(&recompressed))
+        );
+    }
+
+    #[test]
+    fn registry_derived_reconcile_does_not_infer_one_to_many_relocation() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let original = fixture.rollout_root.join("thread.jsonl");
+
+        let first = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(first.status, "completed", "{first:#?}");
+
+        let archived = fixture.rollout_root.join("archived");
+        fs::create_dir(&archived).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&archived, fs::Permissions::from_mode(0o700)).unwrap();
+        let first_new = archived.join("thread-a.jsonl.zst");
+        let second_new = archived.join("thread-b.jsonl.zst");
+        write_zstd_rollout_copy(&original, &first_new, 3);
+        write_zstd_rollout_copy(&original, &second_new, 9);
+        fs::remove_file(&original).unwrap();
+
+        let second =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(second.rollout_files_new, 2, "{second:#?}");
+        assert_eq!(second.rollout_files_deleted, 1, "{second:#?}");
+        let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert!(inventory.files.contains_key(original.to_str().unwrap()));
+        assert!(inventory.files.contains_key(first_new.to_str().unwrap()));
+        assert!(inventory.files.contains_key(second_new.to_str().unwrap()));
+        let catalog = read_automation_catalog(&second.catalog_path).unwrap();
+        let deleted = catalog
+            .sources
+            .iter()
+            .filter(|source| {
+                source.error_code.as_deref() == Some("source_deleted")
+                    && source.artifact_path == original
+            })
+            .count();
+        assert_eq!(deleted, 1, "{catalog:#?}");
+    }
+
+    #[test]
+    fn registry_derived_reconcile_does_not_infer_many_to_one_relocation() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let first_old = fixture.rollout_root.join("thread.jsonl");
+        let second_old = fixture.rollout_root.join("thread-copy.jsonl.zst");
+        write_zstd_rollout_copy(&first_old, &second_old, 3);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let first = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(first.status, "completed", "{first:#?}");
+        assert_eq!(first.rollout_archives_ready, 2, "{first:#?}");
+
+        let archived = fixture.rollout_root.join("archived");
+        fs::create_dir(&archived).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&archived, fs::Permissions::from_mode(0o700)).unwrap();
+        let only_new = archived.join("thread.jsonl.zst");
+        write_zstd_rollout_copy(&first_old, &only_new, 9);
+        fs::remove_file(&first_old).unwrap();
+        fs::remove_file(&second_old).unwrap();
+
+        let second =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(second.rollout_files_new, 1, "{second:#?}");
+        assert_eq!(second.rollout_files_deleted, 2, "{second:#?}");
+        let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert!(inventory.files.contains_key(first_old.to_str().unwrap()));
+        assert!(inventory.files.contains_key(second_old.to_str().unwrap()));
+        assert!(inventory.files.contains_key(only_new.to_str().unwrap()));
+        let catalog = read_automation_catalog(&second.catalog_path).unwrap();
+        let deleted_paths = catalog
+            .sources
+            .iter()
+            .filter(|source| source.error_code.as_deref() == Some("source_deleted"))
+            .map(|source| source.artifact_path.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(deleted_paths, BTreeSet::from([first_old, second_old]));
+    }
+
+    #[test]
+    fn registry_derived_reconcile_retains_prior_archive_when_logical_limit_fails() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let normal = fixture.rollout_root.join("thread.jsonl");
+        let compressed = fixture.rollout_root.join("bounded.jsonl.zst");
+        write_zstd_rollout_copy(&normal, &compressed, 3);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let first = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(first.status, "completed", "{first:#?}");
+        let first_inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        let remembered = first_inventory.files[compressed.to_str().unwrap()].clone();
+        let remembered_archive = remembered.archive.as_ref().unwrap().artifact_path.clone();
+
+        let oversized_plain = fixture.rollout_root.join("oversized.jsonl");
+        write_registry_derived_test_rollout(
+            &oversized_plain,
+            &fixture.project_roots[0],
+            &"x".repeat(8192),
+        );
+        write_zstd_rollout_copy(&oversized_plain, &compressed, 3);
+        fs::remove_file(&oversized_plain).unwrap();
+
+        let second = with_source_capture_limits(1024 * 1024, 4096, || {
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap()
+        });
+        assert_eq!(second.status, "partial_failure", "{second:#?}");
+        assert_eq!(second.rollout_archives_failed, 1, "{second:#?}");
+        let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert_eq!(inventory.files[compressed.to_str().unwrap()], remembered);
+        let catalog = read_automation_catalog(&second.catalog_path).unwrap();
+        assert!(catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Ready
+                && source.artifact_path == remembered_archive
+        }));
+        let failure = catalog
+            .sources
+            .iter()
+            .find(|source| {
+                source.status == AutomationSourceStatus::Failed
+                    && source.artifact_path == compressed
+            })
+            .expect("oversized compressed source failure");
+        assert!(
+            failure.error.as_deref().is_some_and(|error| {
+                error.contains("logical JSONL size is at least ")
+                    && error.contains("exceeds maximum 4096 bytes")
+            }),
+            "unexpected source-limit failure: {failure:#?}"
+        );
+        assert!(catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Ready
+                && source.lane == AutomationLane::HistoricalReference
+                && source.artifact_path != remembered_archive
+        }));
+    }
+
+    #[test]
+    fn registry_derived_reconcile_preserves_valid_sources_when_zstd_is_corrupt() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        let corrupt = fixture.rollout_root.join("broken.jsonl.zst");
+        fs::write(&corrupt, b"not a zstd frame").unwrap();
+        install_registry_derived_source_policy(&fixture, Vec::new());
+
+        let report =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(report.status, "partial_failure", "{report:#?}");
+        assert_eq!(report.rollout_files_discovered, 2);
+        assert_eq!(report.rollout_archives_ready, 1);
+        assert_eq!(report.rollout_archives_failed, 1);
+        let catalog = read_automation_catalog(&report.catalog_path).unwrap();
+        assert!(catalog.sources.iter().any(|source| {
+            source.status == AutomationSourceStatus::Ready
+                && source.lane == AutomationLane::HistoricalReference
+        }));
+        let failed = catalog
+            .sources
+            .iter()
+            .find(|source| source.artifact_path == corrupt)
+            .expect("corrupt compressed source failure");
+        assert_eq!(failed.status, AutomationSourceStatus::Failed);
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("is not valid zstd-compressed JSONL")),
+            "unexpected compressed corruption error: {:?}",
+            failed.error
+        );
+        let inventory = read_global_source_inventory(&fixture.automation_root).unwrap();
+        assert_eq!(inventory.files.len(), 1);
+        assert!(
+            inventory
+                .files
+                .contains_key(fixture.rollout_root.join("thread.jsonl").to_str().unwrap())
+        );
     }
 
     #[test]
@@ -6706,7 +7255,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            archive_reference_matches_source(&imported_reference, &raced_source, &pre_fingerprint),
+            archive_reference_matches_source(
+                &imported_reference,
+                &raced_source,
+                &pre_fingerprint,
+                None,
+            ),
             "Engine must import the immutable captured snapshot, not the appended live file"
         );
         assert_eq!(raced.status, "partial_failure");
@@ -6839,7 +7393,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            archive_reference_matches_source(&imported_reference, &raced_source, &pre_fingerprint),
+            archive_reference_matches_source(
+                &imported_reference,
+                &raced_source,
+                &pre_fingerprint,
+                None,
+            ),
             "Engine must import the immutable captured snapshot, not the appended live file"
         );
         assert_eq!(raced.status, "partial_failure");
@@ -7428,6 +7987,163 @@ mod tests {
                     .is_some_and(|message| message.contains("rollout root"))
             );
         }
+    }
+
+    #[test]
+    fn legacy_reconcile_recognizes_a_compressed_relocation_across_registered_roots() {
+        let temporary = TempDir::new().unwrap();
+        let (root, mut registration, _rollout_root, source) = automation_fixture(&temporary);
+        let archived_root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("archived-rollouts");
+        fs::create_dir(&archived_root).unwrap();
+        registration.rollout_roots.push(archived_root.clone());
+        let registry = serde_json::json!({
+            "format_version": 1,
+            "revision": 1,
+            "registrations": [registration.clone()],
+        });
+        fs::write(
+            root.join("registrations.json"),
+            serde_json::to_vec(&registry).unwrap(),
+        )
+        .unwrap();
+
+        let first = reconcile_once(&root, None).unwrap();
+        assert_eq!(first.rollout_archives_ready, 1, "{first:#?}");
+        let first_inventory = read_source_inventory(&root, &registration.registration_id).unwrap();
+        let original_entry = first_inventory.files[source.to_str().unwrap()].clone();
+
+        let relocated = archived_root.join("thread.jsonl.zst");
+        let logical = fs::read(&source).unwrap();
+        fs::write(
+            &relocated,
+            zstd::stream::encode_all(logical.as_slice(), 3).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(&source).unwrap();
+
+        let second = reconcile_once(&root, None).unwrap();
+        assert_eq!(second.rollout_files_new, 1, "{second:#?}");
+        assert_eq!(second.rollout_files_deleted, 0, "{second:#?}");
+        assert_eq!(second.rollout_archives_ready, 1, "{second:#?}");
+        assert_eq!(second.rollout_archives_failed, 0, "{second:#?}");
+        let inventory = read_source_inventory(&root, &registration.registration_id).unwrap();
+        assert!(!inventory.files.contains_key(source.to_str().unwrap()));
+        let relocated_entry = &inventory.files[relocated.to_str().unwrap()];
+        assert_eq!(relocated_entry.fingerprint, original_entry.fingerprint);
+        let reference = relocated_entry.archive.as_ref().expect("relocated archive");
+        assert_eq!(reference.source_path, relocated);
+        assert!(reference.stored_source.is_some());
+        let catalog = read_automation_catalog(&second.catalog_path).unwrap();
+        assert!(
+            catalog
+                .sources
+                .iter()
+                .all(|source| source.error_code.as_deref() != Some("source_deleted"))
+        );
+    }
+
+    #[test]
+    fn legacy_reconcile_does_not_infer_one_to_many_relocation() {
+        let temporary = TempDir::new().unwrap();
+        let (root, mut registration, _rollout_root, original) = automation_fixture(&temporary);
+        let archived_root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("archived-rollouts");
+        fs::create_dir(&archived_root).unwrap();
+        registration.rollout_roots.push(archived_root.clone());
+        fs::write(
+            root.join("registrations.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "format_version": 1,
+                "revision": 1,
+                "registrations": [registration.clone()],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let first = reconcile_once(&root, None).unwrap();
+        assert_eq!(first.rollout_archives_ready, 1, "{first:#?}");
+        let first_new = archived_root.join("thread-a.jsonl.zst");
+        let second_new = archived_root.join("thread-b.jsonl.zst");
+        write_zstd_rollout_copy(&original, &first_new, 3);
+        write_zstd_rollout_copy(&original, &second_new, 9);
+        fs::remove_file(&original).unwrap();
+
+        let second = reconcile_once(&root, None).unwrap();
+        assert_eq!(second.rollout_files_new, 2, "{second:#?}");
+        assert_eq!(second.rollout_files_deleted, 1, "{second:#?}");
+        let inventory = read_source_inventory(&root, &registration.registration_id).unwrap();
+        assert!(inventory.files.contains_key(original.to_str().unwrap()));
+        assert!(inventory.files.contains_key(first_new.to_str().unwrap()));
+        assert!(inventory.files.contains_key(second_new.to_str().unwrap()));
+        let catalog = read_automation_catalog(&second.catalog_path).unwrap();
+        assert_eq!(
+            catalog
+                .sources
+                .iter()
+                .filter(|source| {
+                    source.error_code.as_deref() == Some("source_deleted")
+                        && source.artifact_path == original
+                })
+                .count(),
+            1,
+            "{catalog:#?}"
+        );
+    }
+
+    #[test]
+    fn legacy_reconcile_does_not_infer_many_to_one_relocation() {
+        let temporary = TempDir::new().unwrap();
+        let (root, mut registration, _rollout_root, first_old) = automation_fixture(&temporary);
+        let archived_root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("archived-rollouts");
+        fs::create_dir(&archived_root).unwrap();
+        registration.rollout_roots.push(archived_root.clone());
+        let second_old = archived_root.join("thread-copy.jsonl.zst");
+        write_zstd_rollout_copy(&first_old, &second_old, 3);
+        fs::write(
+            root.join("registrations.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "format_version": 1,
+                "revision": 1,
+                "registrations": [registration.clone()],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let first = reconcile_once(&root, None).unwrap();
+        assert_eq!(first.rollout_archives_ready, 2, "{first:#?}");
+        let only_new = archived_root.join("thread.jsonl.zst");
+        write_zstd_rollout_copy(&first_old, &only_new, 9);
+        fs::remove_file(&first_old).unwrap();
+        fs::remove_file(&second_old).unwrap();
+
+        let second = reconcile_once(&root, None).unwrap();
+        assert_eq!(second.rollout_files_new, 1, "{second:#?}");
+        assert_eq!(second.rollout_files_deleted, 2, "{second:#?}");
+        let inventory = read_source_inventory(&root, &registration.registration_id).unwrap();
+        assert!(inventory.files.contains_key(first_old.to_str().unwrap()));
+        assert!(inventory.files.contains_key(second_old.to_str().unwrap()));
+        assert!(inventory.files.contains_key(only_new.to_str().unwrap()));
+        let catalog = read_automation_catalog(&second.catalog_path).unwrap();
+        let deleted_paths = catalog
+            .sources
+            .iter()
+            .filter(|source| source.error_code.as_deref() == Some("source_deleted"))
+            .map(|source| source.artifact_path.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(deleted_paths, BTreeSet::from([first_old, second_old]));
     }
 
     #[test]

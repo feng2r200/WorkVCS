@@ -21,6 +21,10 @@ use crate::identity::{
     WorkspaceId,
 };
 use crate::store::{StoreConnection, current_epoch_micros};
+use crate::work_scope::{
+    WorkApplicability, has_work_scope_identity, is_project_fact_scope, resolve_work_applicability,
+    work_item_applicability,
+};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
@@ -762,10 +766,48 @@ pub(crate) fn context_packet(
         overview.branch.workspace_id,
         &overview.branch,
     )?;
-    let workspace_runnable_tasks = if needs_workspace_runnable_context_for_focused_task(
-        options.profile(),
-        &overview,
-    ) {
+    let applicability = resolve_work_applicability(
+        options.scope(),
+        None,
+        overview
+            .session
+            .focus
+            .as_ref()
+            .map(|focus| focus.focus_entity_id),
+        &overview
+            .tasks
+            .iter()
+            .map(|task| task.task_entity_id)
+            .collect(),
+    )?;
+    if let Some(entity) = applicability.entity_id()
+        && !overview
+            .tasks
+            .iter()
+            .any(|task| task.task_entity_id == entity)
+        && !overview
+            .plans
+            .iter()
+            .any(|plan| plan.plan_entity_id == entity)
+        && !overview
+            .goals
+            .iter()
+            .any(|goal| goal.goal_entity_id == entity)
+    {
+        return Err(WorkVcsError::QueryInvalid(format!(
+            "selected work entity {entity} is absent from the current Branch context"
+        )));
+    }
+    let use_runtime_focus = applicability.entity_id().is_some()
+        && applicability.entity_id()
+            == overview
+                .session
+                .focus
+                .as_ref()
+                .map(|focus| focus.focus_entity_id);
+    let workspace_runnable_tasks = if use_runtime_focus
+        && needs_workspace_runnable_context_for_focused_task(options.profile(), &overview)
+    {
         let workspace_runnable_tasks = runnable::runnable_tasks(
             connection,
             &RunnableTasksOptions::new(options.session_id()).with_workspace_wide_scope(),
@@ -788,7 +830,7 @@ pub(crate) fn context_packet(
         &verifications,
         workspace_runnable_tasks.as_ref(),
         options.profile(),
-        options.scope(),
+        &applicability,
         &transition_rationales,
     )?;
     items.sort_by_key(|item| item.priority);
@@ -1445,11 +1487,39 @@ fn collect_context_items(
     verifications: &[VerificationSnapshot],
     workspace_runnable_tasks: Option<&RunnableTasksProjection>,
     profile: ContextProfile,
-    scope: Option<&CanonicalValue>,
+    applicability: &WorkApplicability,
     transition_rationales: &[ContextTransitionRationaleSnapshot],
 ) -> Result<Vec<ContextItem>> {
     let mut items = Vec::new();
     let session = &context.session;
+    let work_scoped = applicability.is_work_scoped();
+    let selected_entities = applicability.selected_entities(
+        &context.primary_containment_relations,
+        &context.structural_references,
+    );
+    let use_runtime_focus = applicability.entity_id().is_some()
+        && applicability.entity_id() == session.focus.as_ref().map(|focus| focus.focus_entity_id);
+    let applicable_records = context
+        .records
+        .records
+        .iter()
+        .filter(|record| {
+            applicability.matches_scope(&record.state.scope, selected_entities.as_ref())
+                || (record.state.kind == RecordKind::Finding
+                    && is_project_fact_scope(&record.state.scope))
+        })
+        .map(|record| record.record_entity_id)
+        .collect::<BTreeSet<_>>();
+    let applicable_knowledge = context
+        .knowledge
+        .knowledge
+        .iter()
+        .filter(|knowledge| {
+            applicability
+                .matches_knowledge_scope(&knowledge.state.scope, selected_entities.as_ref())
+        })
+        .map(|knowledge| knowledge.knowledge_entity_id)
+        .collect::<BTreeSet<_>>();
     let criteria_by_id = context
         .acceptance_criteria
         .iter()
@@ -1491,7 +1561,7 @@ fn collect_context_items(
             session_id: session.session_id,
         },
         format!(
-            "session active workspace={} branch={} focus={}",
+            "session runtime anchor workspace={} branch={} runtime_focus={} selected_work_entity={}",
             session
                 .active_workspace_id
                 .map(|workspace_id| workspace_id.to_string())
@@ -1504,6 +1574,10 @@ fn collect_context_items(
                 .focus
                 .as_ref()
                 .map(|focus| focus.focus_entity_id.to_string())
+                .unwrap_or_else(|| "none".to_owned()),
+            applicability
+                .entity_id()
+                .map(|id| id.to_string())
                 .unwrap_or_else(|| "none".to_owned())
         ),
     );
@@ -1522,7 +1596,11 @@ fn collect_context_items(
         ),
     );
     for candidate in &context.runnable_tasks.candidates {
-        if !context_candidate_is_current(candidate, session) {
+        if selected_entities
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&candidate.task.task_entity_id))
+            || !context_candidate_is_current(candidate, session)
+        {
             continue;
         }
         push_context_item(
@@ -1696,13 +1774,13 @@ fn collect_context_items(
             );
         }
     }
-    if let Some(focus) = session.focus.as_ref()
+    if let Some(focus) = applicability.entity_id()
         && !context
             .runnable_tasks
             .candidates
             .iter()
-            .any(|candidate| candidate.task.task_entity_id == focus.focus_entity_id)
-        && let Some(task) = tasks_by_id.get(&focus.focus_entity_id)
+            .any(|candidate| candidate.task.task_entity_id == focus)
+        && let Some(task) = tasks_by_id.get(&focus)
     {
         push_context_item(
             &mut items,
@@ -1718,23 +1796,30 @@ fn collect_context_items(
             ),
         );
     }
-    push_focused_peer_resource_requirement_context_items(
-        &mut items,
-        context,
-        workspace_runnable_tasks,
-        profile,
-        &primary_parent_by_child,
-        &resource_requirement_indexes,
-    )?;
-    push_focused_structural_reference_resource_requirement_context_items(
-        &mut items,
-        context,
-        profile,
-        &tasks_by_id,
-        &plans_by_id,
-        &resource_requirement_indexes,
-    )?;
+    if use_runtime_focus {
+        push_focused_peer_resource_requirement_context_items(
+            &mut items,
+            context,
+            workspace_runnable_tasks,
+            profile,
+            &primary_parent_by_child,
+            &resource_requirement_indexes,
+        )?;
+        push_focused_structural_reference_resource_requirement_context_items(
+            &mut items,
+            context,
+            profile,
+            &tasks_by_id,
+            &plans_by_id,
+            &resource_requirement_indexes,
+        )?;
+    }
     for relation in &context.knowledge_relations.relations {
+        if !applicable_knowledge.contains(&relation.prior_knowledge_entity_id)
+            || !applicable_knowledge.contains(&relation.replacement_knowledge_entity_id)
+        {
+            continue;
+        }
         push_context_item(
             &mut items,
             profile,
@@ -1752,6 +1837,9 @@ fn collect_context_items(
         );
     }
     for relation in &context.knowledge_exposure_relations {
+        if work_scoped {
+            continue;
+        }
         push_context_item(
             &mut items,
             profile,
@@ -1768,6 +1856,11 @@ fn collect_context_items(
         );
     }
     for relation in &context.record_relations.relations {
+        if !applicable_records.contains(&relation.source_record_entity_id)
+            || !applicable_records.contains(&relation.target_record_entity_id)
+        {
+            continue;
+        }
         push_context_item(
             &mut items,
             profile,
@@ -1785,6 +1878,11 @@ fn collect_context_items(
         );
     }
     for relation in &context.record_knowledge_relations.relations {
+        if !applicable_records.contains(&relation.source_record_entity_id)
+            || !applicable_knowledge.contains(&relation.target_knowledge_entity_id)
+        {
+            continue;
+        }
         push_context_item(
             &mut items,
             profile,
@@ -1802,6 +1900,23 @@ fn collect_context_items(
         );
     }
     for rationale in transition_rationales {
+        if work_scoped {
+            push_context_item(
+                &mut items,
+                profile,
+                ContextPriority::P9,
+                ContextItemCategory::OlderProvenance,
+                ContextItemSubject::ChangeSet {
+                    changeset_id: rationale.changeset_id,
+                    commit_id: rationale.commit_id,
+                },
+                format!(
+                    "unclassified transition rationale reference changeset={} commit={} action_authority=none; inspect exact target before applying",
+                    rationale.changeset_id, rationale.commit_id
+                ),
+            );
+            continue;
+        }
         push_context_item(
             &mut items,
             profile,
@@ -1815,36 +1930,84 @@ fn collect_context_items(
         );
     }
     for record in &context.records.records {
-        let (priority, category) =
-            record_priority_and_category(record.state.kind, record.state.status);
-        push_context_item(
-            &mut items,
-            profile,
-            priority,
-            category,
-            ContextItemSubject::Record {
-                record_entity_id: record.record_entity_id,
-            },
-            record_context_summary(record, &context.record_relations.relations)?,
-        );
-    }
-    for knowledge in &context.knowledge.knowledge {
-        if !knowledge_matches_context_scope(&knowledge.state.scope, scope) {
+        if !applicable_records.contains(&record.record_entity_id) {
+            if !has_work_scope_identity(&record.state.scope) {
+                push_context_item(
+                    &mut items,
+                    profile,
+                    ContextPriority::P9,
+                    ContextItemCategory::OlderProvenance,
+                    ContextItemSubject::Record {
+                        record_entity_id: record.record_entity_id,
+                    },
+                    format!(
+                        "unclassified record reference id={} version={} action_authority=none; inspect exact scope before applying",
+                        record.record_entity_id, record.record_entity_version_id
+                    ),
+                );
+            }
             continue;
         }
-        push_context_item(
-            &mut items,
-            profile,
-            ContextPriority::P7,
-            ContextItemCategory::ScopedKnowledge,
-            ContextItemSubject::Knowledge {
-                knowledge_entity_id: knowledge.knowledge_entity_id,
-            },
-            format!(
-                "knowledge {}: {}",
-                knowledge.state.status, knowledge.state.statement
+        let (priority, category) =
+            record_priority_and_category(record.state.kind, record.state.status);
+        let subject = ContextItemSubject::Record {
+            record_entity_id: record.record_entity_id,
+        };
+        let summary = format!(
+            "applicability={} action_authority=none; {}",
+            work_item_applicability(
+                &record.state.scope,
+                work_scoped
+                    && applicability.matches_scope(&record.state.scope, selected_entities.as_ref()),
+                false
             ),
+            record_context_summary(record, &context.record_relations.relations)?
         );
+        if profile == ContextProfile::Brief
+            && work_scoped
+            && record.state.kind == RecordKind::Finding
+        {
+            items.push(ContextItem::new(priority, category, subject, summary));
+        } else {
+            push_context_item(&mut items, profile, priority, category, subject, summary);
+        }
+    }
+    for knowledge in &context.knowledge.knowledge {
+        if !applicable_knowledge.contains(&knowledge.knowledge_entity_id) {
+            continue;
+        }
+        let subject = ContextItemSubject::Knowledge {
+            knowledge_entity_id: knowledge.knowledge_entity_id,
+        };
+        let summary = format!(
+            "applicability={} action_authority=none; knowledge {}: {}",
+            work_item_applicability(
+                &knowledge.state.scope,
+                work_scoped
+                    && applicability
+                        .matches_scope(&knowledge.state.scope, selected_entities.as_ref()),
+                true
+            ),
+            knowledge.state.status,
+            knowledge.state.statement
+        );
+        if profile == ContextProfile::Brief && work_scoped {
+            items.push(ContextItem::new(
+                ContextPriority::P7,
+                ContextItemCategory::ScopedKnowledge,
+                subject,
+                summary,
+            ));
+        } else {
+            push_context_item(
+                &mut items,
+                profile,
+                ContextPriority::P7,
+                ContextItemCategory::ScopedKnowledge,
+                subject,
+                summary,
+            );
+        }
     }
     for workspace_id in &session.context_workspaces {
         push_context_item(
@@ -2593,145 +2756,6 @@ fn verification_requirement_resource_basis_context_summary(
         baseline_observation_id,
         refresh_hint
     )
-}
-
-#[derive(Default)]
-struct PathScopeSelectors {
-    paths: BTreeSet<String>,
-    prefixes: BTreeSet<String>,
-}
-
-impl PathScopeSelectors {
-    fn from_scope(scope: &CanonicalValue) -> Self {
-        let mut selectors = Self::default();
-        collect_path_scope_selectors(scope, &mut selectors);
-        selectors
-    }
-
-    fn is_empty(&self) -> bool {
-        self.paths.is_empty() && self.prefixes.is_empty()
-    }
-
-    fn overlaps(&self, other: &Self) -> bool {
-        self.paths.iter().any(|path| {
-            other.paths.contains(path)
-                || other
-                    .prefixes
-                    .iter()
-                    .any(|prefix| path_is_within_prefix(path, prefix))
-        }) || other.paths.iter().any(|path| {
-            self.prefixes
-                .iter()
-                .any(|prefix| path_is_within_prefix(path, prefix))
-        }) || self.prefixes.iter().any(|left| {
-            other
-                .prefixes
-                .iter()
-                .any(|right| prefixes_overlap(left, right))
-        })
-    }
-}
-
-fn knowledge_matches_context_scope(
-    knowledge_scope: &CanonicalValue,
-    context_scope: Option<&CanonicalValue>,
-) -> bool {
-    let knowledge_selectors = PathScopeSelectors::from_scope(knowledge_scope);
-    if knowledge_selectors.is_empty() {
-        return true;
-    }
-
-    let Some(context_scope) = context_scope else {
-        return true;
-    };
-    let context_selectors = PathScopeSelectors::from_scope(context_scope);
-    if context_selectors.is_empty() {
-        return true;
-    }
-
-    knowledge_selectors.overlaps(&context_selectors)
-}
-
-fn collect_path_scope_selectors(scope: &CanonicalValue, selectors: &mut PathScopeSelectors) {
-    let CanonicalValue::Object(entries) = scope else {
-        return;
-    };
-
-    for (key, value) in entries {
-        match key.as_str() {
-            "path" => collect_string_selector(value, &mut selectors.paths),
-            "paths" => collect_string_selectors(value, &mut selectors.paths),
-            "path_prefix" => collect_string_selector(value, &mut selectors.prefixes),
-            "path_prefixes" => collect_string_selectors(value, &mut selectors.prefixes),
-            "scope_payload" => collect_path_scope_selectors(value, selectors),
-            _ => {}
-        }
-    }
-}
-
-fn collect_string_selector(value: &CanonicalValue, selectors: &mut BTreeSet<String>) {
-    if let CanonicalValue::String(text) = value
-        && let Some(selector) = normalize_path_scope_selector(text)
-    {
-        selectors.insert(selector);
-    }
-}
-
-fn collect_string_selectors(value: &CanonicalValue, selectors: &mut BTreeSet<String>) {
-    if let CanonicalValue::Array(values) = value {
-        for value in values {
-            collect_string_selector(value, selectors);
-        }
-    }
-}
-
-fn path_is_within_prefix(path: &str, prefix: &str) -> bool {
-    if path == prefix {
-        return true;
-    }
-    if prefix.ends_with('/') {
-        return path.starts_with(prefix);
-    }
-    path.strip_prefix(prefix)
-        .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-fn prefixes_overlap(left: &str, right: &str) -> bool {
-    path_is_within_prefix(left, right) || path_is_within_prefix(right, left)
-}
-
-fn normalize_path_scope_selector(text: &str) -> Option<String> {
-    if text.is_empty() {
-        return None;
-    }
-
-    let absolute = text.starts_with('/');
-    let mut segments = Vec::new();
-    for segment in text.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => match segments.last() {
-                Some(last) if *last != ".." => {
-                    segments.pop();
-                }
-                _ if !absolute => segments.push(segment),
-                _ => {}
-            },
-            _ => segments.push(segment),
-        }
-    }
-
-    if absolute {
-        if segments.is_empty() {
-            Some("/".to_owned())
-        } else {
-            Some(format!("/{}", segments.join("/")))
-        }
-    } else if segments.is_empty() {
-        Some(".".to_owned())
-    } else {
-        Some(segments.join("/"))
-    }
 }
 
 fn context_packet_value(packet: &ContextPacket) -> Result<CanonicalValue> {

@@ -35,6 +35,9 @@ const MAX_ROUTING_ACTIVATION_BYTES: u64 = 64 * 1024;
 const MAX_NATIVE_METADATA_BYTES: u64 = 16 * 1024;
 const MAX_ARCHIVE_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ARCHIVE_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_ROLLOUT_CONTAINER_BYTES: u64 = MAX_ARCHIVE_DOCUMENT_BYTES;
+const MAX_ROLLOUT_LOGICAL_BYTES: u64 = MAX_ARCHIVE_DOCUMENT_BYTES;
+const MAX_ROLLOUT_ZSTD_WINDOW_LOG: u32 = 28;
 const STANDARD_PROJECT_REGISTRY_FILE: &str = "project-bindings.json";
 const ROUTING_ACTIVATION_FILE: &str = "routing-activation-v1.json";
 
@@ -42,6 +45,20 @@ const ROUTING_ACTIVATION_FILE: &str = "routing-activation-v1.json";
 #[serde(rename_all = "snake_case")]
 pub enum SourceArchiveFormat {
     CodexRolloutJsonl,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceArchiveCompression {
+    Zstd,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceArchiveStoredSource {
+    pub compression: SourceArchiveCompression,
+    pub container_sha256: String,
+    pub container_bytes: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +80,9 @@ pub struct SourceArchiveSnapshot {
     source_path: PathBuf,
     source_sha256: String,
     source_bytes: u64,
+    stored_source: Option<SourceArchiveStoredSource>,
+    container_sha256: String,
+    container_bytes: u64,
     opened_identity: SourceArchiveOpenedIdentity,
     bytes: Arc<[u8]>,
     parsed: Arc<[ParsedRolloutLine]>,
@@ -75,6 +95,8 @@ pub struct SourceArchiveLiveSourceFence {
     source_path: PathBuf,
     source_sha256: String,
     source_bytes: u64,
+    container_sha256: String,
+    container_bytes: u64,
     opened_identity: SourceArchiveOpenedIdentity,
 }
 
@@ -93,18 +115,60 @@ struct SourceArchiveOpenedIdentity {
 }
 
 impl SourceArchiveSnapshot {
+    pub const MAX_CONTAINER_BYTES: u64 = MAX_ROLLOUT_CONTAINER_BYTES;
+    pub const MAX_LOGICAL_BYTES: u64 = MAX_ROLLOUT_LOGICAL_BYTES;
+
     pub fn capture(source_root: impl AsRef<Path>, source: impl AsRef<Path>) -> Result<Self> {
-        Self::capture_with_hook(source_root.as_ref(), source.as_ref(), |_| {})
+        Self::capture_with_limits(
+            source_root,
+            source,
+            Self::MAX_CONTAINER_BYTES,
+            Self::MAX_LOGICAL_BYTES,
+        )
     }
 
+    /// Captures one immutable rollout while enforcing caller-selected encoded
+    /// container and decoded logical JSONL byte limits.
+    pub fn capture_with_limits(
+        source_root: impl AsRef<Path>,
+        source: impl AsRef<Path>,
+        max_container_bytes: u64,
+        max_logical_bytes: u64,
+    ) -> Result<Self> {
+        Self::capture_with_limits_and_hook(
+            source_root.as_ref(),
+            source.as_ref(),
+            max_container_bytes,
+            max_logical_bytes,
+            |_| {},
+        )
+    }
+
+    #[cfg(test)]
     fn capture_with_hook(
         source_root: &Path,
         source: &Path,
+        before_component_open: impl FnMut(&Path),
+    ) -> Result<Self> {
+        Self::capture_with_limits_and_hook(
+            source_root,
+            source,
+            Self::MAX_CONTAINER_BYTES,
+            Self::MAX_LOGICAL_BYTES,
+            before_component_open,
+        )
+    }
+
+    fn capture_with_limits_and_hook(
+        source_root: &Path,
+        source: &Path,
+        max_container_bytes: u64,
+        max_logical_bytes: u64,
         mut before_component_open: impl FnMut(&Path),
     ) -> Result<Self> {
         require_absolute_clean_path(source_root, "source policy root")?;
         require_absolute_clean_path(source, "source path")?;
-        require_jsonl(source)?;
+        let compression = require_rollout_source(source)?;
         let relative = source.strip_prefix(source_root).map_err(|_| {
             WorkVcsError::IntegrityInvalid(format!(
                 "source {} is outside registered source policy root {}",
@@ -134,24 +198,48 @@ impl SourceArchiveSnapshot {
                     .to_owned(),
             ));
         };
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(storage_error("read source snapshot", source))?;
+        require_rollout_size_within_limit(
+            source,
+            "encoded container",
+            opened_identity.length,
+            max_container_bytes,
+        )?;
+        let container = read_bounded_stream(&mut file, max_container_bytes).map_err(|error| {
+            bounded_rollout_read_error(
+                source,
+                "encoded container",
+                max_container_bytes,
+                "read source snapshot",
+                error,
+            )
+        })?;
         let after_read = opened_identity_from_metadata(
             &file
                 .metadata()
                 .map_err(storage_error("inspect opened source snapshot", source))?,
         );
-        if after_read != opened_identity || after_read.length != bytes.len() as u64 {
+        if after_read != opened_identity || after_read.length != container.len() as u64 {
             return Err(WorkVcsError::IntegrityInvalid(format!(
                 "source {} changed while its immutable snapshot was being captured",
                 source.display()
             )));
         }
-        let source_bytes = u64::try_from(bytes.len()).map_err(|_| {
+        let container_bytes = u64::try_from(container.len()).map_err(|_| {
             WorkVcsError::QueryInvalid("source rollout size does not fit u64".to_owned())
         })?;
+        let container_sha256 = sha256_bytes(&container);
+        let bytes = decode_rollout_source(source, compression, &container, max_logical_bytes)?;
+        let source_bytes = u64::try_from(bytes.len()).map_err(|_| {
+            WorkVcsError::QueryInvalid(
+                "decompressed source rollout size does not fit u64".to_owned(),
+            )
+        })?;
         let source_sha256 = sha256_bytes(&bytes);
+        let stored_source = compression.map(|compression| SourceArchiveStoredSource {
+            compression,
+            container_sha256: container_sha256.clone(),
+            container_bytes,
+        });
         let mut parsed = Vec::new();
         let mut observed_session_meta = Vec::new();
         for (offset, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
@@ -188,6 +276,9 @@ impl SourceArchiveSnapshot {
             source_path: source.to_path_buf(),
             source_sha256,
             source_bytes,
+            stored_source,
+            container_sha256,
+            container_bytes,
             opened_identity,
             bytes: bytes.into(),
             parsed: parsed.into(),
@@ -207,6 +298,10 @@ impl SourceArchiveSnapshot {
         self.source_bytes
     }
 
+    pub fn stored_source(&self) -> Option<&SourceArchiveStoredSource> {
+        self.stored_source.as_ref()
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -221,6 +316,8 @@ impl SourceArchiveSnapshot {
             source_path: self.source_path.clone(),
             source_sha256: self.source_sha256.clone(),
             source_bytes: self.source_bytes,
+            container_sha256: self.container_sha256.clone(),
+            container_bytes: self.container_bytes,
             opened_identity: self.opened_identity.clone(),
         }
     }
@@ -286,7 +383,7 @@ impl SourceArchiveLiveSourceFence {
                 return Ok(false);
             }
             let source_sha256 = hex::encode(hasher.finalize());
-            Ok(source_bytes == self.source_bytes && source_sha256 == self.source_sha256)
+            Ok(source_bytes == self.container_bytes && source_sha256 == self.container_sha256)
         }
         #[cfg(not(unix))]
         {
@@ -1760,6 +1857,8 @@ pub struct SourceArchiveFileManifest {
     pub source_path: PathBuf,
     pub source_sha256: String,
     pub source_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored_source: Option<SourceArchiveStoredSource>,
     pub imported_messages: usize,
     pub ignored_roles: BTreeMap<String, usize>,
     pub ignored_content_blocks: BTreeMap<String, usize>,
@@ -2565,7 +2664,19 @@ fn extract_codex_rollout_legacy(
     include_assistant: bool,
 ) -> Result<(SourceArchiveFileManifest, Vec<SourceArchiveDocument>)> {
     require_regular_file(source)?;
-    let before = fs::read(source).map_err(storage_error("read source rollout", source))?;
+    let compression = require_rollout_source(source)?;
+    let container_before =
+        read_rollout_container(source, MAX_ROLLOUT_CONTAINER_BYTES, "read source rollout")?;
+    let container_sha256 = sha256_bytes(&container_before);
+    let container_bytes = u64::try_from(container_before.len()).map_err(|_| {
+        WorkVcsError::QueryInvalid("source rollout size does not fit u64".to_owned())
+    })?;
+    let before = decode_rollout_source(
+        source,
+        compression,
+        &container_before,
+        MAX_ROLLOUT_LOGICAL_BYTES,
+    )?;
     let source_sha256 = sha256_bytes(&before);
     let source_bytes = u64::try_from(before.len()).map_err(|_| {
         WorkVcsError::QueryInvalid("source rollout size does not fit u64".to_owned())
@@ -2680,8 +2791,14 @@ fn extract_codex_rollout_legacy(
             message_origin: None,
         });
     }
-    let after = fs::read(source).map_err(storage_error("re-read source rollout", source))?;
-    if sha256_bytes(&after) != source_sha256 {
+    let container_after = read_rollout_container(
+        source,
+        MAX_ROLLOUT_CONTAINER_BYTES,
+        "re-read source rollout",
+    )?;
+    if u64::try_from(container_after.len()).ok() != Some(container_bytes)
+        || sha256_bytes(&container_after) != container_sha256
+    {
         return Err(WorkVcsError::StorageFailure(format!(
             "source rollout {} changed during import",
             source.display()
@@ -2692,6 +2809,11 @@ fn extract_codex_rollout_legacy(
             source_path: source.to_path_buf(),
             source_sha256,
             source_bytes,
+            stored_source: compression.map(|compression| SourceArchiveStoredSource {
+                compression,
+                container_sha256,
+                container_bytes,
+            }),
             imported_messages: documents.len(),
             ignored_roles,
             ignored_content_blocks,
@@ -2890,6 +3012,7 @@ fn extract_codex_rollout_snapshot(
             source_path: snapshot.source_path.clone(),
             source_sha256: snapshot.source_sha256.clone(),
             source_bytes: snapshot.source_bytes,
+            stored_source: snapshot.stored_source.clone(),
             imported_messages: documents.len(),
             ignored_roles,
             ignored_content_blocks,
@@ -3170,6 +3293,28 @@ fn read_archive_member(
 }
 
 fn validate_manifest_version_contract(manifest: &SourceArchiveManifest, path: &Path) -> Result<()> {
+    for file in &manifest.files {
+        let compression = require_rollout_source(&file.source_path).map_err(|error| {
+            WorkVcsError::StorageFailure(format!(
+                "source archive {} has an invalid stored source path: {error}",
+                path.display()
+            ))
+        })?;
+        match (compression, file.stored_source.as_ref()) {
+            (None, None) => {}
+            (Some(compression), Some(stored))
+                if stored.compression == compression
+                    && stored.container_bytes > 0
+                    && is_sha256(&stored.container_sha256) => {}
+            _ => {
+                return Err(WorkVcsError::StorageFailure(format!(
+                    "source archive {} has contradictory source compression provenance for {}",
+                    path.display(),
+                    file.source_path.display()
+                )));
+            }
+        }
+    }
     match manifest.format_version {
         LEGACY_ARCHIVE_FORMAT_VERSION => {
             if manifest.extraction_policy_version != LEGACY_EXTRACTION_POLICY_VERSION
@@ -4084,7 +4229,7 @@ fn collect_sources(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
         let canonical = fs::canonicalize(input)
             .map_err(storage_error("canonicalize explicit source", input))?;
         if metadata.is_file() {
-            require_jsonl(&canonical)?;
+            require_rollout_source(&canonical)?;
             paths.insert(canonical);
         } else if metadata.is_dir() {
             collect_directory(&canonical, &mut paths)?;
@@ -4097,7 +4242,7 @@ fn collect_sources(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     }
     if paths.is_empty() {
         return Err(WorkVcsError::QueryInvalid(
-            "source archive import found no .jsonl files".to_owned(),
+            "source archive import found no .jsonl or .jsonl.zst files".to_owned(),
         ));
     }
     Ok(paths.into_iter().collect())
@@ -4121,7 +4266,7 @@ fn collect_directory(directory: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<
         }
         if metadata.is_dir() {
             collect_directory(&path, paths)?;
-        } else if metadata.is_file() && path.extension().is_some_and(|value| value == "jsonl") {
+        } else if metadata.is_file() && require_rollout_source(&path).is_ok() {
             paths.insert(path);
         }
     }
@@ -4189,14 +4334,151 @@ fn require_real_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn require_jsonl(path: &Path) -> Result<()> {
-    if path.extension().is_none_or(|value| value != "jsonl") {
+fn require_rollout_source(path: &Path) -> Result<Option<SourceArchiveCompression>> {
+    if path.extension().is_some_and(|value| value == "jsonl") {
+        return Ok(None);
+    }
+    if path.extension().is_some_and(|value| value == "zst")
+        && path
+            .file_stem()
+            .and_then(|stem| Path::new(stem).extension())
+            .is_some_and(|value| value == "jsonl")
+    {
+        return Ok(Some(SourceArchiveCompression::Zstd));
+    }
+    Err(WorkVcsError::QueryInvalid(format!(
+        "Codex rollout source {} must have a .jsonl or .jsonl.zst extension",
+        path.display()
+    )))
+}
+
+#[derive(Debug)]
+enum BoundedStreamReadError {
+    Io(std::io::Error),
+    LimitExceeded { observed_at_least: u64 },
+}
+
+fn read_bounded_stream(
+    mut reader: impl Read,
+    max_bytes: u64,
+) -> std::result::Result<Vec<u8>, BoundedStreamReadError> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(BoundedStreamReadError::Io)?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        let observed_at_least = u64::try_from(bytes.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        if observed_at_least > max_bytes {
+            return Err(BoundedStreamReadError::LimitExceeded { observed_at_least });
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+}
+
+fn require_rollout_size_within_limit(
+    path: &Path,
+    representation: &str,
+    observed_bytes: u64,
+    max_bytes: u64,
+) -> Result<()> {
+    if observed_bytes > max_bytes {
         return Err(WorkVcsError::QueryInvalid(format!(
-            "Codex rollout source {} must have a .jsonl extension",
+            "source rollout {} {representation} size {observed_bytes} exceeds maximum {max_bytes} bytes",
             path.display()
         )));
     }
     Ok(())
+}
+
+fn bounded_rollout_read_error(
+    path: &Path,
+    representation: &str,
+    max_bytes: u64,
+    io_context: &'static str,
+    error: BoundedStreamReadError,
+) -> WorkVcsError {
+    match error {
+        BoundedStreamReadError::Io(error) => storage_error(io_context, path)(error),
+        BoundedStreamReadError::LimitExceeded { observed_at_least } => {
+            WorkVcsError::QueryInvalid(format!(
+                "source rollout {} {representation} size is at least {observed_at_least} bytes and exceeds maximum {max_bytes} bytes",
+                path.display()
+            ))
+        }
+    }
+}
+
+fn read_rollout_container(path: &Path, max_bytes: u64, context: &'static str) -> Result<Vec<u8>> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(storage_error(context, path))?;
+    let observed_bytes = file
+        .metadata()
+        .map_err(storage_error("inspect opened source rollout", path))?
+        .len();
+    require_rollout_size_within_limit(path, "encoded container", observed_bytes, max_bytes)?;
+    read_bounded_stream(&mut file, max_bytes).map_err(|error| {
+        bounded_rollout_read_error(path, "encoded container", max_bytes, context, error)
+    })
+}
+
+fn decode_rollout_source(
+    path: &Path,
+    compression: Option<SourceArchiveCompression>,
+    container: &[u8],
+    max_logical_bytes: u64,
+) -> Result<Vec<u8>> {
+    match compression {
+        None => {
+            let observed_bytes = u64::try_from(container.len()).map_err(|_| {
+                WorkVcsError::QueryInvalid(
+                    "source rollout logical JSONL size does not fit u64".to_owned(),
+                )
+            })?;
+            require_rollout_size_within_limit(
+                path,
+                "logical JSONL",
+                observed_bytes,
+                max_logical_bytes,
+            )?;
+            Ok(container.to_vec())
+        }
+        Some(SourceArchiveCompression::Zstd) => {
+            let mut decoder = zstd::stream::read::Decoder::new(container).map_err(|error| {
+                WorkVcsError::QueryInvalid(format!(
+                    "source rollout {} is not valid zstd-compressed JSONL: {error}",
+                    path.display()
+                ))
+            })?;
+            decoder
+                .window_log_max(MAX_ROLLOUT_ZSTD_WINDOW_LOG)
+                .map_err(|error| {
+                    WorkVcsError::QueryInvalid(format!(
+                        "source rollout {} cannot apply the zstd window limit: {error}",
+                        path.display()
+                    ))
+                })?;
+            read_bounded_stream(decoder, max_logical_bytes).map_err(|error| match error {
+                BoundedStreamReadError::Io(error) => WorkVcsError::QueryInvalid(format!(
+                    "source rollout {} is not valid zstd-compressed JSONL: {error}",
+                    path.display()
+                )),
+                BoundedStreamReadError::LimitExceeded { observed_at_least } => {
+                    WorkVcsError::QueryInvalid(format!(
+                        "source rollout {} logical JSONL size is at least {observed_at_least} bytes and exceeds maximum {max_logical_bytes} bytes",
+                        path.display()
+                    ))
+                }
+            })
+        }
+    }
 }
 
 fn require_unique_documents(documents: &[SourceArchiveDocument]) -> Result<()> {
@@ -4220,9 +4502,14 @@ fn observe_source_file(file: &SourceArchiveFileManifest) -> SourceArchiveFileSta
             SourceArchiveFileState::Unreadable
         };
     }
+    let expected = file
+        .stored_source
+        .as_ref()
+        .map(|stored| (stored.container_bytes, stored.container_sha256.as_str()))
+        .unwrap_or((file.source_bytes, file.source_sha256.as_str()));
     match safe_live_source_fingerprint(&file.source_path) {
         Ok((source_bytes, source_sha256))
-            if source_bytes == file.source_bytes && source_sha256 == file.source_sha256 =>
+            if source_bytes == expected.0 && source_sha256 == expected.1 =>
         {
             SourceArchiveFileState::Unchanged
         }
@@ -4579,6 +4866,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         fs::write(path, format!("{bytes}\n")).expect("write snapshot rollout");
+    }
+
+    fn write_zstd_rollout(source: &Path, destination: &Path) {
+        let logical = fs::read(source).expect("read logical rollout");
+        let compressed =
+            zstd::stream::encode_all(logical.as_slice(), 3).expect("compress rollout with zstd");
+        fs::write(destination, compressed).expect("write compressed rollout");
     }
 
     fn capture_test_snapshot(
@@ -5010,6 +5304,164 @@ mod tests {
             fs::read(imported.archive_path.join(DOCUMENTS_FILE)).expect("re-read v1 documents"),
             original_document_bytes,
             "v1 inspection and query must not migrate or rewrite documents"
+        );
+    }
+
+    #[test]
+    fn compressed_rollout_preserves_logical_identity_and_rejects_corruption() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let logical_source = temporary.path().join("rollout.jsonl");
+        let compressed_source = temporary.path().join("rollout.jsonl.zst");
+        let corrupt_source = temporary.path().join("corrupt.jsonl.zst");
+        let root = temporary.path().join("archives");
+        let cwd = temporary.path().join("owner");
+        fs::create_dir(&cwd).expect("owner cwd");
+        write_snapshot_rollout(&logical_source, &cwd);
+        write_zstd_rollout(&logical_source, &compressed_source);
+
+        let logical_source = fs::canonicalize(logical_source).expect("canonical logical source");
+        let compressed_source =
+            fs::canonicalize(compressed_source).expect("canonical compressed source");
+        let source_root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical source root");
+        let logical_snapshot = SourceArchiveSnapshot::capture(&source_root, &logical_source)
+            .expect("capture logical source");
+        let compressed_snapshot = SourceArchiveSnapshot::capture(&source_root, &compressed_source)
+            .expect("capture compressed source");
+        assert_eq!(
+            compressed_snapshot.source_sha256(),
+            logical_snapshot.source_sha256(),
+            "compression must not change logical content identity"
+        );
+        assert_eq!(
+            compressed_snapshot.source_bytes(),
+            logical_snapshot.source_bytes()
+        );
+        assert_eq!(compressed_snapshot.bytes(), logical_snapshot.bytes());
+        assert!(logical_snapshot.stored_source.is_none());
+        let stored = compressed_snapshot
+            .stored_source
+            .as_ref()
+            .expect("compressed storage identity");
+        assert_eq!(stored.compression, SourceArchiveCompression::Zstd);
+        assert_eq!(
+            stored.container_bytes,
+            fs::metadata(&compressed_source)
+                .expect("compressed metadata")
+                .len()
+        );
+        assert_eq!(
+            stored.container_sha256,
+            sha256_bytes(&fs::read(&compressed_source).expect("compressed bytes"))
+        );
+        assert!(
+            compressed_snapshot
+                .verify_live_source()
+                .expect("live fence")
+        );
+
+        let identity = identity();
+        let options = automatic_import_options(
+            &compressed_snapshot,
+            identity,
+            &root,
+            SourceArchiveRolePolicy::UserOnly,
+            10,
+        );
+        let imported = import_source_archive(&options).expect("import compressed rollout");
+        assert_eq!(
+            imported.manifest.format_version,
+            AUTOMATIC_ARCHIVE_FORMAT_VERSION
+        );
+        assert_eq!(
+            imported.manifest.files[0]
+                .stored_source
+                .as_ref()
+                .expect("stored compressed provenance"),
+            stored
+        );
+        assert_eq!(
+            imported.manifest.files[0].source_sha256,
+            logical_snapshot.source_sha256()
+        );
+        assert!(
+            inspect_source_archive(&SourceArchiveInspectOptions::new(
+                identity,
+                &imported.archive_path,
+            ))
+            .expect("inspect compressed archive")
+            .archive_readback_verified
+        );
+
+        fs::write(&corrupt_source, b"not a zstd frame").expect("write corrupt compressed source");
+        let corrupt_source = fs::canonicalize(corrupt_source).expect("canonical corrupt source");
+        let error = SourceArchiveSnapshot::capture(&source_root, &corrupt_source)
+            .expect_err("corrupt zstd must fail capture");
+        assert!(
+            error
+                .to_string()
+                .contains("is not valid zstd-compressed JSONL"),
+            "unexpected corruption error: {error}"
+        );
+        let import_error = SourceArchiveImportOptions::new(identity, &root, vec![corrupt_source])
+            .and_then(|options| import_source_archive(&options))
+            .expect_err("corrupt zstd must fail explicit import");
+        assert!(
+            import_error
+                .to_string()
+                .contains("is not valid zstd-compressed JSONL"),
+            "unexpected import corruption error: {import_error}"
+        );
+    }
+
+    #[test]
+    fn compressed_rollout_capture_enforces_encoded_and_logical_size_limits() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let source_root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical source root");
+
+        let encoded_source = source_root.join("encoded-limit.jsonl.zst");
+        let encoded = zstd::stream::encode_all(b"{}\n".as_slice(), 3).expect("compress source");
+        fs::write(&encoded_source, &encoded).expect("write compressed source");
+        let encoded_source = fs::canonicalize(encoded_source).expect("canonical encoded source");
+        let encoded_limit = u64::try_from(encoded.len()).expect("encoded length") - 1;
+        let encoded_error = SourceArchiveSnapshot::capture_with_limits(
+            &source_root,
+            &encoded_source,
+            encoded_limit,
+            1024,
+        )
+        .expect_err("encoded container limit must fail before allocation");
+        assert!(
+            encoded_error.to_string().contains(&format!(
+                "encoded container size {} exceeds maximum {encoded_limit} bytes",
+                encoded.len()
+            )),
+            "unexpected encoded-limit error: {encoded_error}"
+        );
+
+        let logical_source = source_root.join("logical-limit.jsonl.zst");
+        let logical = vec![b'x'; 4096];
+        let compressed =
+            zstd::stream::encode_all(logical.as_slice(), 3).expect("compress logical source");
+        fs::write(&logical_source, &compressed).expect("write logical-limit source");
+        let logical_source = fs::canonicalize(logical_source).expect("canonical logical source");
+        let logical_error = SourceArchiveSnapshot::capture_with_limits(
+            &source_root,
+            &logical_source,
+            u64::try_from(compressed.len()).expect("compressed length"),
+            1024,
+        )
+        .expect_err("logical JSONL limit must stop streaming decompression");
+        assert!(
+            logical_error.to_string().contains(
+                "logical JSONL size is at least 4096 bytes and exceeds maximum 1024 bytes"
+            ),
+            "unexpected logical-limit error: {logical_error}"
         );
     }
 

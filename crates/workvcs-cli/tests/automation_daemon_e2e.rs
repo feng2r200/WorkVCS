@@ -32,15 +32,19 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temporary = TempDir::new().expect("temporary directory");
-        let root = temporary.path().join("automation");
-        let project_root = temporary.path().join("project");
-        let rollout_root = temporary.path().join("rollouts");
+        let temporary_root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let root = temporary_root.join("automation");
+        let project_root = temporary_root.join("project");
+        let rollout_root = temporary_root.join("rollouts");
         fs::create_dir(&root).expect("automation root");
         fs::create_dir(&project_root).expect("project root");
         fs::create_dir(&rollout_root).expect("rollout root");
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
             .expect("protect automation root");
-        let store_path = temporary.path().join("unavailable-store.sqlite");
+        let store_path = temporary_root.join("unavailable-store.sqlite");
         fs::write(&store_path, b"not a WorkVCS Store").expect("write unavailable Store");
         let initial_source = rollout_root.join("initial.jsonl");
         write_rollout(
@@ -465,7 +469,7 @@ fn daemon_reconciles_real_file_events_and_recovers_from_crash() {
     updated_at = u64_field(&ledger, "updated_at_us");
     let report = last_worker_report(&fixture.root);
     assert!(u64_field(&report, "rollout_files_new") >= 1);
-    assert!(u64_field(&report, "rollout_files_deleted") >= 1);
+    assert_eq!(u64_field(&report, "rollout_files_deleted"), 0);
 
     fs::remove_file(&renamed).expect("delete rollout");
     let ledger = wait_for_reconciliation(&binary, &fixture.root, updated_at);

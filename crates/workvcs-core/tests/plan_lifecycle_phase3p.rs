@@ -392,7 +392,7 @@ fn plan_completion_uses_entity_transition_storage_shape_and_optional_rationale()
 
     assert_eq!(object_kind, "entity");
     assert_eq!(entity_kind, "plan");
-    assert_eq!(state_schema_version, 1);
+    assert_eq!(state_schema_version, 2);
     assert_eq!(
         state_json,
         plan_state_json(

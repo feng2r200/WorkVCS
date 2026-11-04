@@ -20,6 +20,22 @@ const NORMAL_COMMIT_KIND: &str = "normal";
 const PRIMARY_PARENT_ROLE: &str = "primary";
 const STATE_SCHEMA_VERSION: i64 = 1;
 
+/// State schema version written for each entity kind. Kinds whose canonical
+/// state shape has changed carry their own version; every other kind stays at
+/// the original version.
+pub(crate) fn state_schema_version_for(entity_kind: &str) -> i64 {
+    match entity_kind {
+        "goal" | "plan" => 2,
+        _ => STATE_SCHEMA_VERSION,
+    }
+}
+
+/// Whether a stored state schema version is readable for an entity kind. Rows
+/// written before a kind's shape changed stay readable at the original version.
+pub(crate) fn is_readable_state_schema_version(entity_kind: &str, version: i64) -> bool {
+    version == state_schema_version_for(entity_kind) || version == STATE_SCHEMA_VERSION
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntityTransitionOptions {
     branch_id: BranchId,
@@ -367,7 +383,7 @@ fn write_transition(
             params![
                 &entity_version_id_bytes[..],
                 &entity_id_bytes[..],
-                STATE_SCHEMA_VERSION,
+                state_schema_version_for(&prepared.entity_kind),
                 prepared.entity_state_json,
                 &entity_state_digest_bytes[..]
             ],

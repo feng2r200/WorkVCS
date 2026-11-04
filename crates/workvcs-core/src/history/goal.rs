@@ -14,7 +14,8 @@ use std::fmt;
 pub(crate) const GOAL_ENTITY_KIND: &str = "goal";
 
 const ENTITY_OBJECT_KIND: &str = "entity";
-const GOAL_STATE_SCHEMA_VERSION: i64 = 1;
+const GOAL_STATE_SCHEMA_VERSION: i64 = 2;
+const GOAL_STATE_SCHEMA_VERSION_LEGACY: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoalStatus {
@@ -87,14 +88,11 @@ impl GoalState {
                 "description".to_owned(),
                 CanonicalValue::String(self.description.clone()),
             ),
-            ("plan_refs".to_owned(), CanonicalValue::Array(Vec::new())),
             (
                 "status".to_owned(),
                 CanonicalValue::String(self.status.as_str().to_owned()),
             ),
-            ("subgoals".to_owned(), CanonicalValue::Array(Vec::new())),
             ("terminal_rationale".to_owned(), terminal_rationale),
-            ("work_refs".to_owned(), CanonicalValue::Array(Vec::new())),
         ])
     }
 
@@ -536,7 +534,9 @@ fn load_goal_version(
             "entity {goal_entity_id} has kind {entity_kind:?}, not {GOAL_ENTITY_KIND:?}"
         )));
     }
-    if state_schema_version != GOAL_STATE_SCHEMA_VERSION {
+    if state_schema_version != GOAL_STATE_SCHEMA_VERSION
+        && state_schema_version != GOAL_STATE_SCHEMA_VERSION_LEGACY
+    {
         return Err(WorkVcsError::GoalInvalid(format!(
             "goal entity {goal_entity_id} version {goal_entity_version_id} has state schema version {state_schema_version}"
         )));
@@ -579,19 +579,16 @@ fn parse_goal_state(value: CanonicalValue) -> Result<GoalState> {
             "goal state must be a canonical object".to_owned(),
         ));
     };
-    if entries.len() != 6 {
+    if entries.len() != 3 && entries.len() != 6 {
         return Err(WorkVcsError::GoalInvalid(format!(
-            "goal state must contain exactly 6 fields, found {}",
+            "goal state must contain exactly 3 fields, found {}",
             entries.len()
         )));
     }
 
     let mut description = None;
-    let mut plan_refs = None;
     let mut status = None;
-    let mut subgoals = None;
     let mut terminal_rationale = None;
-    let mut work_refs = None;
 
     for (key, value) in entries {
         match key.as_str() {
@@ -600,17 +597,12 @@ fn parse_goal_state(value: CanonicalValue) -> Result<GoalState> {
                 validate_description(&value)?;
                 description = Some(value);
             }
-            "plan_refs" => {
-                require_empty_array("plan_refs", &value)?;
-                plan_refs = Some(());
+            "plan_refs" | "subgoals" | "work_refs" => {
+                require_empty_array(key.as_str(), &value)?;
             }
             "status" => {
                 let value = require_string("status", value)?;
                 status = Some(GoalStatus::parse(&value)?);
-            }
-            "subgoals" => {
-                require_empty_array("subgoals", &value)?;
-                subgoals = Some(());
             }
             "terminal_rationale" => {
                 terminal_rationale = Some(match value {
@@ -626,10 +618,6 @@ fn parse_goal_state(value: CanonicalValue) -> Result<GoalState> {
                     }
                 });
             }
-            "work_refs" => {
-                require_empty_array("work_refs", &value)?;
-                work_refs = Some(());
-            }
             other => {
                 return Err(WorkVcsError::GoalInvalid(format!(
                     "goal state contains unsupported field {other:?}"
@@ -637,13 +625,6 @@ fn parse_goal_state(value: CanonicalValue) -> Result<GoalState> {
             }
         }
     }
-
-    plan_refs
-        .ok_or_else(|| WorkVcsError::GoalInvalid("goal state is missing plan_refs".to_owned()))?;
-    subgoals
-        .ok_or_else(|| WorkVcsError::GoalInvalid("goal state is missing subgoals".to_owned()))?;
-    work_refs
-        .ok_or_else(|| WorkVcsError::GoalInvalid("goal state is missing work_refs".to_owned()))?;
 
     GoalState {
         description: description.ok_or_else(|| {
@@ -667,11 +648,14 @@ fn require_string(field: &str, value: CanonicalValue) -> Result<String> {
     }
 }
 
+/// Tolerates the deferred hierarchy fields of legacy schema version 1 goal
+/// state. Hierarchy is carried by `relation` edges, so these arrays were always
+/// empty; schema version 2 omits them entirely.
 fn require_empty_array(field: &str, value: &CanonicalValue) -> Result<()> {
     match value {
         CanonicalValue::Array(values) if values.is_empty() => Ok(()),
         CanonicalValue::Array(_) => Err(WorkVcsError::GoalInvalid(format!(
-            "{field} is deferred and must be an empty array in Phase 3M"
+            "{field} is not a goal state field; hierarchy is carried by relations"
         ))),
         _ => Err(WorkVcsError::GoalInvalid(format!(
             "{field} must be an array"

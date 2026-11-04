@@ -266,7 +266,7 @@ fn create_plan_persists_active_plan_and_reads_it_after_reopen() {
         .expect("plan storage shape");
     assert_eq!(object_kind, "entity");
     assert_eq!(entity_kind, "plan");
-    assert_eq!(state_schema_version, 1);
+    assert_eq!(state_schema_version, 2);
     assert_eq!(
         state_json,
         plan_state_json(
@@ -562,7 +562,7 @@ fn plan_state_serializes_only_confirmed_phase3j_shape() {
 
     assert_eq!(
         encoded,
-        r#"{"assumptions":[],"child_order":[],"completion_rationale":null,"constraints":["constraint one","constraint two"],"description":"Serialize plan","status":"active","strategy":"Keep the state narrow","task_refs":[]}"#
+        r#"{"completion_rationale":null,"constraints":["constraint one","constraint two"],"description":"Serialize plan","status":"active","strategy":"Keep the state narrow"}"#
     );
     assert_eq!(PlanStatus::Active.as_str(), "active");
     assert_eq!(PlanStatus::Completed.as_str(), "completed");

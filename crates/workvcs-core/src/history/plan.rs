@@ -14,7 +14,8 @@ use std::fmt;
 pub(crate) const PLAN_ENTITY_KIND: &str = "plan";
 
 const ENTITY_OBJECT_KIND: &str = "entity";
-const PLAN_STATE_SCHEMA_VERSION: i64 = 1;
+const PLAN_STATE_SCHEMA_VERSION: i64 = 2;
+const PLAN_STATE_SCHEMA_VERSION_LEGACY: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanStatus {
@@ -102,8 +103,6 @@ impl PlanState {
             .unwrap_or(CanonicalValue::Null);
 
         CanonicalValue::object(vec![
-            ("assumptions".to_owned(), CanonicalValue::Array(Vec::new())),
-            ("child_order".to_owned(), CanonicalValue::Array(Vec::new())),
             ("completion_rationale".to_owned(), completion_rationale),
             ("constraints".to_owned(), CanonicalValue::Array(constraints)),
             (
@@ -118,7 +117,6 @@ impl PlanState {
                 "strategy".to_owned(),
                 CanonicalValue::String(self.strategy.clone()),
             ),
-            ("task_refs".to_owned(), CanonicalValue::Array(Vec::new())),
         ])
     }
 
@@ -603,7 +601,9 @@ fn load_plan_version(
             "entity {plan_entity_id} has kind {entity_kind:?}, not {PLAN_ENTITY_KIND:?}"
         )));
     }
-    if state_schema_version != PLAN_STATE_SCHEMA_VERSION {
+    if state_schema_version != PLAN_STATE_SCHEMA_VERSION
+        && state_schema_version != PLAN_STATE_SCHEMA_VERSION_LEGACY
+    {
         return Err(WorkVcsError::PlanInvalid(format!(
             "plan entity {plan_entity_id} version {plan_entity_version_id} has state schema version {state_schema_version}"
         )));
@@ -646,31 +646,23 @@ fn parse_plan_state(value: CanonicalValue) -> Result<PlanState> {
             "plan state must be a canonical object".to_owned(),
         ));
     };
-    if entries.len() != 8 {
+    if entries.len() != 5 && entries.len() != 8 {
         return Err(WorkVcsError::PlanInvalid(format!(
-            "plan state must contain exactly 8 fields, found {}",
+            "plan state must contain exactly 5 fields, found {}",
             entries.len()
         )));
     }
 
-    let mut assumptions = None;
-    let mut child_order = None;
     let mut completion_rationale = None;
     let mut constraints = None;
     let mut description = None;
     let mut status = None;
     let mut strategy = None;
-    let mut task_refs = None;
 
     for (key, value) in entries {
         match key.as_str() {
-            "assumptions" => {
-                require_empty_array("assumptions", &value)?;
-                assumptions = Some(());
-            }
-            "child_order" => {
-                require_empty_array("child_order", &value)?;
-                child_order = Some(());
+            "assumptions" | "child_order" | "task_refs" => {
+                require_empty_array(key.as_str(), &value)?;
             }
             "completion_rationale" => {
                 completion_rationale = Some(match value {
@@ -703,10 +695,6 @@ fn parse_plan_state(value: CanonicalValue) -> Result<PlanState> {
                 validate_strategy(&value)?;
                 strategy = Some(value);
             }
-            "task_refs" => {
-                require_empty_array("task_refs", &value)?;
-                task_refs = Some(());
-            }
             other => {
                 return Err(WorkVcsError::PlanInvalid(format!(
                     "plan state contains unsupported field {other:?}"
@@ -714,13 +702,6 @@ fn parse_plan_state(value: CanonicalValue) -> Result<PlanState> {
             }
         }
     }
-
-    assumptions
-        .ok_or_else(|| WorkVcsError::PlanInvalid("plan state is missing assumptions".to_owned()))?;
-    child_order
-        .ok_or_else(|| WorkVcsError::PlanInvalid("plan state is missing child_order".to_owned()))?;
-    task_refs
-        .ok_or_else(|| WorkVcsError::PlanInvalid("plan state is missing task_refs".to_owned()))?;
 
     PlanState {
         description: description.ok_or_else(|| {
@@ -765,11 +746,14 @@ fn require_string(field: &str, value: CanonicalValue) -> Result<String> {
     }
 }
 
+/// Tolerates the deferred hierarchy fields of legacy schema version 1 plan
+/// state. Hierarchy is carried by `relation` edges, so these arrays were always
+/// empty; schema version 2 omits them entirely.
 fn require_empty_array(field: &str, value: &CanonicalValue) -> Result<()> {
     match value {
         CanonicalValue::Array(values) if values.is_empty() => Ok(()),
         CanonicalValue::Array(_) => Err(WorkVcsError::PlanInvalid(format!(
-            "{field} is deferred and must be an empty array in Phase 3J"
+            "{field} is not a plan state field; hierarchy is carried by relations"
         ))),
         _ => Err(WorkVcsError::PlanInvalid(format!(
             "{field} must be an array"

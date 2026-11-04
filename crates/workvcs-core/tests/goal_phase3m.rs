@@ -246,7 +246,7 @@ fn create_goal_persists_active_goal_and_reads_it_after_reopen() {
         .expect("goal storage shape");
     assert_eq!(object_kind, "entity");
     assert_eq!(entity_kind, "goal");
-    assert_eq!(state_schema_version, 1);
+    assert_eq!(state_schema_version, 2);
     assert_eq!(
         state_json,
         goal_state_json("Guarantee deterministic state transitions")
@@ -502,7 +502,7 @@ fn goal_state_serializes_only_confirmed_phase3m_shape() {
 
     assert_eq!(
         encoded,
-        r#"{"description":"Serialize goal","plan_refs":[],"status":"active","subgoals":[],"terminal_rationale":null,"work_refs":[]}"#
+        r#"{"description":"Serialize goal","status":"active","terminal_rationale":null}"#
     );
     assert_eq!(GoalStatus::Active.as_str(), "active");
     assert_eq!(GoalStatus::Achieved.as_str(), "achieved");

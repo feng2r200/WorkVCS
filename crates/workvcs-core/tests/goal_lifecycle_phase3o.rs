@@ -354,7 +354,7 @@ fn goal_abandon_transition_uses_entity_transition_storage_shape_and_rationale() 
 
     assert_eq!(object_kind, "entity");
     assert_eq!(entity_kind, "goal");
-    assert_eq!(state_schema_version, 1);
+    assert_eq!(state_schema_version, 2);
     assert_eq!(
         state_json,
         goal_state_json(

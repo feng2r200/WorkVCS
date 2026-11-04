@@ -43,7 +43,6 @@ const AUTHORIZATION_RECEIPT_RELATION_DISCRIMINATOR: &str = "authorization_receip
 const ENTITY_OBJECT_KIND: &str = "entity";
 const NORMAL_COMMIT_KIND: &str = "normal";
 const PRIMARY_PARENT_ROLE: &str = "primary";
-const STATE_SCHEMA_VERSION: i64 = 1;
 const ISSUE_PAYLOAD_DIGEST_DOMAIN: &str = "workvcs.authorization-receipt.issue-manifest.v1";
 const CONSUME_PAYLOAD_DIGEST_DOMAIN: &str = "workvcs.authorization-receipt.consume-manifest.v1";
 const AUTHORITY_REF_DIGEST_DOMAIN: &str = "workvcs.authorization-receipt.authority-ref.v1";
@@ -1697,7 +1696,7 @@ fn validate_loaded_entity_version(
             "entity {entity_id} belongs to workspace {entity_workspace_id}, not {workspace_id}"
         )));
     }
-    if schema_version != STATE_SCHEMA_VERSION {
+    if !crate::history::entity::is_readable_state_schema_version(&entity_kind, schema_version) {
         return Err(WorkVcsError::RecordInvalid(format!(
             "entity {entity_id} version {entity_version_id} has state schema version {schema_version}"
         )));

@@ -4920,6 +4920,7 @@ fn run_daemon(
     let mut periodic_deadline = Instant::now() + Duration::from_secs(periodic_seconds);
     let mut dirty_since: Option<Instant> = None;
     let mut pending_reconcile = PendingReconcile::default();
+    let mut catalog_readback: Option<std::thread::JoinHandle<Result<DaemonLedger>>> = None;
     let mut running = true;
 
     while running {
@@ -4942,13 +4943,34 @@ fn run_daemon(
             continue;
         }
         if let Some(completed) = poll_active_worker(&mut active_worker)? {
-            record_worker_with_registry(
-                &mut ledger,
-                &completed.trigger,
-                completed.outcome,
-                root,
-                registry,
-            )?;
+            let mut snapshot = ledger.clone();
+            let root = root.to_path_buf();
+            let registry = registry.map(Path::to_path_buf);
+            catalog_readback = Some(std::thread::spawn(move || {
+                record_worker_with_registry(
+                    &mut snapshot,
+                    &completed.trigger,
+                    completed.outcome,
+                    &root,
+                    registry.as_deref(),
+                )?;
+                Ok(snapshot)
+            }));
+            project_daemon_activity(&active_worker, true, &mut ledger);
+            write_daemon_ledger(&runtime, &ledger)?;
+        }
+        if catalog_readback
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            let completed = catalog_readback
+                .take()
+                .expect("finished readback task")
+                .join()
+                .map_err(|_| {
+                    WorkVcsError::StorageFailure("catalog readback thread panicked".to_owned())
+                })??;
+            apply_completed_worker_ledger(&mut ledger, completed);
             refresh_watcher(&mut watcher, root, registry);
             if let Some(trigger) = pending_reconcile.take_trigger() {
                 active_worker = Some(start_reconcile_worker(
@@ -4958,7 +4980,7 @@ fn run_daemon(
                     worker_timeout_seconds,
                 )?);
             }
-            project_active_worker(&active_worker, &mut ledger);
+            project_daemon_activity(&active_worker, false, &mut ledger);
             ledger.pending_reconcile = pending_reconcile.any();
             project_watcher_health(&watcher.health, &mut ledger);
             write_daemon_ledger(&runtime, &ledger)?;
@@ -4968,7 +4990,7 @@ fn run_daemon(
         }
         project_watcher_health(&watcher.health, &mut ledger);
         if dirty_since.is_some_and(|instant| instant.elapsed() >= Duration::from_millis(250)) {
-            if active_worker.is_some() {
+            if active_worker.is_some() || catalog_readback.is_some() {
                 pending_reconcile.watcher = true;
             } else {
                 active_worker = Some(start_reconcile_worker(
@@ -4979,13 +5001,13 @@ fn run_daemon(
                 )?);
             }
             dirty_since = None;
-            project_active_worker(&active_worker, &mut ledger);
+            project_daemon_activity(&active_worker, catalog_readback.is_some(), &mut ledger);
             ledger.pending_reconcile = pending_reconcile.any();
             project_watcher_health(&watcher.health, &mut ledger);
             write_daemon_ledger(&runtime, &ledger)?;
         }
         if Instant::now() >= periodic_deadline {
-            if active_worker.is_some() {
+            if active_worker.is_some() || catalog_readback.is_some() {
                 pending_reconcile.periodic = true;
             } else {
                 active_worker = Some(start_reconcile_worker(
@@ -4996,7 +5018,7 @@ fn run_daemon(
                 )?);
             }
             periodic_deadline = Instant::now() + Duration::from_secs(periodic_seconds);
-            project_active_worker(&active_worker, &mut ledger);
+            project_daemon_activity(&active_worker, catalog_readback.is_some(), &mut ledger);
             ledger.pending_reconcile = pending_reconcile.any();
             project_watcher_health(&watcher.health, &mut ledger);
             write_daemon_ledger(&runtime, &ledger)?;
@@ -5067,7 +5089,7 @@ fn run_daemon(
                             project_daemon_status(&ledger, &mut response)?;
                         }
                         "reconcile" => {
-                            if active_worker.is_some() {
+                            if active_worker.is_some() || catalog_readback.is_some() {
                                 pending_reconcile.manual = true;
                                 response.message =
                                     "reconciliation accepted and coalesced behind the active worker"
@@ -5083,7 +5105,11 @@ fn run_daemon(
                             }
                             response.status = "accepted".to_owned();
                             response.worker_exit_code = None;
-                            project_active_worker(&active_worker, &mut ledger);
+                            project_daemon_activity(
+                                &active_worker,
+                                catalog_readback.is_some(),
+                                &mut ledger,
+                            );
                             ledger.pending_reconcile = pending_reconcile.any();
                             project_watcher_health(&watcher.health, &mut ledger);
                             write_daemon_ledger(&runtime, &ledger)?;
@@ -6005,6 +6031,42 @@ fn record_worker(
     root: &Path,
 ) -> Result<()> {
     record_worker_with_registry(ledger, trigger, outcome, root, None)
+}
+
+#[cfg(unix)]
+fn project_daemon_activity(
+    worker: &Option<ActiveWorker>,
+    readback: bool,
+    ledger: &mut DaemonLedger,
+) {
+    project_active_worker(worker, ledger);
+    if readback && worker.is_none() {
+        ledger.worker_active = true;
+        ledger.active_worker_pid = None;
+        ledger.active_worker_trigger = Some("catalog_readback".to_owned());
+        ledger.active_worker_started_at_us = Some(epoch_micros());
+    }
+}
+
+#[cfg(unix)]
+fn apply_completed_worker_ledger(ledger: &mut DaemonLedger, completed: DaemonLedger) {
+    ledger.updated_at_us = completed.updated_at_us;
+    ledger.last_trigger = completed.last_trigger;
+    ledger.last_worker_status = completed.last_worker_status;
+    ledger.last_worker_exit_code = completed.last_worker_exit_code;
+    ledger.last_worker_timed_out = completed.last_worker_timed_out;
+    ledger.last_worker_cancelled = completed.last_worker_cancelled;
+    ledger.last_worker_duration_ms = completed.last_worker_duration_ms;
+    ledger.last_worker_output_truncated = completed.last_worker_output_truncated;
+    ledger.last_worker_evidence_path = completed.last_worker_evidence_path;
+    ledger.last_worker_stdout_bytes = completed.last_worker_stdout_bytes;
+    ledger.last_worker_stdout_sha256 = completed.last_worker_stdout_sha256;
+    ledger.last_worker_stderr_bytes = completed.last_worker_stderr_bytes;
+    ledger.last_worker_stderr_sha256 = completed.last_worker_stderr_sha256;
+    ledger.last_error = completed.last_error;
+    ledger.last_catalog_path = completed.last_catalog_path;
+    ledger.last_catalog_manifest_sha256 = completed.last_catalog_manifest_sha256;
+    ledger.last_catalog_complete = completed.last_catalog_complete;
 }
 
 #[cfg(unix)]

@@ -15,6 +15,16 @@ Choose the smallest truthful object:
 | immutable supporting material | Evidence |
 | reusable conclusion beyond the immediate run | Knowledge |
 
+A Record states what happened in this run. Knowledge states what remains true
+after it. Promote a conclusion to Knowledge when it is reusable beyond the
+run that produced it, name the records that support it, and record the scope
+in which it holds. Keep an observation that only holds for the current run,
+input, or environment as a Finding. Most captures carry no Knowledge; a
+Knowledge item written on every capture is noise, and an accumulated
+conclusion left only as Findings cannot be recovered by later work. When a
+later run contradicts a Knowledge statement within its recorded scope, use
+`supersedes` rather than editing it in place.
+
 For a No-Plan test or probe outcome, capture a Finding with the exact input,
 checks, result, and evidence boundary; attach Evidence metadata when useful.
 Verification is a separate requirement judgment, not a `capture` Record kind:

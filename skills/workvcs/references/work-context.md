@@ -58,7 +58,6 @@ file selectors fail before recovery or capture admission.
 ## Record in the same context
 
 ```text
-workvcs capture-validate --manifest FILE
 workvcs capture --cwd PATH --project-ref PROJECT --session SESSION --value-reason REASON --manifest FILE --deliver-existing-binding
 workvcs capture --cwd PATH --project-ref PROJECT --branch BRANCH --scope-json '{"work":"named-work"}' --value-reason REASON --manifest FILE --deliver-existing-binding
 workvcs plan admit --cwd PATH --project-ref PROJECT --session SESSION --manifest FILE

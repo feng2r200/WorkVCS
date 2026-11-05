@@ -141,13 +141,19 @@ For semantic object choice, currentness, and relations, read
 objects and explicit provenance. `capture` can atomically create standalone
 Records, Knowledge, Evidence metadata, and supported relations without a Plan.
 Use Goal, Plan, Task, Acceptance Criterion, and Verification Requirement only
-when their structure improves coordination, recovery, or acceptance.
+when their structure improves coordination, recovery, or acceptance. When a
+conclusion is reusable beyond the run that produced it, persist it as Knowledge
+with its supporting records and scope, and keep run-local observations as
+Findings.
 
-Before admitting newly authored cognition, run
-`workvcs capture-validate --manifest FILE` to check fields, supported semantics,
-and relation endpoints without opening a project or Store. Validation grants
-no admission or delivery authority. After admission, preserve the operation ID
-and correct only the invalid or affected input.
+`capture` applies the same semantic validation before it opens a project or
+Store, so a separate pre-check is not required on the normal path. Use
+`workvcs capture-validate --manifest FILE` when you want to check fields,
+supported semantics, and relation endpoints without a project or Store at all,
+or to isolate a manifest error from an admission error. It is read-only, grants
+no admission or delivery authority, and produces nothing that a later step
+consumes. After admission, preserve the operation ID and correct only the
+invalid or affected input.
 
 When a request needs supporting statements beyond bounded recovery and exact
 identifiers are unknown, use local derived search. Read

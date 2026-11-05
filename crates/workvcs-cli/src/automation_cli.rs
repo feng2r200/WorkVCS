@@ -2440,10 +2440,10 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
     #[cfg(unix)]
     let source_owners = read_source_owner_file(root)?;
     #[cfg(unix)]
-    if let Some(owners) = &source_owners {
-        if owners.active {
-            read_automation_source_owners(root)?;
-        }
+    if let Some(owners) = &source_owners
+        && owners.active
+    {
+        read_automation_source_owners(root)?;
     }
     let mut current_inventory = BTreeMap::new();
     let mut core_owner_resolutions = Vec::new();
@@ -2826,29 +2826,29 @@ fn run_registry_derived_historical_reconciliation(
             }
             Err(error) => {
                 #[cfg(unix)]
-                if error.code == "project_owner_unbound" {
-                    if let Some(owner) = source_owners.filter(|set| set.active).and_then(|set| {
+                if error.code == "project_owner_unbound"
+                    && let Some(owner) = source_owners.filter(|set| set.active).and_then(|set| {
                         set.owners.iter().find(|owner| {
                             owner.source_path == file
                                 && owner.project_registry_digest == membership.registry_digest
                                 && owner.source_policy_digest_sha256 == owner_policy_digest
                         })
-                    }) {
-                        process_explicit_owner_snapshot(
-                            root,
-                            source_policy,
-                            membership,
-                            owner,
-                            snapshot,
-                            previous.as_ref(),
-                            &path_key,
-                            current_inventory,
-                            catalog_sources,
-                            rollout_archives_ready,
-                            live_source_fences,
-                        )?;
-                        continue;
-                    }
+                    })
+                {
+                    process_explicit_owner_snapshot(
+                        root,
+                        source_policy,
+                        membership,
+                        owner,
+                        snapshot,
+                        previous.as_ref(),
+                        &path_key,
+                        current_inventory,
+                        catalog_sources,
+                        rollout_archives_ready,
+                        live_source_fences,
+                    )?;
+                    continue;
                 }
                 if let Some(entry) = previous.as_ref() {
                     current_inventory.insert(path_key.clone(), entry.clone());

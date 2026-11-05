@@ -75,6 +75,7 @@ pub fn validate_catalog_active_sources(
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = root;
         Err(WorkVcsError::ControlPlaneInvalid(
             "active source verification is unsupported on this platform".to_owned(),
         ))
@@ -1186,27 +1187,25 @@ pub fn read_automation_catalog(path: &Path) -> Result<AutomationCatalogManifest>
                 "historical catalog cannot carry dispositions".to_owned(),
             ));
         }
-        if let Some(disposition) = &source.disposition {
-            if manifest.project_registry_digest.as_deref()
+        if let Some(disposition) = &source.disposition
+            && (manifest.project_registry_digest.as_deref()
                 != Some(disposition.project_registry_digest.as_str())
                 || manifest.source_policy_digest_sha256.as_deref()
-                    != Some(disposition.source_policy_digest_sha256.as_str())
-            {
-                return Err(WorkVcsError::IntegrityInvalid(
-                    "disposition basis does not match catalog".to_owned(),
-                ));
-            }
+                    != Some(disposition.source_policy_digest_sha256.as_str()))
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "disposition basis does not match catalog".to_owned(),
+            ));
         }
-        if let Some(owner) = &source.owner_authorization {
-            if manifest.project_registry_digest.as_deref()
+        if let Some(owner) = &source.owner_authorization
+            && (manifest.project_registry_digest.as_deref()
                 != Some(owner.project_registry_digest.as_str())
                 || manifest.source_policy_digest_sha256.as_deref()
-                    != Some(owner.source_policy_digest_sha256.as_str())
-            {
-                return Err(WorkVcsError::IntegrityInvalid(
-                    "source owner basis does not match catalog".to_owned(),
-                ));
-            }
+                    != Some(owner.source_policy_digest_sha256.as_str()))
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "source owner basis does not match catalog".to_owned(),
+            ));
         }
     }
     let expected_complete = manifest

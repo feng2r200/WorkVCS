@@ -70,7 +70,8 @@ member; historical source files are scanned once per approved root and then
 grouped by verified member attribution. `canonical_current` and
 `historical_reference` remain independent lanes. Any member or source failure
 is visible in the catalog and yields `partial_failure` rather than a silent
-smaller result.
+smaller result. ADR 0539 defines a pending implementation for explicit source
+disposition and selected-scope reporting.
 
 The coordinator may create new immutable derived generations, archives,
 inventories and catalog manifests. It must not write canonical Stores, the

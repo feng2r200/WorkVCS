@@ -305,7 +305,8 @@ replacement import. Conflicting, unbound, excluded or drifted attribution is a
 quarantine observation, not a fallback to another ProjectRef. The same catalog
 round also carries explicit failed or quarantined source observations, so
 preserved historical retrieval and current source health remain separate and
-the aggregate result stays incomplete.
+the aggregate result stays incomplete. ADR 0539 defines a pending
+implementation for explicit source disposition and selected-scope reporting.
 
 The result exposes source/temporal scope, original status and provenance, native
 readback result, complete canonical statement and all matching source ranges.

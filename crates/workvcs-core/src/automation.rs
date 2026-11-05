@@ -7,6 +7,80 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+/// Return rollout paths that a running Codex process currently holds for writing.
+/// A failed inspection is an error, never evidence that a source is inactive.
+#[cfg(target_os = "macos")]
+pub fn active_codex_rollout_paths() -> Result<std::collections::BTreeSet<PathBuf>> {
+    let output = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-a", "-c", "codex", "-F0afn"])
+        .output()
+        .map_err(|e| {
+            WorkVcsError::StorageFailure(format!("cannot inspect Codex open files: {e}"))
+        })?;
+    if (!output.status.success() && output.status.code() != Some(1)) || !output.stderr.is_empty() {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "cannot reliably inspect Codex open files".to_owned(),
+        ));
+    }
+    Ok(parse_lsof_writer_paths(&output.stdout))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_lsof_writer_paths(output: &[u8]) -> std::collections::BTreeSet<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut paths = std::collections::BTreeSet::new();
+    let mut writable = false;
+    for raw in output.split(|byte| *byte == 0) {
+        let field = raw.strip_prefix(b"\n").unwrap_or(raw);
+        match field.first() {
+            Some(b'f') => writable = false,
+            Some(b'a') => writable = matches!(field.get(1), Some(b'u' | b'w')),
+            Some(b'n') if writable => {
+                paths.insert(PathBuf::from(std::ffi::OsString::from_vec(
+                    field[1..].to_vec(),
+                )));
+            }
+            _ => {}
+        }
+    }
+    paths
+}
+
+pub fn validate_catalog_active_sources(
+    root: &Path,
+    sources: &[AutomationCatalogSource],
+) -> Result<()> {
+    let active: Vec<_> = sources
+        .iter()
+        .filter(|s| s.status == AutomationSourceStatus::Active)
+        .collect();
+    if active.is_empty() {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let policy = read_automation_source_policy(root)?;
+        let paths = active_codex_rollout_paths()?;
+        if active.iter().any(|s| {
+            !paths.contains(&s.artifact_path)
+                || !policy.sources.iter().any(|p| {
+                    p.enabled && !p.revoked && s.artifact_path.starts_with(&p.rollout_root)
+                })
+        }) {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "active source no longer has a Codex writer".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(WorkVcsError::ControlPlaneInvalid(
+            "active source verification is unsupported on this platform".to_owned(),
+        ))
+    }
+}
+
 #[cfg(unix)]
 use std::ffi::{CString, OsStr};
 #[cfg(unix)]
@@ -19,6 +93,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 pub const AUTOMATION_REGISTRY_FORMAT_VERSION: u32 = 1;
 pub const AUTOMATION_SOURCE_POLICY_FORMAT_VERSION: u32 = 1;
 pub const AUTOMATION_CATALOG_FORMAT_VERSION: u32 = 2;
+pub const AUTOMATION_DISPOSITION_CATALOG_FORMAT_VERSION: u32 = 3;
 const LEGACY_AUTOMATION_CATALOG_FORMAT_VERSION: u32 = 1;
 const LEGACY_REGISTRY_DIGEST_SENTINEL: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
@@ -66,6 +141,8 @@ pub enum AutomationSourceStatus {
     Failed,
     Quarantined,
     Stale,
+    Disposed,
+    Active,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -225,6 +302,69 @@ pub struct AutomationCatalogSource {
     pub status: AutomationSourceStatus,
     pub error_code: Option<String>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disposition: Option<AutomationSourceDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_authorization: Option<AutomationSourceOwnerAuthorization>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationSourceOwnerAuthorization {
+    pub authority_digest_sha256: String,
+    pub source_path: PathBuf,
+    pub thread_id: String,
+    pub source_cwd: PathBuf,
+    pub project_ref_id: ProjectRefId,
+    pub project_registry_digest: String,
+    pub source_policy_digest_sha256: String,
+    pub reason: String,
+}
+
+pub fn automation_source_owner_digest(
+    owner: &AutomationSourceOwnerAuthorization,
+) -> Result<String> {
+    Ok(sha256_hex(&canonical_json(&(
+        "workvcs-source-owner-v1",
+        &owner.source_path,
+        &owner.thread_id,
+        &owner.source_cwd,
+        owner.project_ref_id,
+        &owner.project_registry_digest,
+        &owner.source_policy_digest_sha256,
+        &owner.reason,
+    ))?))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationSourceDisposition {
+    pub decision_digest_sha256: String,
+    pub catalog_digest_sha256: String,
+    pub project_registry_digest: String,
+    pub source_policy_digest_sha256: String,
+    pub source_sha256: Option<String>,
+    pub reason: String,
+}
+
+pub fn automation_source_disposition_digest(source: &AutomationCatalogSource) -> Result<String> {
+    let decision = source.disposition.as_ref().ok_or_else(|| {
+        WorkVcsError::QueryInvalid("source has no disposition evidence".to_owned())
+    })?;
+    let bytes = canonical_json(&(
+        "workvcs-source-disposition-v1",
+        source.project_ref_id,
+        &source.registration_id,
+        &source.artifact_path,
+        &source.error_code,
+        &source.error,
+        &decision.catalog_digest_sha256,
+        &decision.project_registry_digest,
+        &decision.source_policy_digest_sha256,
+        &decision.source_sha256,
+        &decision.reason,
+    ))?;
+    Ok(sha256_hex(&bytes))
 }
 
 /// The immutable control-plane basis for a catalog whose membership comes from
@@ -309,7 +449,8 @@ impl CatalogBasis {
                         == *automation_registry_digest_sha256
             }
             Self::RegistryDerived(basis) => {
-                manifest.format_version == AUTOMATION_CATALOG_FORMAT_VERSION
+                (manifest.format_version == AUTOMATION_CATALOG_FORMAT_VERSION
+                    || manifest.format_version == AUTOMATION_DISPOSITION_CATALOG_FORMAT_VERSION)
                     && manifest.project_registry_id.as_deref()
                         == Some(basis.project_registry_id.as_str())
                     && manifest.project_registry_revision == Some(basis.project_registry_revision)
@@ -346,7 +487,16 @@ impl CatalogBasis {
                 sources,
             },
             Self::RegistryDerived(basis) => AutomationCatalogManifest {
-                format_version: AUTOMATION_CATALOG_FORMAT_VERSION,
+                format_version: if sources.iter().any(|s| {
+                    matches!(
+                        s.status,
+                        AutomationSourceStatus::Disposed | AutomationSourceStatus::Active
+                    ) || s.owner_authorization.is_some()
+                }) {
+                    AUTOMATION_DISPOSITION_CATALOG_FORMAT_VERSION
+                } else {
+                    AUTOMATION_CATALOG_FORMAT_VERSION
+                },
                 // The legacy registry is deliberately not a membership input in this mode.
                 // A fixed sentinel makes that absence explicit while preserving v1 fields.
                 automation_registry_revision: 0,
@@ -607,7 +757,184 @@ pub fn publish_registry_derived_automation_catalog(
     basis: RegistryDerivedCatalogBasis,
     sources: Vec<AutomationCatalogSource>,
 ) -> Result<AutomationCatalogPublication> {
+    if sources.iter().any(|source| {
+        matches!(
+            source.status,
+            AutomationSourceStatus::Disposed | AutomationSourceStatus::Active
+        ) || source.owner_authorization.is_some()
+    }) {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source disposition publication requires verified owner authorization".to_owned(),
+        ));
+    }
     publish_catalog(root, CatalogBasis::RegistryDerived(basis), sources)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationSourceDispositionSet {
+    pub schema_version: u32,
+    pub active: bool,
+    pub request_digest_sha256: String,
+    pub catalog_digest_sha256: String,
+    pub project_registry_digest: String,
+    pub source_policy_digest_sha256: String,
+    pub sources: Vec<AutomationCatalogSource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationSourceOwnerSet {
+    pub schema_version: u32,
+    pub active: bool,
+    pub owners: Vec<AutomationSourceOwnerAuthorization>,
+}
+
+pub fn read_automation_source_owners(root: &Path) -> Result<AutomationSourceOwnerSet> {
+    validate_derived_root(root, false)?;
+    let bytes = read_private_file(&root.join("source-owners.json"), MAX_CATALOG_BYTES)?;
+    let value: AutomationSourceOwnerSet = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!("invalid source owner authority: {error}"))
+    })?;
+    if value.schema_version != 1 || !value.active {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source owner authority is inactive or unsupported".to_owned(),
+        ));
+    }
+    let mut paths = std::collections::BTreeSet::new();
+    for owner in &value.owners {
+        validate_absolute_normal_path(&owner.source_path, "authorized source path")?;
+        validate_absolute_normal_path(&owner.source_cwd, "authorized source cwd")?;
+        validate_sha256(
+            "source owner authority digest",
+            &owner.authority_digest_sha256,
+        )?;
+        validate_control_plane_digest(&owner.project_registry_digest)?;
+        validate_sha256(
+            "source owner policy digest",
+            &owner.source_policy_digest_sha256,
+        )?;
+        if owner.reason.trim().is_empty()
+            || owner.thread_id.is_empty()
+            || automation_source_owner_digest(owner)? != owner.authority_digest_sha256
+            || !paths.insert(owner.source_path.clone())
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "source owner authority is inconsistent".to_owned(),
+            ));
+        }
+    }
+    Ok(value)
+}
+
+pub fn read_automation_source_dispositions(root: &Path) -> Result<AutomationSourceDispositionSet> {
+    validate_derived_root(root, false)?;
+    let bytes = read_private_file(&root.join("source-dispositions.json"), MAX_CATALOG_BYTES)?;
+    let value: AutomationSourceDispositionSet =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            WorkVcsError::IntegrityInvalid(format!("invalid source disposition authority: {error}"))
+        })?;
+    if value.schema_version != 1 || !value.active {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source disposition authority is inactive or unsupported".to_owned(),
+        ));
+    }
+    validate_sha256("disposition request digest", &value.request_digest_sha256)?;
+    validate_sha256("disposition catalog digest", &value.catalog_digest_sha256)?;
+    validate_control_plane_digest(&value.project_registry_digest)?;
+    validate_sha256(
+        "disposition policy digest",
+        &value.source_policy_digest_sha256,
+    )?;
+    let mut keys = std::collections::BTreeSet::new();
+    for source in &value.sources {
+        validate_catalog_source(source)?;
+        let proof = source.disposition.as_ref().ok_or_else(|| {
+            WorkVcsError::IntegrityInvalid("disposition proof missing".to_owned())
+        })?;
+        if source.status != AutomationSourceStatus::Disposed
+            || proof.catalog_digest_sha256 != value.catalog_digest_sha256
+            || proof.project_registry_digest != value.project_registry_digest
+            || proof.source_policy_digest_sha256 != value.source_policy_digest_sha256
+            || !keys.insert(source.artifact_path.clone())
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "source disposition authority is inconsistent".to_owned(),
+            ));
+        }
+    }
+    Ok(value)
+}
+
+pub fn publish_registry_derived_catalog_with_dispositions(
+    root: &Path,
+    basis: RegistryDerivedCatalogBasis,
+    sources: Vec<AutomationCatalogSource>,
+) -> Result<AutomationCatalogPublication> {
+    validate_catalog_active_sources(root, &sources)?;
+    let authority = if sources
+        .iter()
+        .any(|s| s.status == AutomationSourceStatus::Disposed)
+    {
+        Some(read_automation_source_dispositions(root)?)
+    } else {
+        None
+    };
+    let owners = if sources.iter().any(|s| s.owner_authorization.is_some()) {
+        Some(read_automation_source_owners(root)?)
+    } else {
+        None
+    };
+    if authority.as_ref().is_some_and(|a| {
+        a.project_registry_digest != basis.project_registry_digest
+            || a.source_policy_digest_sha256 != basis.source_policy_digest_sha256
+    }) {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source disposition authority basis is stale".to_owned(),
+        ));
+    }
+    for source in sources
+        .iter()
+        .filter(|source| source.status == AutomationSourceStatus::Disposed)
+    {
+        if !authority
+            .as_ref()
+            .is_some_and(|authority| authority.sources.contains(source))
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "source disposition has no exact owner authority".to_owned(),
+            ));
+        }
+    }
+    for owner in sources
+        .iter()
+        .filter_map(|source| source.owner_authorization.as_ref())
+    {
+        if !owners
+            .as_ref()
+            .is_some_and(|owners| owners.owners.contains(owner))
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "source owner has no exact owner authority".to_owned(),
+            ));
+        }
+    }
+    let published = publish_catalog(root, CatalogBasis::RegistryDerived(basis), sources)?;
+    validate_catalog_active_sources(root, &published.manifest.sources)?;
+    if (if let Some(a) = &authority {
+        read_automation_source_dispositions(root)? != *a
+    } else {
+        false
+    }) || (if let Some(a) = &owners {
+        read_automation_source_owners(root)? != *a
+    } else {
+        false
+    }) {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source disposition authority changed during publication".to_owned(),
+        ));
+    }
+    Ok(published)
 }
 
 fn publish_catalog(
@@ -636,10 +963,30 @@ fn publish_catalog(
                 &right.source_anchor,
             ))
     });
-    let complete = !sources.is_empty()
-        && sources
-            .iter()
-            .all(|source| source.status == AutomationSourceStatus::Ready);
+    if matches!(basis, CatalogBasis::Legacy { .. })
+        && sources.iter().any(|s| {
+            matches!(
+                s.status,
+                AutomationSourceStatus::Disposed | AutomationSourceStatus::Active
+            ) || s.owner_authorization.is_some()
+        })
+    {
+        return Err(WorkVcsError::QueryInvalid(
+            "legacy catalogs cannot carry dispositions".to_owned(),
+        ));
+    }
+    validate_disposition_basis(&basis, &sources)?;
+    let complete = sources
+        .iter()
+        .any(|source| source.status == AutomationSourceStatus::Ready)
+        && sources.iter().all(|source| {
+            matches!(
+                source.status,
+                AutomationSourceStatus::Ready
+                    | AutomationSourceStatus::Disposed
+                    | AutomationSourceStatus::Active
+            )
+        });
     let catalogs = root.join("catalogs");
     ensure_private_directory(&catalogs)?;
     let mut latest_for_basis: Option<(PathBuf, AutomationCatalogManifest)> = None;
@@ -771,7 +1118,7 @@ pub fn read_automation_catalog(path: &Path) -> Result<AutomationCatalogManifest>
                 )));
             }
         }
-        AUTOMATION_CATALOG_FORMAT_VERSION => {
+        AUTOMATION_CATALOG_FORMAT_VERSION | AUTOMATION_DISPOSITION_CATALOG_FORMAT_VERSION => {
             if manifest.automation_registry_revision != 0
                 || manifest.automation_registry_digest_sha256 != LEGACY_REGISTRY_DIGEST_SENTINEL
             {
@@ -829,12 +1176,51 @@ pub fn read_automation_catalog(path: &Path) -> Result<AutomationCatalogManifest>
     }
     for source in &manifest.sources {
         validate_catalog_source(source)?;
+        if manifest.format_version != AUTOMATION_DISPOSITION_CATALOG_FORMAT_VERSION
+            && (matches!(
+                source.status,
+                AutomationSourceStatus::Disposed | AutomationSourceStatus::Active
+            ) || source.owner_authorization.is_some())
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "historical catalog cannot carry dispositions".to_owned(),
+            ));
+        }
+        if let Some(disposition) = &source.disposition {
+            if manifest.project_registry_digest.as_deref()
+                != Some(disposition.project_registry_digest.as_str())
+                || manifest.source_policy_digest_sha256.as_deref()
+                    != Some(disposition.source_policy_digest_sha256.as_str())
+            {
+                return Err(WorkVcsError::IntegrityInvalid(
+                    "disposition basis does not match catalog".to_owned(),
+                ));
+            }
+        }
+        if let Some(owner) = &source.owner_authorization {
+            if manifest.project_registry_digest.as_deref()
+                != Some(owner.project_registry_digest.as_str())
+                || manifest.source_policy_digest_sha256.as_deref()
+                    != Some(owner.source_policy_digest_sha256.as_str())
+            {
+                return Err(WorkVcsError::IntegrityInvalid(
+                    "source owner basis does not match catalog".to_owned(),
+                ));
+            }
+        }
     }
-    let expected_complete = !manifest.sources.is_empty()
-        && manifest
-            .sources
-            .iter()
-            .all(|source| source.status == AutomationSourceStatus::Ready);
+    let expected_complete = manifest
+        .sources
+        .iter()
+        .any(|source| source.status == AutomationSourceStatus::Ready)
+        && manifest.sources.iter().all(|source| {
+            matches!(
+                source.status,
+                AutomationSourceStatus::Ready
+                    | AutomationSourceStatus::Disposed
+                    | AutomationSourceStatus::Active
+            )
+        });
     if manifest.complete != expected_complete {
         return Err(WorkVcsError::IntegrityInvalid(format!(
             "automation catalog {} has a forged completeness claim",
@@ -1048,20 +1434,144 @@ fn validate_catalog_source(source: &AutomationCatalogSource) -> Result<()> {
             "catalog artifact path must be absolute".to_owned(),
         ));
     }
+    if let Some(owner) = &source.owner_authorization {
+        validate_absolute_normal_path(&owner.source_path, "authorized source path")?;
+        validate_absolute_normal_path(&owner.source_cwd, "authorized source cwd")?;
+        validate_sha256(
+            "source owner authority digest",
+            &owner.authority_digest_sha256,
+        )?;
+        validate_control_plane_digest(&owner.project_registry_digest)?;
+        validate_sha256(
+            "source owner policy digest",
+            &owner.source_policy_digest_sha256,
+        )?;
+        let parsed = uuid::Uuid::parse_str(&owner.thread_id).map_err(|error| {
+            WorkVcsError::QueryInvalid(format!("invalid authorized thread ID: {error}"))
+        })?;
+        if parsed.to_string() != owner.thread_id
+            || owner.reason.trim().is_empty()
+            || source.status != AutomationSourceStatus::Ready
+            || source.lane != AutomationLane::HistoricalReference
+            || source.artifact_kind != AutomationArtifactKind::SourceArchive
+            || source.project_ref_id != owner.project_ref_id
+            || !source
+                .source_anchor
+                .starts_with(&format!("path:{};sha256:", owner.source_path.display()))
+            || automation_source_owner_digest(owner)? != owner.authority_digest_sha256
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "invalid source owner authorization".to_owned(),
+            ));
+        }
+    }
     match source.status {
         AutomationSourceStatus::Ready => {
-            if source.error_code.is_some() || source.error.is_some() {
+            if source.error_code.is_some() || source.error.is_some() || source.disposition.is_some()
+            {
                 return Err(WorkVcsError::QueryInvalid(
                     "ready catalog source cannot carry an error".to_owned(),
+                ));
+            }
+        }
+        AutomationSourceStatus::Disposed => {
+            let decision = source.disposition.as_ref().ok_or_else(|| {
+                WorkVcsError::QueryInvalid(
+                    "disposed source requires an explicit decision".to_owned(),
+                )
+            })?;
+            if source.lane != AutomationLane::HistoricalReference
+                || source.artifact_kind != AutomationArtifactKind::SourceArchive
+                || source.error_code.as_deref().is_none_or(str::is_empty)
+                || source.error.as_deref().is_none_or(str::is_empty)
+                || decision.reason.trim().is_empty()
+                || (decision.source_sha256.is_none()
+                    != (source.error_code.as_deref() == Some("source_deleted")))
+            {
+                return Err(WorkVcsError::QueryInvalid(
+                    "invalid historical source disposition".to_owned(),
+                ));
+            }
+            validate_sha256(
+                "disposition decision digest",
+                &decision.decision_digest_sha256,
+            )?;
+            validate_sha256(
+                "disposition catalog digest",
+                &decision.catalog_digest_sha256,
+            )?;
+            validate_control_plane_digest(&decision.project_registry_digest)?;
+            validate_sha256(
+                "disposition source policy digest",
+                &decision.source_policy_digest_sha256,
+            )?;
+            if let Some(digest) = &decision.source_sha256 {
+                validate_sha256("disposition source digest", digest)?;
+            }
+            if automation_source_disposition_digest(source)? != decision.decision_digest_sha256 {
+                return Err(WorkVcsError::IntegrityInvalid(
+                    "source disposition evidence digest mismatch".to_owned(),
+                ));
+            }
+        }
+        AutomationSourceStatus::Active => {
+            if source.lane != AutomationLane::HistoricalReference
+                || source.artifact_kind != AutomationArtifactKind::SourceArchive
+                || source.error_code.as_deref() != Some("source_active")
+                || source.error.as_deref().is_none_or(str::is_empty)
+                || source.disposition.is_some()
+                || source.owner_authorization.is_some()
+            {
+                return Err(WorkVcsError::QueryInvalid(
+                    "invalid active source entry".to_owned(),
                 ));
             }
         }
         _ => {
             if source.error_code.as_deref().is_none_or(str::is_empty)
                 || source.error.as_deref().is_none_or(str::is_empty)
+                || source.disposition.is_some()
             {
                 return Err(WorkVcsError::QueryInvalid(
                     "non-ready catalog source requires an error code and message".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_disposition_basis(
+    basis: &CatalogBasis,
+    sources: &[AutomationCatalogSource],
+) -> Result<()> {
+    for decision in sources
+        .iter()
+        .filter_map(|source| source.disposition.as_ref())
+    {
+        match basis {
+            CatalogBasis::RegistryDerived(basis)
+                if decision.project_registry_digest == basis.project_registry_digest
+                    && decision.source_policy_digest_sha256
+                        == basis.source_policy_digest_sha256 => {}
+            _ => {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source disposition basis is stale".to_owned(),
+                ));
+            }
+        }
+    }
+    for owner in sources
+        .iter()
+        .filter_map(|source| source.owner_authorization.as_ref())
+    {
+        match basis {
+            CatalogBasis::RegistryDerived(basis)
+                if owner.project_registry_digest == basis.project_registry_digest
+                    && owner.source_policy_digest_sha256 == basis.source_policy_digest_sha256 => {}
+            _ => {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source owner basis is stale".to_owned(),
                 ));
             }
         }
@@ -1672,6 +2182,73 @@ mod tests {
     use crate::identity::{BranchId, ProjectRefId, StoreId, WorkspaceId};
     use tempfile::TempDir;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn live_file_descriptor_detection_distinguishes_open_writer_from_closed_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().canonicalize().unwrap().join("rollout.jsonl");
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let inspect = || {
+            let result = std::process::Command::new("/usr/sbin/lsof")
+                .args(["-a", "-p", &std::process::id().to_string(), "-F0afn"])
+                .output()
+                .unwrap();
+            assert!(result.status.success());
+            parse_lsof_writer_paths(&result.stdout)
+        };
+        assert!(inspect().contains(&path));
+        drop(file);
+        assert!(!inspect().contains(&path));
+        let reader = File::open(&path).unwrap();
+        assert!(!inspect().contains(&path));
+        drop(reader);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn inactive_source_cannot_be_claimed_as_active() {
+        let temporary = TempDir::new().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let root = base.join("automation");
+        let source_root = base.join("rollouts");
+        fs::create_dir(&source_root).unwrap();
+        let path = source_root.join("inactive.jsonl");
+        fs::write(&path, b"{}\n").unwrap();
+        let proposal = AutomationSourcePolicyProposal {
+            source_id: "rollouts".to_owned(),
+            rollout_root: source_root,
+            role_policy: AutomationRolePolicy::UserOnly,
+            excluded_project_refs: Vec::new(),
+        };
+        let preview = preview_automation_source_policy(&root, proposal.clone()).unwrap();
+        apply_automation_source_policy(
+            &root,
+            preview.policy_revision,
+            &preview.policy_digest_sha256,
+            proposal,
+        )
+        .unwrap();
+        let source = AutomationCatalogSource {
+            registration_id: "registry-derived-quarantine".to_owned(),
+            project_ref_id: ProjectRefId::new_v7(),
+            lane: AutomationLane::HistoricalReference,
+            artifact_kind: AutomationArtifactKind::SourceArchive,
+            artifact_path: path,
+            artifact_manifest_sha256: "0".repeat(64),
+            source_anchor: "quarantine:unattributed".to_owned(),
+            status: AutomationSourceStatus::Active,
+            error_code: Some("source_active".to_owned()),
+            error: Some("writer active".to_owned()),
+            disposition: None,
+            owner_authorization: None,
+        };
+        assert!(validate_catalog_active_sources(&root, &[source]).is_err());
+    }
+
     fn fixture() -> (TempDir, PathBuf, AutomationRegistrationProposal) {
         let temporary = TempDir::new().unwrap();
         let temporary_root = temporary.path().canonicalize().unwrap();
@@ -1954,6 +2531,8 @@ mod tests {
         )
         .unwrap();
         let source = AutomationCatalogSource {
+            disposition: None,
+            owner_authorization: None,
             registration_id: proposal.registration_id,
             project_ref_id: proposal.project_ref_id,
             lane: AutomationLane::HistoricalReference,
@@ -2023,9 +2602,124 @@ mod tests {
     }
 
     #[test]
+    fn disposition_catalog_requires_exact_basis_and_preserves_unresolved_failures() {
+        let (_temporary, root, proposal) = fixture();
+        let basis = RegistryDerivedCatalogBasis {
+            project_registry_id: RegistryId::new_v7().to_string(),
+            project_registry_revision: 7,
+            project_registry_digest: format!("blake3-256:{}", "3".repeat(64)),
+            source_policy_revision: 11,
+            source_policy_digest_sha256: "4".repeat(64),
+        };
+        let mut source = AutomationCatalogSource {
+            owner_authorization: None,
+            disposition: Some(AutomationSourceDisposition {
+                decision_digest_sha256: "5".repeat(64),
+                catalog_digest_sha256: "6".repeat(64),
+                project_registry_digest: basis.project_registry_digest.clone(),
+                source_policy_digest_sha256: basis.source_policy_digest_sha256.clone(),
+                source_sha256: None,
+                reason: "owner excluded the absent source".to_owned(),
+            }),
+            registration_id: format!("project-ref:{}", proposal.project_ref_id),
+            project_ref_id: proposal.project_ref_id,
+            lane: AutomationLane::HistoricalReference,
+            artifact_kind: AutomationArtifactKind::SourceArchive,
+            artifact_path: root.join("missing-source"),
+            artifact_manifest_sha256: "0".repeat(64),
+            source_anchor: "unavailable".to_owned(),
+            status: AutomationSourceStatus::Disposed,
+            error_code: Some("source_deleted".to_owned()),
+            error: Some("source is absent".to_owned()),
+        };
+        let decision_digest = automation_source_disposition_digest(&source).unwrap();
+        source.disposition.as_mut().unwrap().decision_digest_sha256 = decision_digest;
+        assert!(
+            publish_registry_derived_automation_catalog(&root, basis.clone(), vec![source.clone()])
+                .is_err(),
+            "a self-consistent disposition is not proof of owner authorization"
+        );
+        let authority = AutomationSourceDispositionSet {
+            schema_version: 1,
+            active: true,
+            request_digest_sha256: "7".repeat(64),
+            catalog_digest_sha256: "6".repeat(64),
+            project_registry_digest: basis.project_registry_digest.clone(),
+            source_policy_digest_sha256: basis.source_policy_digest_sha256.clone(),
+            sources: vec![source.clone()],
+        };
+        ensure_private_directory(&root).unwrap();
+        write_new_private_file(
+            &root.join("source-dispositions.json"),
+            &serde_json::to_vec(&authority).unwrap(),
+        )
+        .unwrap();
+        let all_disposed = publish_registry_derived_catalog_with_dispositions(
+            &root,
+            basis.clone(),
+            vec![source.clone()],
+        )
+        .unwrap();
+        assert!(!all_disposed.manifest.complete);
+        let mut ready = source.clone();
+        ready.status = AutomationSourceStatus::Ready;
+        ready.disposition = None;
+        ready.error_code = None;
+        ready.error = None;
+        ready.artifact_path = root.join("ready-archive");
+        let published = publish_registry_derived_catalog_with_dispositions(
+            &root,
+            basis.clone(),
+            vec![ready, source.clone()],
+        )
+        .unwrap();
+        assert_eq!(
+            published.manifest.format_version,
+            AUTOMATION_DISPOSITION_CATALOG_FORMAT_VERSION
+        );
+        assert!(published.manifest.complete);
+        assert_eq!(
+            read_automation_catalog(&published.catalog_path).unwrap(),
+            published.manifest
+        );
+        let mut changed_path = source.clone();
+        changed_path.artifact_path = root.join("different-source");
+        assert!(
+            publish_registry_derived_catalog_with_dispositions(
+                &root,
+                basis.clone(),
+                vec![changed_path]
+            )
+            .is_err()
+        );
+        source
+            .disposition
+            .as_mut()
+            .unwrap()
+            .source_policy_digest_sha256 = "9".repeat(64);
+        let changed_digest = automation_source_disposition_digest(&source).unwrap();
+        source.disposition.as_mut().unwrap().decision_digest_sha256 = changed_digest;
+        assert!(
+            publish_registry_derived_catalog_with_dispositions(
+                &root,
+                basis.clone(),
+                vec![source.clone()]
+            )
+            .is_err()
+        );
+        source.disposition = None;
+        source.status = AutomationSourceStatus::Failed;
+        let unresolved =
+            publish_registry_derived_automation_catalog(&root, basis, vec![source]).unwrap();
+        assert!(!unresolved.manifest.complete);
+    }
+
+    #[test]
     fn registry_derived_catalog_records_both_immutable_control_plane_bases() {
         let (_temporary, root, proposal) = fixture();
         let source = AutomationCatalogSource {
+            disposition: None,
+            owner_authorization: None,
             registration_id: format!("project-ref:{}", proposal.project_ref_id),
             project_ref_id: proposal.project_ref_id,
             lane: AutomationLane::HistoricalReference,
@@ -2129,6 +2823,8 @@ mod tests {
     fn catalog_readback_rejects_forged_complete_flag() {
         let (_temporary, root, proposal) = fixture();
         let source = AutomationCatalogSource {
+            disposition: None,
+            owner_authorization: None,
             registration_id: proposal.registration_id,
             project_ref_id: proposal.project_ref_id,
             lane: AutomationLane::HistoricalReference,

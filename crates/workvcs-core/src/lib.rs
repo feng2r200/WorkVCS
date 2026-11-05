@@ -11,18 +11,24 @@ pub mod search;
 pub mod store;
 mod work_scope;
 
+#[cfg(target_os = "macos")]
+pub use automation::active_codex_rollout_paths;
 pub use automation::{
     AUTOMATION_SOURCE_POLICY_FORMAT_VERSION, AutomationArtifactKind, AutomationCatalogManifest,
     AutomationCatalogPublication, AutomationCatalogSource, AutomationLane, AutomationRegistration,
     AutomationRegistrationPreview, AutomationRegistrationProposal, AutomationRegistrySnapshot,
-    AutomationRolePolicy, AutomationSourcePolicyEntry, AutomationSourcePolicyPreview,
-    AutomationSourcePolicyProposal, AutomationSourcePolicySnapshot, AutomationSourceStatus,
-    RegistryDerivedCatalogBasis, apply_automation_registration, apply_automation_source_policy,
-    automation_registry_path, automation_source_policy_path, preview_automation_registration,
+    AutomationRolePolicy, AutomationSourceDisposition, AutomationSourceDispositionSet,
+    AutomationSourceOwnerAuthorization, AutomationSourceOwnerSet, AutomationSourcePolicyEntry,
+    AutomationSourcePolicyPreview, AutomationSourcePolicyProposal, AutomationSourcePolicySnapshot,
+    AutomationSourceStatus, RegistryDerivedCatalogBasis, apply_automation_registration,
+    apply_automation_source_policy, automation_registry_path, automation_source_disposition_digest,
+    automation_source_owner_digest, automation_source_policy_path, preview_automation_registration,
     preview_automation_source_policy, publish_automation_catalog,
-    publish_registry_derived_automation_catalog, read_automation_catalog, read_automation_registry,
+    publish_registry_derived_automation_catalog,
+    publish_registry_derived_catalog_with_dispositions, read_automation_catalog,
+    read_automation_registry, read_automation_source_dispositions, read_automation_source_owners,
     read_automation_source_policy, revoke_automation_registration, revoke_automation_source_policy,
-    sha256_file,
+    sha256_file, validate_catalog_active_sources,
 };
 pub use canonical::{
     CanonicalValue, WorkState, canonical_bytes, content_object_digest, entity_version_digest,

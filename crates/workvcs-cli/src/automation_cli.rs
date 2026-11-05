@@ -12,18 +12,26 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "macos")]
+use workvcs_core::active_codex_rollout_paths;
 use workvcs_core::{
     AutomationArtifactKind, AutomationCatalogManifest, AutomationCatalogSource, AutomationLane,
     AutomationRegistration, AutomationRegistrationProposal, AutomationRolePolicy,
+    AutomationSourceDisposition, AutomationSourceOwnerAuthorization, AutomationSourceOwnerSet,
     AutomationSourcePolicyEntry, AutomationSourcePolicyProposal, AutomationSourceStatus,
     RegistryDerivedCatalogBasis, SearchDerivedStatus, SourceArchiveAutomationRoot,
     SourceArchiveInspectOptions, SourceArchiveLiveSourceFence, SourceArchiveRegistryRoute,
     SourceArchiveRegistryVerifiedImportRequest, SourceArchiveRegistryVerifiedImportResult,
     SourceArchiveRegistryVerifiedOwnerResolution, SourceArchiveSnapshot, SourceArchiveStoredSource,
-    apply_automation_registration, apply_automation_source_policy, automation_source_policy_path,
-    preview_automation_registration, preview_automation_source_policy, publish_automation_catalog,
-    publish_registry_derived_automation_catalog, read_automation_catalog, read_automation_registry,
+    apply_automation_registration, apply_automation_source_policy,
+    automation_source_disposition_digest, automation_source_owner_digest,
+    automation_source_policy_path, preview_automation_registration,
+    preview_automation_source_policy, publish_automation_catalog,
+    publish_registry_derived_automation_catalog,
+    publish_registry_derived_catalog_with_dispositions, read_automation_catalog,
+    read_automation_registry, read_automation_source_dispositions, read_automation_source_owners,
     read_automation_source_policy, revoke_automation_registration, revoke_automation_source_policy,
+    validate_catalog_active_sources,
 };
 
 #[cfg(unix)]
@@ -68,6 +76,16 @@ impl From<AutomationRolePolicyArg> for AutomationRolePolicy {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AutomationCommand {
+    #[command(about = "Inspect and authorize exact historical source ownership")]
+    SourceOwner {
+        #[command(subcommand)]
+        command: AutomationSourceOwnerCommand,
+    },
+    #[command(about = "Inspect and authorize exact historical source dispositions")]
+    SourceDisposition {
+        #[command(subcommand)]
+        command: AutomationSourceDispositionCommand,
+    },
     #[command(about = "Preview explicit local automation registration without writing")]
     RegisterPreview {
         #[arg(long)]
@@ -169,6 +187,849 @@ pub(crate) enum AutomationCommand {
         #[command(subcommand)]
         command: AutomationDaemonCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AutomationSourceOwnerCommand {
+    Preview {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        request: PathBuf,
+    },
+    Apply {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        expected_request_digest: String,
+        #[arg(long)]
+        expected_existing_digest: Option<String>,
+    },
+    Show {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+    },
+    Revoke {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        expected_digest: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceOwnerRequest {
+    schema_version: u32,
+    source_path: PathBuf,
+    thread_id: String,
+    source_cwd: PathBuf,
+    project_ref_id: ProjectRefId,
+    project_registry_digest: String,
+    source_policy_digest_sha256: String,
+    reason: String,
+}
+
+#[cfg(unix)]
+fn read_source_owner_file(root: &Path) -> Result<Option<AutomationSourceOwnerSet>> {
+    let path = root.join("source-owners.json");
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(storage_error("inspect source owner authority")(error)),
+        Ok(_) => {}
+    }
+    let bytes = read_private_runtime_file(&path, 16 * 1024 * 1024)?;
+    let result: AutomationSourceOwnerSet = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!("invalid source owner authority: {error}"))
+    })?;
+    if result.schema_version != 1 {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "source owner authority is inconsistent".to_owned(),
+        ));
+    }
+    for owner in &result.owners {
+        if automation_source_owner_digest(owner)? != owner.authority_digest_sha256 {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "source owner authority digest mismatch".to_owned(),
+            ));
+        }
+    }
+    Ok(Some(result))
+}
+
+#[cfg(unix)]
+fn verify_owner_snapshot(
+    owner: &AutomationSourceOwnerAuthorization,
+    policy: &[AutomationSourcePolicyEntry],
+    snapshot: &SourceArchiveSnapshot,
+) -> Result<()> {
+    let selected = policy
+        .iter()
+        .find(|p| p.enabled && !p.revoked && owner.source_path.starts_with(&p.rollout_root))
+        .ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "authorized source is outside active source roots".to_owned(),
+            )
+        })?;
+    if selected
+        .excluded_project_refs
+        .contains(&owner.project_ref_id)
+        || snapshot.source_path() != owner.source_path
+        || snapshot.observed_session_meta().is_empty()
+        || snapshot.observed_session_meta().iter().any(|meta| {
+            meta.thread_id.as_deref() != Some(owner.thread_id.as_str())
+                || meta.raw_cwd.as_deref().map(Path::new) != Some(owner.source_cwd.as_path())
+        })
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source metadata does not match exact owner authorization".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn prepare_source_owner(
+    root: &Path,
+    registry: Option<&Path>,
+    request_path: &Path,
+) -> Result<(AutomationSourceOwnerAuthorization, String)> {
+    let bytes = read_private_runtime_file(request_path, 1024 * 1024)?;
+    let request: SourceOwnerRequest = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!("invalid source owner request: {error}"))
+    })?;
+    if request.schema_version != 1 || request.reason.trim().is_empty() {
+        return Err(WorkVcsError::QueryInvalid(
+            "source owner request is invalid".to_owned(),
+        ));
+    }
+    let membership = registry_derived_membership(registry)?;
+    let policy = read_automation_source_policy(root)?;
+    if membership.registry_digest != request.project_registry_digest
+        || policy.digest_sha256 != request.source_policy_digest_sha256
+        || !membership
+            .members
+            .iter()
+            .any(|member| member.project_ref_id == request.project_ref_id)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source owner request basis or target is stale".to_owned(),
+        ));
+    }
+    let selected = policy
+        .sources
+        .iter()
+        .find(|p| p.enabled && !p.revoked && request.source_path.starts_with(&p.rollout_root))
+        .ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "source owner request is outside active roots".to_owned(),
+            )
+        })?;
+    let snapshot = capture_rollout_snapshot(&selected.rollout_root, &request.source_path)?;
+    let mut owner = AutomationSourceOwnerAuthorization {
+        authority_digest_sha256: "0".repeat(64),
+        source_path: request.source_path.clone(),
+        thread_id: request.thread_id.clone(),
+        source_cwd: request.source_cwd.clone(),
+        project_ref_id: request.project_ref_id,
+        project_registry_digest: request.project_registry_digest.clone(),
+        source_policy_digest_sha256: request.source_policy_digest_sha256.clone(),
+        reason: request.reason.clone(),
+    };
+    owner.authority_digest_sha256 = automation_source_owner_digest(&owner)?;
+    verify_owner_snapshot(&owner, &policy.sources, &snapshot)?;
+    if !snapshot.verify_live_source()?
+        || registry_derived_membership(registry)? != membership
+        || read_automation_source_policy(root)? != policy
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source owner basis changed during preparation".to_owned(),
+        ));
+    }
+    Ok((owner, sha256_serialized(&request)?))
+}
+
+#[cfg(unix)]
+fn persist_source_owner_file(root: &Path, value: &AutomationSourceOwnerSet) -> Result<()> {
+    let bytes = [
+        serde_json::to_vec(value)
+            .map_err(serialization_error)?
+            .as_slice(),
+        b"\n",
+    ]
+    .concat();
+    let history = root.join("source-owner-history");
+    ensure_owner_private_directory(&history)?;
+    let history_path = history.join(format!("{}.json", hex::encode(Sha256::digest(&bytes))));
+    if !history_path.exists() {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options
+            .open(&history_path)
+            .map_err(storage_error("create source owner history"))?;
+        file.write_all(&bytes)
+            .map_err(storage_error("write source owner history"))?;
+        file.sync_all()
+            .map_err(storage_error("sync source owner history"))?;
+        sync_directory(&history)?;
+    }
+    if read_private_runtime_file(&history_path, bytes.len())? != bytes {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "source owner history differs".to_owned(),
+        ));
+    }
+    replace_private_runtime_file(&root.join("source-owners.json"), &bytes)?;
+    if read_private_runtime_file(&root.join("source-owners.json"), bytes.len())? != bytes {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "source owner readback failed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn run_source_owner(command: AutomationSourceOwnerCommand) -> Result<String> {
+    match command {
+        AutomationSourceOwnerCommand::Preview {
+            root,
+            registry,
+            request,
+        } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            let (owner, digest) = prepare_source_owner(&root, registry.as_deref(), &request)?;
+            render_json(&serde_json::json!({"owner":owner,"request_digest_sha256":digest}))
+        }
+        AutomationSourceOwnerCommand::Apply {
+            root,
+            registry,
+            request,
+            expected_request_digest,
+            expected_existing_digest,
+        } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            let _lock = ReconciliationLock::acquire(&root)?;
+            let existing = read_source_owner_file(&root)?;
+            if existing.as_ref().map(sha256_serialized).transpose()? != expected_existing_digest {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source owner authority digest changed".to_owned(),
+                ));
+            }
+            let (owner, digest) = prepare_source_owner(&root, registry.as_deref(), &request)?;
+            if digest != expected_request_digest {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source owner request digest changed".to_owned(),
+                ));
+            }
+            let mut data = existing.unwrap_or(AutomationSourceOwnerSet {
+                schema_version: 1,
+                active: true,
+                owners: Vec::new(),
+            });
+            if !data.active
+                || data
+                    .owners
+                    .iter()
+                    .any(|entry| entry.source_path == owner.source_path)
+            {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source owner already exists or authority inactive".to_owned(),
+                ));
+            }
+            data.owners.push(owner);
+            persist_source_owner_file(&root, &data)?;
+            render_json(&data)
+        }
+        AutomationSourceOwnerCommand::Show { root, registry } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            render_json(&read_source_owner_file(&root)?)
+        }
+        AutomationSourceOwnerCommand::Revoke {
+            root,
+            registry,
+            expected_digest,
+        } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            let _lock = ReconciliationLock::acquire(&root)?;
+            let mut data = read_source_owner_file(&root)?.ok_or_else(|| {
+                WorkVcsError::QueryInvalid("source owner authority is absent".to_owned())
+            })?;
+            if sha256_serialized(&data)? != expected_digest || !data.active {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source owner authority digest or state changed".to_owned(),
+                ));
+            }
+            data.active = false;
+            persist_source_owner_file(&root, &data)?;
+            render_json(&data)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn run_source_owner(_command: AutomationSourceOwnerCommand) -> Result<String> {
+    Err(WorkVcsError::ControlPlaneInvalid(
+        "source owner authority requires Unix filesystem guards".to_owned(),
+    ))
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AutomationSourceDispositionCommand {
+    Preview {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        request: PathBuf,
+    },
+    Apply {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        expected_request_digest: String,
+        #[arg(long)]
+        expected_existing_digest: Option<String>,
+    },
+    Show {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+    },
+    Revoke {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        registry: Option<PathBuf>,
+        #[arg(long)]
+        expected_digest: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceDispositionRequest {
+    schema_version: u32,
+    catalog_digest_sha256: String,
+    project_registry_digest: String,
+    source_policy_digest_sha256: String,
+    selections: Vec<SourceDispositionSelection>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceDispositionSelection {
+    source_path: PathBuf,
+    error_code: String,
+    source_sha256: Option<String>,
+    reason: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredSourceDispositions {
+    schema_version: u32,
+    active: bool,
+    request_digest_sha256: String,
+    catalog_digest_sha256: String,
+    project_registry_digest: String,
+    source_policy_digest_sha256: String,
+    sources: Vec<AutomationCatalogSource>,
+}
+
+fn disposition_path(root: &Path) -> PathBuf {
+    root.join("source-dispositions.json")
+}
+
+#[cfg(unix)]
+fn read_dispositions(root: &Path) -> Result<Option<StoredSourceDispositions>> {
+    let path = disposition_path(root);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(storage_error("inspect source dispositions")(error)),
+        Ok(_) => {}
+    }
+    let bytes = read_private_runtime_file(&path, 16 * 1024 * 1024)?;
+    let data: StoredSourceDispositions = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::IntegrityInvalid(format!("invalid source disposition file: {error}"))
+    })?;
+    if data.schema_version != 1 {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "unsupported source disposition schema".to_owned(),
+        ));
+    }
+    for source in &data.sources {
+        let decision = source.disposition.as_ref().ok_or_else(|| {
+            WorkVcsError::IntegrityInvalid("disposition evidence missing".to_owned())
+        })?;
+        if source.status != AutomationSourceStatus::Disposed
+            || automation_source_disposition_digest(source)? != decision.decision_digest_sha256
+            || decision.catalog_digest_sha256 != data.catalog_digest_sha256
+            || decision.project_registry_digest != data.project_registry_digest
+            || decision.source_policy_digest_sha256 != data.source_policy_digest_sha256
+        {
+            return Err(WorkVcsError::IntegrityInvalid(
+                "source disposition evidence is inconsistent".to_owned(),
+            ));
+        }
+    }
+    Ok(Some(data))
+}
+
+#[cfg(unix)]
+fn disposition_source_matches(
+    selection: &SourceDispositionSelection,
+    policies: &[AutomationSourcePolicyEntry],
+    discovered: &BTreeSet<PathBuf>,
+) -> Result<bool> {
+    let policy = policies
+        .iter()
+        .find(|p| p.enabled && !p.revoked && selection.source_path.starts_with(&p.rollout_root))
+        .ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "disposition source is outside active source roots".to_owned(),
+            )
+        })?;
+    let present = discovered.contains(&selection.source_path);
+    match (&selection.source_sha256, present) {
+        (None, false) => Ok(true),
+        (Some(expected), true) => {
+            let snapshot = capture_rollout_snapshot(&policy.rollout_root, &selection.source_path)?;
+            let actual = snapshot
+                .stored_source()
+                .map(|s| s.container_sha256.as_str())
+                .unwrap_or_else(|| snapshot.source_sha256());
+            Ok(actual == expected && snapshot.verify_live_source()?)
+        }
+        _ => Ok(false),
+    }
+}
+
+#[cfg(unix)]
+fn collect_disposition_source_paths(
+    policies: &[AutomationSourcePolicyEntry],
+) -> Result<BTreeSet<PathBuf>> {
+    let mut paths = BTreeSet::new();
+    for policy in policies
+        .iter()
+        .filter(|policy| policy.enabled && !policy.revoked)
+    {
+        paths.extend(collect_rollout_files(&policy.rollout_root)?);
+    }
+    Ok(paths)
+}
+
+#[cfg(unix)]
+fn disposition_selection(source: &AutomationCatalogSource) -> Result<SourceDispositionSelection> {
+    let evidence = source.disposition.as_ref().ok_or_else(|| {
+        WorkVcsError::IntegrityInvalid("source disposition evidence missing".to_owned())
+    })?;
+    Ok(SourceDispositionSelection {
+        source_path: source.artifact_path.clone(),
+        error_code: source.error_code.clone().ok_or_else(|| {
+            WorkVcsError::IntegrityInvalid("source disposition error code missing".to_owned())
+        })?,
+        source_sha256: evidence.source_sha256.clone(),
+        reason: evidence.reason.clone(),
+    })
+}
+
+#[cfg(unix)]
+fn apply_current_source_dispositions(
+    root: &Path,
+    registry_digest: &str,
+    policy: &workvcs_core::AutomationSourcePolicySnapshot,
+    sources: &mut [AutomationCatalogSource],
+) -> Result<usize> {
+    let Some(data) = read_dispositions(root)? else {
+        return Ok(0);
+    };
+    if !data.active
+        || data.project_registry_digest != registry_digest
+        || data.source_policy_digest_sha256 != policy.digest_sha256
+    {
+        return Ok(0);
+    }
+    let authority = read_automation_source_dispositions(root)?;
+    let paths = collect_disposition_source_paths(&policy.sources)?;
+    let mut used = 0;
+    for source in sources.iter_mut().filter(|source| {
+        source.status == AutomationSourceStatus::Failed
+            && source.lane == AutomationLane::HistoricalReference
+    }) {
+        for candidate in authority
+            .sources
+            .iter()
+            .filter(|candidate| candidate.artifact_path == source.artifact_path)
+        {
+            let mut original = candidate.clone();
+            original.status = AutomationSourceStatus::Failed;
+            original.disposition = None;
+            if original == *source
+                && disposition_source_matches(
+                    &disposition_selection(candidate)?,
+                    &policy.sources,
+                    &paths,
+                )?
+            {
+                *source = candidate.clone();
+                used += 1;
+                break;
+            }
+        }
+    }
+    Ok(used)
+}
+
+#[cfg(unix)]
+fn validate_catalog_source_dispositions(
+    root: &Path,
+    catalog: &AutomationCatalogManifest,
+) -> Result<()> {
+    let disposed = catalog
+        .sources
+        .iter()
+        .filter(|source| source.status == AutomationSourceStatus::Disposed)
+        .collect::<Vec<_>>();
+    if disposed.is_empty() {
+        return Ok(());
+    }
+    let authority = read_automation_source_dispositions(root)?;
+    let policy = read_automation_source_policy(root)?;
+    if catalog.project_registry_digest.as_deref()
+        != Some(authority.project_registry_digest.as_str())
+        || catalog.source_policy_digest_sha256.as_deref()
+            != Some(authority.source_policy_digest_sha256.as_str())
+        || policy.digest_sha256 != authority.source_policy_digest_sha256
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "catalog source disposition basis is stale".to_owned(),
+        ));
+    }
+    let paths = collect_disposition_source_paths(&policy.sources)?;
+    for source in disposed {
+        if !authority.sources.contains(source)
+            || !disposition_source_matches(
+                &disposition_selection(source)?,
+                &policy.sources,
+                &paths,
+            )?
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "catalog source disposition is stale: {}",
+                source.artifact_path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_catalog_source_dispositions(
+    _root: &Path,
+    catalog: &AutomationCatalogManifest,
+) -> Result<()> {
+    if catalog
+        .sources
+        .iter()
+        .any(|source| source.status == AutomationSourceStatus::Disposed)
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source disposition validation requires Unix filesystem guards".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_catalog_source_owners(root: &Path, catalog: &AutomationCatalogManifest) -> Result<()> {
+    let owners: Vec<_> = catalog
+        .sources
+        .iter()
+        .filter_map(|source| source.owner_authorization.as_ref())
+        .collect();
+    if owners.is_empty() {
+        return Ok(());
+    }
+    let authority = read_automation_source_owners(root)?;
+    let policy = read_automation_source_policy(root)?;
+    let paths = collect_disposition_source_paths(&policy.sources)?;
+    for owner in owners {
+        if !authority.owners.contains(owner)
+            || catalog.project_registry_digest.as_deref()
+                != Some(owner.project_registry_digest.as_str())
+            || catalog.source_policy_digest_sha256.as_deref()
+                != Some(owner.source_policy_digest_sha256.as_str())
+            || policy.digest_sha256 != owner.source_policy_digest_sha256
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "catalog source owner authorization is stale".to_owned(),
+            ));
+        }
+        if paths.contains(&owner.source_path) {
+            let selected = policy
+                .sources
+                .iter()
+                .find(|p| p.enabled && !p.revoked && owner.source_path.starts_with(&p.rollout_root))
+                .ok_or_else(|| {
+                    WorkVcsError::ControlPlaneInvalid(
+                        "authorized source is outside active roots".to_owned(),
+                    )
+                })?;
+            let snapshot = capture_rollout_snapshot(&selected.rollout_root, &owner.source_path)?;
+            verify_owner_snapshot(owner, &policy.sources, &snapshot)?;
+            if !snapshot.verify_live_source()? {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "authorized source changed during validation".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_catalog_source_owners(_root: &Path, catalog: &AutomationCatalogManifest) -> Result<()> {
+    if catalog
+        .sources
+        .iter()
+        .any(|source| source.owner_authorization.is_some())
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source owner validation requires Unix filesystem guards".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn prepare_source_dispositions(
+    root: &Path,
+    registry: Option<&Path>,
+    request_path: &Path,
+) -> Result<StoredSourceDispositions> {
+    let bytes = read_private_runtime_file(request_path, 16 * 1024 * 1024)?;
+    let request: SourceDispositionRequest = serde_json::from_slice(&bytes).map_err(|error| {
+        WorkVcsError::QueryInvalid(format!("invalid source disposition request: {error}"))
+    })?;
+    if request.schema_version != 1 || request.selections.is_empty() {
+        return Err(WorkVcsError::QueryInvalid(
+            "source disposition request must contain selections and use schema version 1"
+                .to_owned(),
+        ));
+    }
+    let latest = latest_catalog_for_current_basis(root, registry)?;
+    if latest.catalog_manifest_sha256 != request.catalog_digest_sha256
+        || latest.manifest.project_registry_digest.as_deref()
+            != Some(request.project_registry_digest.as_str())
+        || latest.manifest.source_policy_digest_sha256.as_deref()
+            != Some(request.source_policy_digest_sha256.as_str())
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source disposition request basis is stale".to_owned(),
+        ));
+    }
+    let policy = read_automation_source_policy(root)?;
+    let mut discovered = BTreeSet::new();
+    for entry in policy
+        .sources
+        .iter()
+        .filter(|entry| entry.enabled && !entry.revoked)
+    {
+        discovered.extend(collect_rollout_files(&entry.rollout_root)?);
+    }
+    let mut selected = BTreeSet::new();
+    let mut sources = Vec::with_capacity(request.selections.len());
+    for item in &request.selections {
+        if item.reason.trim().is_empty() || !selected.insert(item.source_path.clone()) {
+            return Err(WorkVcsError::QueryInvalid(
+                "duplicate source or empty disposition reason".to_owned(),
+            ));
+        }
+        let matching = latest
+            .manifest
+            .sources
+            .iter()
+            .filter(|source| {
+                source.status == AutomationSourceStatus::Failed
+                    && source.lane == AutomationLane::HistoricalReference
+                    && source.artifact_kind == AutomationArtifactKind::SourceArchive
+                    && source.artifact_path == item.source_path
+                    && source.error_code.as_deref() == Some(item.error_code.as_str())
+            })
+            .collect::<Vec<_>>();
+        let [original] = matching.as_slice() else {
+            return Err(WorkVcsError::ControlPlaneInvalid(
+                "source selection is not one exact failed catalog entry".to_owned(),
+            ));
+        };
+        if (item.source_sha256.is_none() != (item.error_code == "source_deleted"))
+            || !disposition_source_matches(item, &policy.sources, &discovered)?
+        {
+            return Err(WorkVcsError::ControlPlaneInvalid(format!(
+                "source changed before disposition: {}",
+                item.source_path.display()
+            )));
+        }
+        let mut source = (*original).clone();
+        source.status = AutomationSourceStatus::Disposed;
+        source.disposition = Some(AutomationSourceDisposition {
+            decision_digest_sha256: "0".repeat(64),
+            catalog_digest_sha256: request.catalog_digest_sha256.clone(),
+            project_registry_digest: request.project_registry_digest.clone(),
+            source_policy_digest_sha256: request.source_policy_digest_sha256.clone(),
+            source_sha256: item.source_sha256.clone(),
+            reason: item.reason.clone(),
+        });
+        let digest = automation_source_disposition_digest(&source)?;
+        source
+            .disposition
+            .as_mut()
+            .expect("new disposition")
+            .decision_digest_sha256 = digest;
+        sources.push(source);
+    }
+    let current_membership = registry_derived_membership(registry)?;
+    let current_policy = read_automation_source_policy(root)?;
+    if current_membership.registry_digest != request.project_registry_digest
+        || current_policy.digest_sha256 != request.source_policy_digest_sha256
+    {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "disposition basis changed during preparation".to_owned(),
+        ));
+    }
+    Ok(StoredSourceDispositions {
+        schema_version: 1,
+        active: true,
+        request_digest_sha256: sha256_serialized(&request)?,
+        catalog_digest_sha256: request.catalog_digest_sha256,
+        project_registry_digest: request.project_registry_digest,
+        source_policy_digest_sha256: request.source_policy_digest_sha256,
+        sources,
+    })
+}
+
+#[cfg(unix)]
+fn persist_source_dispositions(root: &Path, data: &StoredSourceDispositions) -> Result<()> {
+    let bytes = [
+        serde_json::to_vec(data)
+            .map_err(serialization_error)?
+            .as_slice(),
+        b"\n",
+    ]
+    .concat();
+    let history = root.join("source-disposition-history");
+    ensure_owner_private_directory(&history)?;
+    let digest = hex::encode(Sha256::digest(&bytes));
+    let history_path = history.join(format!("{digest}.json"));
+    if !history_path.exists() {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options
+            .open(&history_path)
+            .map_err(storage_error("create source disposition history"))?;
+        file.write_all(&bytes)
+            .map_err(storage_error("write source disposition history"))?;
+        file.sync_all()
+            .map_err(storage_error("sync source disposition history"))?;
+        sync_directory(&history)?;
+    }
+    if read_private_runtime_file(&history_path, bytes.len())? != bytes {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "source disposition history does not match".to_owned(),
+        ));
+    }
+    replace_private_runtime_file(&disposition_path(root), &bytes)?;
+    if read_private_runtime_file(&disposition_path(root), bytes.len())? != bytes {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "source disposition readback failed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn run_source_disposition(command: AutomationSourceDispositionCommand) -> Result<String> {
+    match command {
+        AutomationSourceDispositionCommand::Preview {
+            root,
+            registry,
+            request,
+        } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            let prepared = prepare_source_dispositions(&root, registry.as_deref(), &request)?;
+            render_json(&prepared)
+        }
+        AutomationSourceDispositionCommand::Apply {
+            root,
+            registry,
+            request,
+            expected_request_digest,
+            expected_existing_digest,
+        } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            let _lock = ReconciliationLock::acquire(&root)?;
+            let existing = read_dispositions(&root)?;
+            let actual_existing = existing.as_ref().map(sha256_serialized).transpose()?;
+            if actual_existing != expected_existing_digest {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "existing source disposition digest changed".to_owned(),
+                ));
+            }
+            let prepared = prepare_source_dispositions(&root, registry.as_deref(), &request)?;
+            if prepared.request_digest_sha256 != expected_request_digest {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source disposition request digest changed".to_owned(),
+                ));
+            }
+            persist_source_dispositions(&root, &prepared)?;
+            render_json(&prepared)
+        }
+        AutomationSourceDispositionCommand::Show { root, registry } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            render_json(&read_dispositions(&root)?)
+        }
+        AutomationSourceDispositionCommand::Revoke {
+            root,
+            registry,
+            expected_digest,
+        } => {
+            let root = resolve_automation_root(root, registry.as_deref())?;
+            let _lock = ReconciliationLock::acquire(&root)?;
+            let mut current = read_dispositions(&root)?.ok_or_else(|| {
+                WorkVcsError::QueryInvalid("source dispositions are not configured".to_owned())
+            })?;
+            if sha256_serialized(&current)? != expected_digest || !current.active {
+                return Err(WorkVcsError::ControlPlaneInvalid(
+                    "source disposition digest or state changed".to_owned(),
+                ));
+            }
+            current.active = false;
+            persist_source_dispositions(&root, &current)?;
+            render_json(&current)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn run_source_disposition(_command: AutomationSourceDispositionCommand) -> Result<String> {
+    Err(WorkVcsError::ControlPlaneInvalid(
+        "source dispositions require Unix filesystem guards".to_owned(),
+    ))
 }
 
 #[derive(Debug, Subcommand)]
@@ -327,6 +1188,8 @@ struct ReconcileReport {
     rollout_files_deleted: usize,
     rollout_archives_ready: usize,
     rollout_archives_failed: usize,
+    #[serde(default)]
+    rollout_archives_disposed: usize,
     canonical_generations_ready: usize,
     canonical_generations_failed: usize,
     catalog_path: PathBuf,
@@ -465,6 +1328,8 @@ struct SourceArchiveReference {
     source_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stored_source: Option<SourceArchiveStoredSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner_authorization: Option<AutomationSourceOwnerAuthorization>,
     source_anchor: String,
 }
 
@@ -526,6 +1391,8 @@ struct CatalogQueryReport {
     sources_requested: usize,
     sources_succeeded: usize,
     sources_failed: usize,
+    sources_disposed: usize,
+    sources_active: usize,
     result_limit: Option<usize>,
     matched_items: usize,
     omitted_results: usize,
@@ -848,6 +1715,8 @@ struct DaemonWatcher {
 
 pub(crate) fn run_automation(command: AutomationCommand) -> Result<String> {
     match command {
+        AutomationCommand::SourceOwner { command } => run_source_owner(command),
+        AutomationCommand::SourceDisposition { command } => run_source_disposition(command),
         AutomationCommand::RegisterPreview {
             cwd,
             registry,
@@ -1312,6 +2181,8 @@ fn reconcile_legacy_once(root: &Path, project_registry: Option<&Path>) -> Result
                         })?;
                         canonical_generations_ready += 1;
                         catalog_sources.push(AutomationCatalogSource {
+                            disposition: None,
+                            owner_authorization: None,
                             registration_id: registration.registration_id.clone(),
                             project_ref_id: registration.project_ref_id,
                             lane: AutomationLane::CanonicalCurrent,
@@ -1422,6 +2293,7 @@ fn reconcile_legacy_once(root: &Path, project_registry: Option<&Path>) -> Result
         rollout_files_deleted,
         rollout_archives_ready,
         rollout_archives_failed,
+        rollout_archives_disposed: 0,
         canonical_generations_ready,
         canonical_generations_failed,
         catalog_path: publication.catalog_path,
@@ -1506,6 +2378,8 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
                         })?;
                         canonical_generations_ready += 1;
                         catalog_sources.push(AutomationCatalogSource {
+                            disposition: None,
+                            owner_authorization: None,
                             registration_id: member.catalog_member_id(),
                             project_ref_id: member.project_ref_id,
                             lane: AutomationLane::CanonicalCurrent,
@@ -1563,9 +2437,21 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
     }
 
     let previous_inventory = read_global_source_inventory(root)?;
+    #[cfg(unix)]
+    let source_owners = read_source_owner_file(root)?;
+    #[cfg(unix)]
+    if let Some(owners) = &source_owners {
+        if owners.active {
+            read_automation_source_owners(root)?;
+        }
+    }
     let mut current_inventory = BTreeMap::new();
     let mut core_owner_resolutions = Vec::new();
     let mut live_source_fences = Vec::new();
+    #[cfg(target_os = "macos")]
+    let active_rollout_paths = active_codex_rollout_paths()?;
+    #[cfg(not(target_os = "macos"))]
+    let active_rollout_paths = BTreeSet::new();
     for source in active_sources {
         run_registry_derived_historical_reconciliation(
             root,
@@ -1584,6 +2470,9 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
             &mut rollout_archives_ready,
             &mut rollout_archives_failed,
             &mut live_source_fences,
+            &active_rollout_paths,
+            #[cfg(unix)]
+            source_owners.as_ref(),
             importer,
             live_check_hook,
         )?;
@@ -1604,11 +2493,26 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
             "global source policy changed during registry-derived reconciliation".to_owned(),
         ));
     }
+    #[cfg(unix)]
+    if read_source_owner_file(root)? != source_owners {
+        return Err(WorkVcsError::ControlPlaneInvalid(
+            "source owner authority changed during reconciliation".to_owned(),
+        ));
+    }
     apply_registry_derived_live_source_fences(
         &live_source_fences,
         &mut current_inventory,
         &mut catalog_sources,
     )?;
+    #[cfg(unix)]
+    let rollout_archives_disposed = apply_current_source_dispositions(
+        root,
+        &membership.registry_digest,
+        &source_policy,
+        &mut catalog_sources,
+    )?;
+    #[cfg(not(unix))]
+    let rollout_archives_disposed = 0;
     rollout_archives_ready = catalog_sources
         .iter()
         .filter(|source| {
@@ -1627,17 +2531,26 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
         .count();
     write_global_source_inventory(root, current_inventory)?;
 
-    let publication = publish_registry_derived_automation_catalog(
-        root,
-        RegistryDerivedCatalogBasis {
-            project_registry_id: membership.registry_id.clone(),
-            project_registry_revision: membership.registry_revision,
-            project_registry_digest: membership.registry_digest.clone(),
-            source_policy_revision: source_policy.revision,
-            source_policy_digest_sha256: source_policy.digest_sha256.clone(),
-        },
-        catalog_sources,
-    )?;
+    let basis = RegistryDerivedCatalogBasis {
+        project_registry_id: membership.registry_id.clone(),
+        project_registry_revision: membership.registry_revision,
+        project_registry_digest: membership.registry_digest.clone(),
+        source_policy_revision: source_policy.revision,
+        source_policy_digest_sha256: source_policy.digest_sha256.clone(),
+    };
+    let has_explicit_owner = catalog_sources
+        .iter()
+        .any(|source| source.owner_authorization.is_some());
+    let has_active_source = catalog_sources
+        .iter()
+        .any(|source| source.status == AutomationSourceStatus::Active);
+    let publication = if rollout_archives_disposed > 0 || has_explicit_owner || has_active_source {
+        publish_registry_derived_catalog_with_dispositions(root, basis, catalog_sources)?
+    } else {
+        publish_registry_derived_automation_catalog(root, basis, catalog_sources)?
+    };
+    validate_catalog_source_dispositions(root, &publication.manifest)?;
+    validate_catalog_source_owners(root, &publication.manifest)?;
     let ready_sources = publication
         .manifest
         .sources
@@ -1672,6 +2585,7 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
         rollout_files_deleted,
         rollout_archives_ready,
         rollout_archives_failed,
+        rollout_archives_disposed,
         canonical_generations_ready,
         canonical_generations_failed,
         catalog_path: publication.catalog_path,
@@ -1681,6 +2595,75 @@ fn reconcile_registry_derived_once_with_importer_and_live_check_hook(
         source_files_written: false,
         existing_artifacts_deleted: false,
     })
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn process_explicit_owner_snapshot(
+    root: &Path,
+    policy: &AutomationSourcePolicyEntry,
+    membership: &RegistryDerivedMembership,
+    owner: &AutomationSourceOwnerAuthorization,
+    snapshot: SourceArchiveSnapshot,
+    previous: Option<&GlobalSourceInventoryEntry>,
+    path_key: &str,
+    inventory: &mut BTreeMap<String, GlobalSourceInventoryEntry>,
+    catalog: &mut Vec<AutomationCatalogSource>,
+    ready_count: &mut usize,
+    fences: &mut Vec<RegistryDerivedLiveSourceFence>,
+) -> Result<()> {
+    verify_owner_snapshot(owner, std::slice::from_ref(policy), &snapshot)?;
+    let member = membership
+        .members
+        .iter()
+        .find(|member| member.project_ref_id == owner.project_ref_id)
+        .ok_or_else(|| {
+            WorkVcsError::ControlPlaneInvalid(
+                "authorized source owner is no longer an active member".to_owned(),
+            )
+        })?
+        .clone();
+    let fingerprint = fingerprint_from_snapshot(&snapshot);
+    let file = snapshot.source_path().to_path_buf();
+    let fence = snapshot.live_source_fence();
+    let stored_source = snapshot.stored_source().cloned();
+    let archive_root = root
+        .join("history")
+        .join("owner-confirmed")
+        .join(&policy.source_id)
+        .join(member.project_ref_id.to_string());
+    let options =
+        SourceArchiveImportOptions::new(member.identity(), &archive_root, vec![file.clone()])?
+            .include_assistant(policy.role_policy == AutomationRolePolicy::UserAndAssistant);
+    let result = Engine::import_source_archive(options)?;
+    let mut reference = archive_reference(result.archive_path, &result.manifest)?;
+    if !archive_reference_matches_source(&reference, &file, &fingerprint, stored_source.as_ref())
+        || !fence.verify_live_source()?
+    {
+        return Err(WorkVcsError::IntegrityInvalid(
+            "owner-authorized source changed during import".to_owned(),
+        ));
+    }
+    reference.owner_authorization = Some(owner.clone());
+    let entry = GlobalSourceInventoryEntry {
+        source_id: policy.source_id.clone(),
+        member: member.clone(),
+        fingerprint,
+        archive: Some(reference.clone()),
+    };
+    let start = catalog.len();
+    catalog.push(ready_global_archive_catalog_source(&member, &reference)?);
+    *ready_count += 1;
+    inventory.insert(path_key.to_owned(), entry);
+    fences.push(RegistryDerivedLiveSourceFence {
+        source_path: file,
+        path_key: path_key.to_owned(),
+        live_fence: fence,
+        member,
+        previous: previous.cloned(),
+        catalog_range: start..catalog.len(),
+    });
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1701,9 +2684,13 @@ fn run_registry_derived_historical_reconciliation(
     rollout_archives_ready: &mut usize,
     rollout_archives_failed: &mut usize,
     live_source_fences: &mut Vec<RegistryDerivedLiveSourceFence>,
+    active_rollout_paths: &BTreeSet<PathBuf>,
+    #[cfg(unix)] source_owners: Option<&AutomationSourceOwnerSet>,
     importer: &mut SourceArchiveImporter<'_>,
     live_check_hook: &mut RegistryDerivedLiveCheckHook<'_>,
 ) -> Result<()> {
+    #[cfg(unix)]
+    let owner_policy_digest = read_automation_source_policy(root)?.digest_sha256;
     let archive_root = root
         .join("history")
         .join("registry-derived")
@@ -1759,6 +2746,25 @@ fn run_registry_derived_historical_reconciliation(
             .get(&path_key)
             .filter(|entry| entry.source_id == source_policy.source_id)
             .cloned();
+        if active_rollout_paths.contains(&file) {
+            if let Some(entry) = previous.as_ref() {
+                current_inventory.insert(path_key.clone(), entry.clone());
+                if let Some(reference) = &entry.archive {
+                    catalog_sources.push(ready_global_archive_catalog_source(
+                        &entry.member,
+                        reference,
+                    )?);
+                }
+            }
+            let mut active = failed_unattributed_catalog_source(
+                file,
+                "source_active",
+                "source is held for writing by Codex and is outside historical processing",
+            )?;
+            active.status = AutomationSourceStatus::Active;
+            catalog_sources.push(active);
+            continue;
+        }
         let snapshot = match capture_rollout_snapshot(&source_policy.rollout_root, &file) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -1819,6 +2825,31 @@ fn run_registry_derived_historical_reconciliation(
                 continue;
             }
             Err(error) => {
+                #[cfg(unix)]
+                if error.code == "project_owner_unbound" {
+                    if let Some(owner) = source_owners.filter(|set| set.active).and_then(|set| {
+                        set.owners.iter().find(|owner| {
+                            owner.source_path == file
+                                && owner.project_registry_digest == membership.registry_digest
+                                && owner.source_policy_digest_sha256 == owner_policy_digest
+                        })
+                    }) {
+                        process_explicit_owner_snapshot(
+                            root,
+                            source_policy,
+                            membership,
+                            owner,
+                            snapshot,
+                            previous.as_ref(),
+                            &path_key,
+                            current_inventory,
+                            catalog_sources,
+                            rollout_archives_ready,
+                            live_source_fences,
+                        )?;
+                        continue;
+                    }
+                }
                 if let Some(entry) = previous.as_ref() {
                     current_inventory.insert(path_key.clone(), entry.clone());
                     catalog_sources.push(failed_global_catalog_source(
@@ -2058,6 +3089,8 @@ fn run_registry_derived_historical_reconciliation(
                         entry.archive = Some(reference.clone());
                         *rollout_archives_ready += 1;
                         catalog_sources.push(AutomationCatalogSource {
+                            disposition: None,
+                            owner_authorization: None,
                             registration_id: member.catalog_member_id(),
                             project_ref_id: member.project_ref_id,
                             lane: AutomationLane::HistoricalReference,
@@ -2476,6 +3509,8 @@ fn run_historical_reconciliation(
                     entry.archive = Some(reference.clone());
                     *rollout_archives_ready += 1;
                     catalog_sources.push(AutomationCatalogSource {
+                        disposition: None,
+                        owner_authorization: None,
                         registration_id: registration.registration_id.clone(),
                         project_ref_id: registration.project_ref_id,
                         lane: AutomationLane::HistoricalReference,
@@ -3059,6 +4094,7 @@ fn archive_reference(
         source_bytes: source.source_bytes,
         source_sha256: source.source_sha256.clone(),
         stored_source: source.stored_source.clone(),
+        owner_authorization: None,
         source_anchor: format!(
             "path:{};sha256:{}",
             source.source_path.display(),
@@ -3091,6 +4127,8 @@ fn ready_archive_catalog_source(
         ));
     }
     Ok(AutomationCatalogSource {
+        disposition: None,
+        owner_authorization: None,
         registration_id: registration.registration_id.clone(),
         project_ref_id: registration.project_ref_id,
         lane: AutomationLane::HistoricalReference,
@@ -3155,6 +4193,8 @@ fn failed_catalog_source(
     error: &str,
 ) -> AutomationCatalogSource {
     AutomationCatalogSource {
+        disposition: None,
+        owner_authorization: None,
         registration_id: registration.registration_id.clone(),
         project_ref_id: registration.project_ref_id,
         lane,
@@ -3183,7 +4223,8 @@ fn ready_global_archive_catalog_source(
             "remembered registry-derived source archive manifest or readback changed".to_owned(),
         ));
     }
-    let inspected = archive_reference(inspection.archive_path, &inspection.manifest)?;
+    let mut inspected = archive_reference(inspection.archive_path, &inspection.manifest)?;
+    inspected.owner_authorization = reference.owner_authorization.clone();
     if &inspected != reference {
         return Err(WorkVcsError::IntegrityInvalid(
             "remembered registry-derived source archive reference does not match immutable archive contents"
@@ -3191,6 +4232,8 @@ fn ready_global_archive_catalog_source(
         ));
     }
     Ok(AutomationCatalogSource {
+        disposition: None,
+        owner_authorization: reference.owner_authorization.clone(),
         registration_id: member.catalog_member_id(),
         project_ref_id: member.project_ref_id,
         lane: AutomationLane::HistoricalReference,
@@ -3213,6 +4256,8 @@ fn failed_global_catalog_source(
     error: &str,
 ) -> AutomationCatalogSource {
     AutomationCatalogSource {
+        disposition: None,
+        owner_authorization: None,
         registration_id: member.catalog_member_id(),
         project_ref_id: member.project_ref_id,
         lane,
@@ -3236,6 +4281,8 @@ fn failed_unattributed_catalog_source(
     // asserting that it belongs to a real ProjectRef.
     let project_ref_id = ProjectRefId::parse_canonical("01900000-0000-7000-8000-000000000000")?;
     Ok(AutomationCatalogSource {
+        disposition: None,
+        owner_authorization: None,
         registration_id: "registry-derived-quarantine".to_owned(),
         project_ref_id,
         lane: AutomationLane::HistoricalReference,
@@ -3412,6 +4459,9 @@ fn latest_catalog_for_current_basis(
             "no immutable catalog matches the current automation registry basis".to_owned()
         })
     })?;
+    validate_catalog_source_dispositions(root, &manifest)?;
+    validate_catalog_source_owners(root, &manifest)?;
+    validate_catalog_active_sources(root, &manifest.sources)?;
     let catalog_manifest_sha256 = catalog_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -3436,6 +4486,9 @@ fn query_catalog(
     limit: Option<usize>,
 ) -> Result<CatalogQueryReport> {
     let catalog = read_automation_catalog(catalog_path)?;
+    validate_catalog_source_dispositions(root, &catalog)?;
+    validate_catalog_source_owners(root, &catalog)?;
+    validate_catalog_active_sources(root, &catalog.sources)?;
     let bindings = if catalog.project_registry_revision.is_some() {
         if !automation_source_policy_path(root).exists() {
             return Err(WorkVcsError::ControlPlaneInvalid(
@@ -3512,8 +4565,42 @@ fn query_catalog(
     let mut items = Vec::new();
     let mut failed = 0;
     let mut succeeded = 0;
+    let mut disposed = 0;
+    let mut active = 0;
 
     for source in &catalog.sources {
+        if source.status == AutomationSourceStatus::Active {
+            active += 1;
+            reports.push(CatalogQuerySourceReport {
+                registration_id: source.registration_id.clone(),
+                project_ref_id: source.project_ref_id,
+                lane: source.lane,
+                artifact_kind: source.artifact_kind,
+                artifact_path: source.artifact_path.clone(),
+                source_anchor: source.source_anchor.clone(),
+                status: "active".to_owned(),
+                error_code: source.error_code.clone(),
+                error: source.error.clone(),
+                matched_items: 0,
+            });
+            continue;
+        }
+        if source.status == AutomationSourceStatus::Disposed {
+            disposed += 1;
+            reports.push(CatalogQuerySourceReport {
+                registration_id: source.registration_id.clone(),
+                project_ref_id: source.project_ref_id,
+                lane: source.lane,
+                artifact_kind: source.artifact_kind,
+                artifact_path: source.artifact_path.clone(),
+                source_anchor: source.source_anchor.clone(),
+                status: "disposed".to_owned(),
+                error_code: source.error_code.clone(),
+                error: source.error.clone(),
+                matched_items: 0,
+            });
+            continue;
+        }
         if source.status != AutomationSourceStatus::Ready {
             failed += 1;
             reports.push(CatalogQuerySourceReport {
@@ -3594,6 +4681,9 @@ fn query_catalog(
     if let Some(limit) = limit {
         items.truncate(limit);
     }
+    validate_catalog_source_dispositions(root, &catalog)?;
+    validate_catalog_source_owners(root, &catalog)?;
+    validate_catalog_active_sources(root, &catalog.sources)?;
     let complete = failed == 0 && succeeded > 0;
     let catalog_manifest_sha256 = catalog_path
         .file_name()
@@ -3617,6 +4707,8 @@ fn query_catalog(
         sources_requested: catalog.sources.len(),
         sources_succeeded: succeeded,
         sources_failed: failed,
+        sources_disposed: disposed,
+        sources_active: active,
         result_limit: limit,
         matched_items,
         omitted_results: matched_items.saturating_sub(items.len()),
@@ -5882,6 +6974,342 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn explicit_owner_is_scoped_to_live_session_and_revocable() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let cwd = fixture.rollout_root.parent().unwrap().join("unbound-owner");
+        fs::create_dir(&cwd).unwrap();
+        let source = fixture.rollout_root.join("owner.jsonl");
+        write_registry_derived_test_rollout(&source, &cwd, "owner authorized evidence");
+        let before =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(before.status, "partial_failure");
+        let catalog = read_automation_catalog(&before.catalog_path).unwrap();
+        let mut request = SourceOwnerRequest {
+            schema_version: 1,
+            source_path: source.clone(),
+            thread_id: "01900000-0000-7000-8000-000000000011".to_owned(),
+            source_cwd: cwd.clone(),
+            project_ref_id: fixture.project_ref_id,
+            project_registry_digest: catalog.project_registry_digest.unwrap(),
+            source_policy_digest_sha256: catalog.source_policy_digest_sha256.unwrap(),
+            reason: "user confirmed session ownership".to_owned(),
+        };
+        let path = temporary.path().join("owner-request.json");
+        request.thread_id = "01900000-0000-7000-8000-000000000099".to_owned();
+        fs::write(&path, serde_json::to_vec(&request).unwrap()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            prepare_source_owner(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &path
+            )
+            .is_err()
+        );
+        request.thread_id = "01900000-0000-7000-8000-000000000011".to_owned();
+        fs::write(&path, serde_json::to_vec(&request).unwrap()).unwrap();
+        let (_, digest) = prepare_source_owner(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &path,
+        )
+        .unwrap();
+        run_source_owner(AutomationSourceOwnerCommand::Apply {
+            root: Some(fixture.automation_root.clone()),
+            registry: Some(fixture.registry_path.clone()),
+            request: path,
+            expected_request_digest: digest,
+            expected_existing_digest: None,
+        })
+        .unwrap();
+        let after = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(after.status, "completed");
+        let manifest = read_automation_catalog(&after.catalog_path).unwrap();
+        assert!(manifest.sources.iter().any(|s| {
+            s.owner_authorization.as_ref().is_some_and(|owner| {
+                owner.source_path == source && owner.project_ref_id == fixture.project_ref_id
+            })
+        }));
+        assert!(
+            query_catalog(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &after.catalog_path,
+                "authorized evidence",
+                Some(10)
+            )
+            .unwrap()
+            .complete
+        );
+        append_registry_derived_test_message(
+            &source,
+            "01900000-0000-7000-8000-000000000099",
+            "new user message",
+        );
+        let updated =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(updated.status, "completed");
+        let authority = read_source_owner_file(&fixture.automation_root)
+            .unwrap()
+            .unwrap();
+        run_source_owner(AutomationSourceOwnerCommand::Revoke {
+            root: Some(fixture.automation_root.clone()),
+            registry: Some(fixture.registry_path.clone()),
+            expected_digest: sha256_serialized(&authority).unwrap(),
+        })
+        .unwrap();
+        assert!(
+            query_catalog(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &updated.catalog_path,
+                "evidence",
+                Some(10)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path))
+                .unwrap()
+                .status,
+            "partial_failure"
+        );
+        assert!(source.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_source_disposition_is_authorized_visible_and_invalidated_by_change() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let other = temporary.path().join("unbound-owner");
+        fs::create_dir(&other).unwrap();
+        let source = fixture.rollout_root.join("unbound.jsonl");
+        write_registry_derived_test_rollout(&source, &other, "unbound historical input");
+        let initial =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(initial.status, "partial_failure");
+        let catalog = read_automation_catalog(&initial.catalog_path).unwrap();
+        let failed = catalog
+            .sources
+            .iter()
+            .find(|item| {
+                item.artifact_path == source && item.status == AutomationSourceStatus::Failed
+            })
+            .unwrap();
+        let source_hash = capture_rollout_snapshot(&fixture.rollout_root, &source)
+            .unwrap()
+            .source_sha256()
+            .to_owned();
+        let request = SourceDispositionRequest {
+            schema_version: 1,
+            catalog_digest_sha256: initial.catalog_manifest_sha256.clone(),
+            project_registry_digest: catalog.project_registry_digest.clone().unwrap(),
+            source_policy_digest_sha256: catalog.source_policy_digest_sha256.clone().unwrap(),
+            selections: vec![SourceDispositionSelection {
+                source_path: source.clone(),
+                error_code: failed.error_code.clone().unwrap(),
+                source_sha256: Some(source_hash),
+                reason: "owner explicitly excluded this source".to_owned(),
+            }],
+        };
+        let request_path = temporary.path().join("request.json");
+        fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
+        fs::set_permissions(&request_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let prepared = prepare_source_dispositions(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &request_path,
+        )
+        .unwrap();
+        let digest = prepared.request_digest_sha256.clone();
+        let original_bytes = fs::read(&source).unwrap();
+        append_registry_derived_test_message(
+            &source,
+            "01900000-0000-7000-8000-000000000098",
+            "changed after preview",
+        );
+        assert!(
+            run_source_disposition(AutomationSourceDispositionCommand::Apply {
+                root: Some(fixture.automation_root.clone()),
+                registry: Some(fixture.registry_path.clone()),
+                request: request_path.clone(),
+                expected_request_digest: digest.clone(),
+                expected_existing_digest: None,
+            })
+            .is_err()
+        );
+        assert!(!disposition_path(&fixture.automation_root).exists());
+        fs::write(&source, original_bytes).unwrap();
+        run_source_disposition(AutomationSourceDispositionCommand::Apply {
+            root: Some(fixture.automation_root.clone()),
+            registry: Some(fixture.registry_path.clone()),
+            request: request_path.clone(),
+            expected_request_digest: digest,
+            expected_existing_digest: None,
+        })
+        .unwrap();
+        let after = reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(after.status, "completed");
+        assert_eq!(after.rollout_archives_disposed, 1);
+        let query = query_catalog(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &after.catalog_path,
+            "historical",
+            Some(10),
+        )
+        .unwrap();
+        assert!(query.complete);
+        assert_eq!(query.sources_disposed, 1);
+        assert!(
+            query
+                .source_reports
+                .iter()
+                .any(|item| item.artifact_path == source && item.status == "disposed")
+        );
+        assert!(
+            query
+                .items
+                .iter()
+                .any(|item| item.lane == AutomationLane::HistoricalReference)
+        );
+        append_registry_derived_test_message(
+            &source,
+            "01900000-0000-7000-8000-000000000099",
+            "source changed after owner approval",
+        );
+        assert!(
+            query_catalog(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &after.catalog_path,
+                "historical",
+                Some(10)
+            )
+            .is_err()
+        );
+        let changed =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(changed.status, "partial_failure");
+        assert_eq!(changed.rollout_archives_disposed, 0);
+        let current = read_dispositions(&fixture.automation_root)
+            .unwrap()
+            .unwrap();
+        let current_digest = sha256_serialized(&current).unwrap();
+        assert!(
+            run_source_disposition(AutomationSourceDispositionCommand::Revoke {
+                root: Some(fixture.automation_root.clone()),
+                registry: Some(fixture.registry_path.clone()),
+                expected_digest: "0".repeat(64),
+            })
+            .is_err()
+        );
+        assert!(
+            read_dispositions(&fixture.automation_root)
+                .unwrap()
+                .unwrap()
+                .active
+        );
+        run_source_disposition(AutomationSourceDispositionCommand::Revoke {
+            root: Some(fixture.automation_root.clone()),
+            registry: Some(fixture.registry_path.clone()),
+            expected_digest: current_digest,
+        })
+        .unwrap();
+        assert!(
+            !read_dispositions(&fixture.automation_root)
+                .unwrap()
+                .unwrap()
+                .active
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disposed_missing_source_reappearance_invalidates_old_catalog() {
+        let temporary = TempDir::new().unwrap();
+        let fixture = registry_derived_automation_fixture(&temporary);
+        install_registry_derived_source_policy(&fixture, Vec::new());
+        let source = fixture.rollout_root.join("thread.jsonl");
+        let original = fs::read(&source).unwrap();
+        let initial =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(initial.status, "completed");
+        fs::remove_file(&source).unwrap();
+        let missing =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(missing.status, "partial_failure");
+        let catalog = read_automation_catalog(&missing.catalog_path).unwrap();
+        let request = SourceDispositionRequest {
+            schema_version: 1,
+            catalog_digest_sha256: missing.catalog_manifest_sha256,
+            project_registry_digest: catalog.project_registry_digest.unwrap(),
+            source_policy_digest_sha256: catalog.source_policy_digest_sha256.unwrap(),
+            selections: vec![SourceDispositionSelection {
+                source_path: source.clone(),
+                error_code: "source_deleted".to_owned(),
+                source_sha256: None,
+                reason: "owner excluded the missing source".to_owned(),
+            }],
+        };
+        let request_path = temporary.path().join("missing-request.json");
+        fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
+        fs::set_permissions(&request_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let prepared = prepare_source_dispositions(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &request_path,
+        )
+        .unwrap();
+        run_source_disposition(AutomationSourceDispositionCommand::Apply {
+            root: Some(fixture.automation_root.clone()),
+            registry: Some(fixture.registry_path.clone()),
+            request: request_path,
+            expected_request_digest: prepared.request_digest_sha256,
+            expected_existing_digest: None,
+        })
+        .unwrap();
+        let disposed =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(disposed.status, "completed");
+        assert_eq!(disposed.rollout_archives_disposed, 1);
+        let retained = query_catalog(
+            &fixture.automation_root,
+            Some(&fixture.registry_path),
+            &disposed.catalog_path,
+            "historical",
+            Some(10),
+        )
+        .unwrap();
+        assert!(
+            retained
+                .items
+                .iter()
+                .any(|item| item.lane == AutomationLane::HistoricalReference)
+        );
+        fs::write(&source, original).unwrap();
+        assert!(
+            query_catalog(
+                &fixture.automation_root,
+                Some(&fixture.registry_path),
+                &disposed.catalog_path,
+                "historical",
+                Some(10)
+            )
+            .is_err()
+        );
+        let reappeared =
+            reconcile_once(&fixture.automation_root, Some(&fixture.registry_path)).unwrap();
+        assert_eq!(reappeared.status, "completed");
+        assert_eq!(reappeared.rollout_archives_disposed, 0);
+    }
+
+    #[cfg(unix)]
     fn test_ledger() -> DaemonLedger {
         DaemonLedger {
             protocol_version: AUTOMATION_PROTOCOL_VERSION,
@@ -5942,6 +7370,8 @@ mod tests {
     fn publish_failed_reconcile_report(root: &Path) -> ReconcileReport {
         let registry = read_automation_registry(root).unwrap();
         let source = AutomationCatalogSource {
+            disposition: None,
+            owner_authorization: None,
             registration_id: "registration-1".to_owned(),
             project_ref_id: ProjectRefId::new_v7(),
             lane: AutomationLane::HistoricalReference,
@@ -5982,6 +7412,7 @@ mod tests {
             rollout_files_deleted: 0,
             rollout_archives_ready: 0,
             rollout_archives_failed: 1,
+            rollout_archives_disposed: 0,
             canonical_generations_ready: 0,
             canonical_generations_failed: 1,
             catalog_path: catalog.catalog_path,
@@ -6284,6 +7715,7 @@ mod tests {
             source_bytes: rewritten.bytes,
             source_sha256: rewritten.sha256.clone(),
             stored_source: None,
+            owner_authorization: None,
             source_anchor: format!("path:{};sha256:{}", source.display(), rewritten.sha256),
         };
         let mut files = BTreeMap::new();

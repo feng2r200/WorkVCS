@@ -23,7 +23,7 @@ fastembed = { version = "=7.1.1", default-features = false, features = ["ort-dow
 fs4 = "=1.1.0"
 libc = "=0.2.189"
 notify = "=8.2.0"
-jieba-rs = "=0.10.4"
+jieba-rs = "=0.11.0"
 glob = "0.3"
 onnx-protobuf = "=0.2.3"
 protobuf = "=3.4.0"

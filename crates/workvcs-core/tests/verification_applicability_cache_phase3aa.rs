@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use workvcs_core::{
     AcceptanceCriterionClassification, AcceptanceCriterionCreateCommit,
-    AcceptanceCriterionCreateOptions, ApplicabilityResourceObservationStatus,
-    ApplicabilityResourceStampInput, BranchId, CanonicalValue, Digest, Engine, EntityId, ErrorCode,
-    ResourceCreateOptions, ResourceObservationCreateOptions, StoreInitOptions, TaskCreateOptions,
+    AcceptanceCriterionCreateOptions, AcceptanceCriterionEffectiveStatus,
+    ApplicabilityResourceObservationStatus, ApplicabilityResourceStampInput, BranchId,
+    CanonicalValue, ContextItemCategory, ContextOverviewOptions, ContextPacketOptions,
+    ContextProfile, Digest, Engine, EntityId, ErrorCode, ResourceCreateOptions,
+    ResourceObservationCreateOptions, SessionStartOptions, StoreInitOptions, TaskCreateOptions,
     VerificationApplicability, VerificationApplicabilityRecordOptions, VerificationCreateCommit,
     VerificationCreateOptions, VerificationResourceBasis, VerificationResult, VerificationTarget,
     WorkspaceInfo, WorkspaceInitOptions, content_object_digest,
@@ -593,5 +595,99 @@ fn work_state_only_cache_accepts_no_stamps_and_rejects_extra_stamp() {
             .expect("read existing cache")
             .expect("cache"),
         snapshot
+    );
+}
+
+#[test]
+fn context_requests_read_same_head_applicability_updates_without_reusing_status() {
+    let (_tempdir, path) = store_path();
+    let (mut engine, workspace) = create_workspace(&path);
+    let criterion = create_required_criterion(&mut engine, &workspace);
+    let resource_basis = create_resource_basis(&mut engine, "context-request");
+    let verification = create_verification_with_basis(
+        &mut engine,
+        &workspace,
+        &criterion,
+        vec![resource_basis.clone()],
+    );
+    let session = engine
+        .start_session(
+            SessionStartOptions::new(workspace.workspace_id, workspace.initial_branch_id)
+                .expect("session options"),
+        )
+        .expect("session");
+    let initial_head = engine
+        .branch_head(workspace.initial_branch_id)
+        .expect("head");
+
+    for (stamp, expected) in [
+        (
+            observed_stamp(&resource_basis, resource_basis.baseline_fingerprint),
+            AcceptanceCriterionEffectiveStatus::Verified,
+        ),
+        (
+            observed_stamp(&resource_basis, content_object_digest(b"context drift")),
+            AcceptanceCriterionEffectiveStatus::Stale,
+        ),
+        (
+            unavailable_stamp(&resource_basis),
+            AcceptanceCriterionEffectiveStatus::Stale,
+        ),
+        (
+            observed_stamp(&resource_basis, resource_basis.baseline_fingerprint),
+            AcceptanceCriterionEffectiveStatus::Verified,
+        ),
+    ] {
+        engine
+            .record_verification_applicability(record_options(
+                &workspace,
+                &verification,
+                vec![stamp],
+            ))
+            .expect("update applicability at same commit");
+        let overview = engine
+            .context_overview(ContextOverviewOptions::new(session.session_id))
+            .expect("fresh overview");
+        assert_eq!(overview.branch, initial_head);
+        let actual = overview
+            .acceptance_criteria
+            .iter()
+            .find(|item| {
+                item.snapshot.acceptance_criterion_entity_id
+                    == criterion.acceptance_criterion_entity_id
+            })
+            .expect("criterion");
+        assert_eq!(actual.effective_status, expected);
+        assert_eq!(
+            actual.effective_status,
+            engine
+                .acceptance_criterion_effective_status_for_branch(
+                    workspace.initial_branch_id,
+                    criterion.acceptance_criterion_entity_id,
+                )
+                .expect("standalone status")
+        );
+        let packet = engine
+            .context_packet(
+                ContextPacketOptions::new(session.session_id).with_profile(ContextProfile::Brief),
+            )
+            .expect("fresh packet");
+        let item = packet
+            .items
+            .iter()
+            .find(|item| item.category == ContextItemCategory::AcceptanceCriterion)
+            .expect("criterion packet item");
+        let expected_text = match expected {
+            AcceptanceCriterionEffectiveStatus::Verified => "status=verified",
+            AcceptanceCriterionEffectiveStatus::Stale => "status=stale",
+            _ => unreachable!(),
+        };
+        assert!(item.summary.contains(expected_text), "{}", item.summary);
+    }
+    assert_eq!(
+        engine
+            .branch_head(workspace.initial_branch_id)
+            .expect("head"),
+        initial_head
     );
 }

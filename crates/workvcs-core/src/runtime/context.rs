@@ -29,6 +29,9 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
+#[cfg(test)]
+mod tests;
+
 const CONTEXT_PACKET_DIGEST_DOMAIN: &str = "context-packet-snapshot-v1";
 const CONTEXT_PACKET_FORMAT: &str = "workvcs-context-packet-v1";
 const CONTEXT_PACKET_FORMAT_VERSION: i64 = 1;
@@ -510,6 +513,14 @@ pub(crate) fn context_overview(
     connection: &StoreConnection,
     options: &ContextOverviewOptions,
 ) -> Result<ContextOverview> {
+    context_overview_with_cache(connection, options, &mut history::ReplayCache::default())
+}
+
+fn context_overview_with_cache(
+    connection: &StoreConnection,
+    options: &ContextOverviewOptions,
+    replay_cache: &mut history::ReplayCache,
+) -> Result<ContextOverview> {
     connection.verify_foreign_keys()?;
     let session = session::session_snapshot(connection, options.session_id())?;
     ensure_active_session(&session)?;
@@ -544,7 +555,7 @@ pub(crate) fn context_overview(
     }
     let current_scope = history::current_scope_at(connection, branch.head_commit_id)?;
     let focused_entity_id = session.focus.as_ref().map(|focus| focus.focus_entity_id);
-    let tasks = history::tasks_at(connection, branch.head_commit_id)?;
+    let tasks = history::tasks_at_with_cache(connection, branch.head_commit_id, replay_cache)?;
     if tasks.iter().any(|task| {
         task.workspace_id != active_workspace_id || task.commit_id != branch.head_commit_id
     }) {
@@ -560,7 +571,7 @@ pub(crate) fn context_overview(
                 || focused_entity_id == Some(task.task_entity_id)
         })
         .collect::<Vec<_>>();
-    let plans = history::plans_at(connection, branch.head_commit_id)?;
+    let plans = history::plans_at_with_cache(connection, branch.head_commit_id, replay_cache)?;
     if plans.iter().any(|plan| {
         plan.workspace_id != active_workspace_id || plan.commit_id != branch.head_commit_id
     }) {
@@ -573,7 +584,7 @@ pub(crate) fn context_overview(
         .into_iter()
         .filter(|plan| current_scope.current_plans.contains(&plan.plan_entity_id))
         .collect::<Vec<_>>();
-    let goals = history::goals_at(connection, branch.head_commit_id)?;
+    let goals = history::goals_at_with_cache(connection, branch.head_commit_id, replay_cache)?;
     if goals.iter().any(|goal| {
         goal.workspace_id != active_workspace_id || goal.commit_id != branch.head_commit_id
     }) {
@@ -586,8 +597,11 @@ pub(crate) fn context_overview(
         .into_iter()
         .filter(|goal| current_scope.current_goals.contains(&goal.goal_entity_id))
         .collect::<Vec<_>>();
-    let primary_containment_relations =
-        history::primary_containment_relations_at(connection, branch.head_commit_id)?;
+    let primary_containment_relations = history::primary_containment_relations_at_with_cache(
+        connection,
+        branch.head_commit_id,
+        replay_cache,
+    )?;
     if primary_containment_relations.iter().any(|relation| {
         relation.workspace_id != active_workspace_id || relation.commit_id != branch.head_commit_id
     }) {
@@ -608,8 +622,11 @@ pub(crate) fn context_overview(
             )
         })
         .collect::<Vec<_>>();
-    let structural_references =
-        history::structural_references_at(connection, branch.head_commit_id)?;
+    let structural_references = history::structural_references_at_with_cache(
+        connection,
+        branch.head_commit_id,
+        replay_cache,
+    )?;
     if structural_references.iter().any(|reference| {
         reference.workspace_id != active_workspace_id
             || reference.commit_id != branch.head_commit_id
@@ -636,22 +653,19 @@ pub(crate) fn context_overview(
         branch.head_commit_id,
         active_workspace_id,
         active_branch_id,
+        &current_scope.current_tasks,
+        focused_entity_id,
+        replay_cache,
     )?;
-    let acceptance_criteria = acceptance_criteria
-        .into_iter()
-        .filter(|criterion| {
-            current_scope
-                .current_tasks
-                .contains(&criterion.snapshot.task_entity_id)
-                || focused_entity_id == Some(criterion.snapshot.task_entity_id)
-        })
-        .collect::<Vec<_>>();
     let current_acceptance_criteria = acceptance_criteria
         .iter()
         .map(|criterion| criterion.snapshot.acceptance_criterion_entity_id)
         .collect::<std::collections::BTreeSet<_>>();
-    let verification_requirements =
-        history::verification_requirements_at(connection, branch.head_commit_id)?;
+    let verification_requirements = history::verification_requirements_at_with_cache(
+        connection,
+        branch.head_commit_id,
+        replay_cache,
+    )?;
     if verification_requirements.iter().any(|requirement| {
         requirement.workspace_id != active_workspace_id
             || requirement.commit_id != branch.head_commit_id
@@ -667,16 +681,21 @@ pub(crate) fn context_overview(
             current_acceptance_criteria.contains(&requirement.acceptance_criterion_entity_id)
         })
         .collect::<Vec<_>>();
-    let records = history::records_at(connection, &RecordListOptions::new(branch.head_commit_id))?;
+    let records = history::records_at_with_cache(
+        connection,
+        &RecordListOptions::new(branch.head_commit_id),
+        replay_cache,
+    )?;
     if records.workspace_id != active_workspace_id || records.commit_id != branch.head_commit_id {
         return Err(WorkVcsError::SessionInvalid(format!(
             "session {} record context anchor changed while resolving overview",
             options.session_id()
         )));
     }
-    let knowledge = history::knowledges_at(
+    let knowledge = history::knowledges_at_with_cache(
         connection,
         &KnowledgeListOptions::new(branch.head_commit_id).with_status(KnowledgeStatus::Active),
+        replay_cache,
     )?;
     if knowledge.workspace_id != active_workspace_id || knowledge.commit_id != branch.head_commit_id
     {
@@ -685,9 +704,10 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
-    let knowledge_relations = history::knowledge_relations_at(
+    let knowledge_relations = history::knowledge_relations_at_with_cache(
         connection,
         &KnowledgeRelationListOptions::new(branch.head_commit_id),
+        replay_cache,
     )?;
     if knowledge_relations.workspace_id != active_workspace_id
         || knowledge_relations.commit_id != branch.head_commit_id
@@ -699,9 +719,10 @@ pub(crate) fn context_overview(
     }
     let knowledge_exposure_relations =
         knowledge_exposure_relations_for_context(connection, &branch, &knowledge)?;
-    let record_relations = history::record_relations_at(
+    let record_relations = history::record_relations_at_with_cache(
         connection,
         &RecordRelationListOptions::new(branch.head_commit_id),
+        replay_cache,
     )?;
     if record_relations.workspace_id != active_workspace_id
         || record_relations.commit_id != branch.head_commit_id
@@ -711,9 +732,10 @@ pub(crate) fn context_overview(
             options.session_id()
         )));
     }
-    let record_knowledge_relations = history::record_knowledge_relations_at(
+    let record_knowledge_relations = history::record_knowledge_relations_at_with_cache(
         connection,
         &RecordKnowledgeRelationListOptions::new(branch.head_commit_id),
+        replay_cache,
     )?;
     if record_knowledge_relations.workspace_id != active_workspace_id
         || record_knowledge_relations.commit_id != branch.head_commit_id
@@ -747,11 +769,21 @@ pub(crate) fn context_packet(
     connection: &StoreConnection,
     options: &ContextPacketOptions,
 ) -> Result<ContextPacket> {
-    let overview = context_overview(
+    // This cache belongs only to this request, never to the Store or Session.
+    let mut replay_cache = history::ReplayCache::default();
+    let overview = context_overview_with_cache(
         connection,
         &ContextOverviewOptions::new(options.session_id()),
+        &mut replay_cache,
     )?;
-    let verifications = history::verifications_at(connection, overview.branch.head_commit_id)?;
+    let verifications = history::verifications_at_with_cache(
+        connection,
+        overview.branch.head_commit_id,
+        &mut replay_cache,
+    )?;
+    // Release ancestor states before collecting peer/resource context, which
+    // can perform independent queries of its own.
+    drop(replay_cache);
     if verifications.iter().any(|verification| {
         verification.workspace_id != overview.branch.workspace_id
             || verification.commit_id != overview.branch.head_commit_id
@@ -1402,22 +1434,36 @@ fn context_acceptance_criteria(
     commit_id: CommitId,
     workspace_id: WorkspaceId,
     branch_id: BranchId,
+    current_tasks: &BTreeSet<EntityId>,
+    focused_entity_id: Option<EntityId>,
+    replay_cache: &mut history::ReplayCache,
 ) -> Result<Vec<ContextAcceptanceCriterionSnapshot>> {
-    let criteria = history::acceptance_criteria_at(connection, commit_id)?;
+    let criteria = history::acceptance_criteria_at_with_cache(connection, commit_id, replay_cache)?;
+    // Validate every snapshot anchor, but resolve effective statuses only for
+    // criteria that can appear in this overview. Keep source ordering intact.
+    for criterion in &criteria {
+        if criterion.workspace_id != workspace_id || criterion.commit_id != commit_id {
+            return Err(WorkVcsError::SessionInvalid(format!(
+                "acceptance criterion {} does not belong to context commit {}",
+                criterion.acceptance_criterion_entity_id, commit_id
+            )));
+        }
+    }
     criteria
         .into_iter()
+        .filter(|criterion| {
+            current_tasks.contains(&criterion.task_entity_id)
+                || focused_entity_id == Some(criterion.task_entity_id)
+        })
         .map(|criterion| {
-            if criterion.workspace_id != workspace_id || criterion.commit_id != commit_id {
-                return Err(WorkVcsError::SessionInvalid(format!(
-                    "acceptance criterion {} does not belong to context commit {}",
-                    criterion.acceptance_criterion_entity_id, commit_id
-                )));
-            }
-            let effective_status = history::acceptance_criterion_effective_status_for_branch(
-                connection,
-                branch_id,
-                criterion.acceptance_criterion_entity_id,
-            )?;
+            let effective_status =
+                history::acceptance_criterion_effective_status_for_branch_with_cache(
+                    connection,
+                    branch_id,
+                    commit_id,
+                    criterion.acceptance_criterion_entity_id,
+                    replay_cache,
+                )?;
             Ok(ContextAcceptanceCriterionSnapshot {
                 snapshot: criterion,
                 effective_status,

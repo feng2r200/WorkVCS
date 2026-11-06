@@ -71,12 +71,29 @@ pub(crate) fn state_at(connection: &StoreConnection, commit_id: CommitId) -> Res
     state_at_with_cache(connection, commit_id, &mut ReplayCache::default())
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static COLD_REPLAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Default)]
 pub(crate) struct ReplayCache {
     states: HashMap<[u8; 16], ReplayedState>,
 }
 
 impl ReplayCache {
+    // Count all caches on this test thread, including accidentally fresh caches
+    // in nested queries. A per-instance counter would miss that regression.
+    #[cfg(test)]
+    pub(crate) fn reset_cold_replay_count() {
+        COLD_REPLAYS.set(0);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cold_replay_count() -> usize {
+        COLD_REPLAYS.get()
+    }
+
     pub(crate) fn contains(&self, commit_id: CommitId) -> bool {
         self.states.contains_key(&commit_id.raw_bytes())
     }
@@ -94,6 +111,8 @@ pub(crate) fn state_at_with_cache(
     if let Some(replayed) = cache.states.get(&commit_id.raw_bytes()) {
         return Ok(replayed.clone());
     }
+    #[cfg(test)]
+    COLD_REPLAYS.set(COLD_REPLAYS.get() + 1);
 
     #[derive(Clone, Copy)]
     enum ReplayParents {

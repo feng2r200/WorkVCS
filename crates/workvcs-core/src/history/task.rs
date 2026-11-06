@@ -2584,7 +2584,21 @@ pub(crate) fn acceptance_criterion_at(
     commit_id: CommitId,
     acceptance_criterion_entity_id: EntityId,
 ) -> Result<AcceptanceCriterionSnapshot> {
-    let replayed = state_at(connection, commit_id)?;
+    acceptance_criterion_at_with_cache(
+        connection,
+        commit_id,
+        acceptance_criterion_entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+pub(crate) fn acceptance_criterion_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    acceptance_criterion_entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<AcceptanceCriterionSnapshot> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let Some(acceptance_criterion_entity_version_id) =
         replayed
             .state
@@ -2621,7 +2635,15 @@ pub(crate) fn acceptance_criteria_at(
     connection: &StoreConnection,
     commit_id: CommitId,
 ) -> Result<Vec<AcceptanceCriterionSnapshot>> {
-    let replayed = state_at(connection, commit_id)?;
+    acceptance_criteria_at_with_cache(connection, commit_id, &mut ReplayCache::default())
+}
+
+pub(crate) fn acceptance_criteria_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<AcceptanceCriterionSnapshot>> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut criteria = Vec::new();
 
     for (entity_id, entity_version_id) in replayed.state.entities() {
@@ -2947,7 +2969,21 @@ pub(crate) fn verification_requirement_at(
     commit_id: CommitId,
     verification_requirement_entity_id: EntityId,
 ) -> Result<VerificationRequirementSnapshot> {
-    let replayed = state_at(connection, commit_id)?;
+    verification_requirement_at_with_cache(
+        connection,
+        commit_id,
+        verification_requirement_entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+pub(crate) fn verification_requirement_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    verification_requirement_entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<VerificationRequirementSnapshot> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let Some(verification_requirement_entity_version_id) = replayed
         .state
         .entities()
@@ -2983,7 +3019,15 @@ pub(crate) fn verification_requirements_at(
     connection: &StoreConnection,
     commit_id: CommitId,
 ) -> Result<Vec<VerificationRequirementSnapshot>> {
-    let replayed = state_at(connection, commit_id)?;
+    verification_requirements_at_with_cache(connection, commit_id, &mut ReplayCache::default())
+}
+
+pub(crate) fn verification_requirements_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<VerificationRequirementSnapshot>> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut requirements = Vec::new();
 
     for (entity_id, entity_version_id) in replayed.state.entities() {
@@ -3281,7 +3325,15 @@ pub(crate) fn verifications_at(
     connection: &StoreConnection,
     commit_id: CommitId,
 ) -> Result<Vec<VerificationSnapshot>> {
-    let replayed = state_at(connection, commit_id)?;
+    verifications_at_with_cache(connection, commit_id, &mut ReplayCache::default())
+}
+
+pub(crate) fn verifications_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    replay_cache: &mut ReplayCache,
+) -> Result<Vec<VerificationSnapshot>> {
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let mut verifications = Vec::new();
 
     for (entity_id, entity_version_id) in replayed.state.entities() {
@@ -3683,11 +3735,35 @@ pub(crate) fn acceptance_criterion_effective_status_for_branch(
     acceptance_criterion_entity_id: EntityId,
 ) -> Result<AcceptanceCriterionEffectiveStatus> {
     let branch = branch_head(connection, branch_id)?;
-    acceptance_criterion_effective_status_at(
+    acceptance_criterion_effective_status_for_branch_with_cache(
         connection,
+        branch_id,
         branch.head_commit_id,
+        acceptance_criterion_entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+pub(crate) fn acceptance_criterion_effective_status_for_branch_with_cache(
+    connection: &StoreConnection,
+    branch_id: BranchId,
+    commit_id: CommitId,
+    acceptance_criterion_entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<AcceptanceCriterionEffectiveStatus> {
+    let branch = branch_head(connection, branch_id)?;
+    if branch.head_commit_id != commit_id {
+        return Err(WorkVcsError::BranchHeadConflict(format!(
+            "branch {branch_id} expected head {commit_id}, found {}",
+            branch.head_commit_id
+        )));
+    }
+    acceptance_criterion_effective_status_at_with_cache(
+        connection,
+        commit_id,
         Some(branch_id),
         acceptance_criterion_entity_id,
+        replay_cache,
     )
 }
 
@@ -3718,22 +3794,45 @@ fn acceptance_criterion_effective_status_at(
     branch_id: Option<BranchId>,
     acceptance_criterion_entity_id: EntityId,
 ) -> Result<AcceptanceCriterionEffectiveStatus> {
-    let criterion = acceptance_criterion_at(connection, commit_id, acceptance_criterion_entity_id)?;
+    acceptance_criterion_effective_status_at_with_cache(
+        connection,
+        commit_id,
+        branch_id,
+        acceptance_criterion_entity_id,
+        &mut ReplayCache::default(),
+    )
+}
+
+fn acceptance_criterion_effective_status_at_with_cache(
+    connection: &StoreConnection,
+    commit_id: CommitId,
+    branch_id: Option<BranchId>,
+    acceptance_criterion_entity_id: EntityId,
+    replay_cache: &mut ReplayCache,
+) -> Result<AcceptanceCriterionEffectiveStatus> {
+    let criterion = acceptance_criterion_at_with_cache(
+        connection,
+        commit_id,
+        acceptance_criterion_entity_id,
+        replay_cache,
+    )?;
     if criterion.state.verification_requirements.is_empty() {
         return effective_status_for_target(
             connection,
             commit_id,
             branch_id,
             VerificationTarget::AcceptanceCriterion(acceptance_criterion_entity_id),
+            replay_cache,
         );
     }
 
     let mut combined = AcceptanceCriterionEffectiveStatus::Verified;
     for requirement_ref in &criterion.state.verification_requirements {
-        let requirement = verification_requirement_at(
+        let requirement = verification_requirement_at_with_cache(
             connection,
             commit_id,
             requirement_ref.verification_requirement_entity_id,
+            replay_cache,
         )?;
         if requirement.acceptance_criterion_entity_id != acceptance_criterion_entity_id
             || requirement.local_key != requirement_ref.local_key
@@ -3750,6 +3849,7 @@ fn acceptance_criterion_effective_status_at(
             VerificationTarget::VerificationRequirement(
                 requirement_ref.verification_requirement_entity_id,
             ),
+            replay_cache,
         )?;
         combined = combine_acceptance_criterion_status(combined, status);
     }
@@ -7642,8 +7742,9 @@ fn effective_status_for_target(
     commit_id: CommitId,
     branch_id: Option<BranchId>,
     target: VerificationTarget,
+    replay_cache: &mut ReplayCache,
 ) -> Result<AcceptanceCriterionEffectiveStatus> {
-    let replayed = state_at(connection, commit_id)?;
+    let replayed = state_at_with_cache(connection, commit_id, replay_cache)?;
     let verifications = load_current_verifications_for_target(
         connection,
         commit_id,

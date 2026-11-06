@@ -291,11 +291,13 @@ pub(crate) use receipt::{
 pub(crate) use record::{
     correct_finding_record, create_knowledge_relation, create_record,
     create_record_knowledge_relation, create_record_relation, knowledge_relation_at,
-    knowledge_relations_at, record_at, record_knowledge_relation_at, record_knowledge_relations_at,
-    record_relation_at, record_relations_at, records_at, records_at_with_cache,
-    remove_knowledge_relation, remove_record_knowledge_relation, remove_record_relation,
-    restore_knowledge_relation, restore_record_knowledge_relation, restore_record_relation,
-    supersede_decision_record, transition_record,
+    knowledge_relations_at, knowledge_relations_at_with_cache, record_at,
+    record_knowledge_relation_at, record_knowledge_relations_at,
+    record_knowledge_relations_at_with_cache, record_relation_at, record_relations_at,
+    record_relations_at_with_cache, records_at, records_at_with_cache, remove_knowledge_relation,
+    remove_record_knowledge_relation, remove_record_relation, restore_knowledge_relation,
+    restore_record_knowledge_relation, restore_record_relation, supersede_decision_record,
+    transition_record,
 };
 pub(crate) use reference::{
     create_structural_reference, structural_references_at, structural_references_at_with_cache,
@@ -309,16 +311,18 @@ pub(crate) use resource::{
 pub(crate) use restore::restore_work_state;
 pub(crate) use semantic_snapshot::semantic_snapshot;
 pub(crate) use task::{
-    acceptance_criteria_at, acceptance_criterion_at, acceptance_criterion_effective_status,
-    acceptance_criterion_effective_status_for_branch, create_acceptance_criterion, create_task,
-    create_task_scheduling_relation, create_verification, create_verification_requirement,
-    record_verification_applicability, refresh_verification_applicability,
-    reject_reserved_semantic_entity_transition, revise_acceptance_criterion,
-    revise_verification_requirement, task_at, task_scheduling_relations_at, tasks_at,
-    tasks_at_with_cache, transition_task, verification_applicability_cache,
-    verification_applicability_caches, verification_at, verification_evidence_relations_at,
-    verification_relations_at, verification_requirement_at, verification_requirements_at,
-    verifications_at,
+    acceptance_criteria_at, acceptance_criteria_at_with_cache, acceptance_criterion_at,
+    acceptance_criterion_effective_status, acceptance_criterion_effective_status_for_branch,
+    acceptance_criterion_effective_status_for_branch_with_cache, create_acceptance_criterion,
+    create_task, create_task_scheduling_relation, create_verification,
+    create_verification_requirement, record_verification_applicability,
+    refresh_verification_applicability, reject_reserved_semantic_entity_transition,
+    revise_acceptance_criterion, revise_verification_requirement, task_at,
+    task_scheduling_relations_at, tasks_at, tasks_at_with_cache, transition_task,
+    verification_applicability_cache, verification_applicability_caches, verification_at,
+    verification_evidence_relations_at, verification_relations_at, verification_requirement_at,
+    verification_requirements_at, verification_requirements_at_with_cache, verifications_at,
+    verifications_at_with_cache,
 };
 pub(crate) use task_disposition_audit::plan_task_disposition_audit;
 pub(crate) use why::explain_why;
